@@ -1,0 +1,174 @@
+name: Release
+
+# Builds and publishes the container image to ghcr.io/kaas-rs/kaas-ui.
+#
+# Unlike kaas-lib's release, this one is reversible — a container tag can be
+# overwritten and a bad one simply never gets referenced by the GitOps repo.
+# So it runs on every push to main (as `main` / `sha-<short>`) and on a
+# version tag (as the semver ladder plus `latest`).
+#
+# `latest` only ever moves on a tag. An ArgoCD deployment pinned to `latest`
+# and a `main` build clobbering it is how a cluster ends up running a commit
+# nobody released.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE: ghcr.io/kaas-rs/kaas-ui
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    outputs:
+      buildable: ${{ steps.check.outputs.buildable }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: actionlint
+        env:
+          ACTIONLINT_VERSION: v1.7.7
+        run: |
+          set -euo pipefail
+          curl -sSL "https://github.com/rhysd/actionlint/releases/download/${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION#v}_linux_amd64.tar.gz" \
+            | tar -xz -C /tmp actionlint
+          /tmp/actionlint -color
+
+      # Same gate as ci.yml: nothing to build until Phase 0 lands a workspace
+      # and a Dockerfile. Remove this job once it has.
+      - name: Is there anything to build yet?
+        id: check
+        run: |
+          if [ -f Dockerfile ] && [ -f Cargo.toml ]; then
+            echo "buildable=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "buildable=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::no Dockerfile/Cargo.toml yet — nothing to publish (Phase 0 creates them)"
+          fi
+
+  image:
+    needs: preflight
+    if: needs.preflight.outputs.buildable == 'true'
+    runs-on: arc-runner-set-ui
+    permissions:
+      contents: read
+      packages: write
+      # cosign signs keylessly against the GitHub OIDC issuer.
+      id-token: write
+    steps:
+      # The DinD sidecar is not ready the instant the runner container starts.
+      - name: Wait for Docker daemon (DinD sidecar)
+        run: |
+          echo "DOCKER_HOST=${DOCKER_HOST:-<unset>}"
+          for i in $(seq 1 30); do
+            if docker info >/dev/null 2>&1; then
+              echo "docker daemon ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::docker daemon did not become ready"
+          docker info || true
+          exit 1
+
+      - uses: actions/checkout@v6
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          # linux/amd64 only. The cluster is a single amd64 node, and
+          # cross-building arm64 under QEMU on that same node would triple
+          # the release time for nothing. Add arm64 when something needs it.
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix=sha-,format=short
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: true
+          sbom: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - uses: sigstore/cosign-installer@v3
+
+      - name: Sign the image
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+
+      # PLAN.md §10 predicts ~25 MB and ~15 MB RSS against the JVM original's
+      # several hundred. That is the project's headline claim, so it gets
+      # measured on every release rather than asserted in a README.
+      - name: Measure the image
+        id: size
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          docker pull -q "${IMAGE}@${DIGEST}"
+          bytes=$(docker image inspect "${IMAGE}@${DIGEST}" --format '{{.Size}}')
+          mb=$(( bytes / 1000000 ))
+          echo "megabytes=${mb}" >> "$GITHUB_OUTPUT"
+          echo "image size: ${mb} MB"
+
+      - name: Summary
+        if: always()
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          MEGABYTES: ${{ steps.size.outputs.megabytes }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          {
+            echo "### ${IMAGE}"
+            echo
+            echo "\`\`\`"
+            echo "${TAGS}"
+            echo "\`\`\`"
+            echo
+            echo "- digest: \`${DIGEST}\`"
+            echo "- size: **${MEGABYTES:-?} MB**"
+            echo
+            if [ "${GITHUB_REF}" != "${GITHUB_REF#refs/tags/v}" ]; then
+              version="${GITHUB_REF#refs/tags/v}"
+              echo "#### Deploy"
+              echo
+              echo "There is no ArgoCD Image Updater in this cluster; bump the tag by hand in"
+              echo "\`Woestebanaan/k3s-cluster\`, \`apps/kaas-ui/kustomization.yaml\`:"
+              echo
+              echo "\`\`\`yaml"
+              echo "images:"
+              echo "  - name: ${IMAGE}"
+              echo "    newTag: ${version}"
+              echo "\`\`\`"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

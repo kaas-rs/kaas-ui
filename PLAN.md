@@ -622,6 +622,15 @@ static musl binary, embedded frontend via `rust-embed`, distroless image. Expect
 ~25 MB and ~15 MB RSS at idle against the JVM original's several hundred. That
 win exists *because* kaas-lib is pure Rust; put the numbers in the README.
 
+**Distribution.** The image publishes to `ghcr.io/kaas-rs/kaas-ui`, alongside
+`ghcr.io/kaas-rs/charts` where the kaas broker's chart already lives —
+cosign-signed, `latest` moving only on a semver tag. CI and releases run on
+`arc-runner-set-ui`, a repo-scoped ARC scale set on the same k3s cluster the UI
+talks to, so the acceptance suite reaches both brokers over service DNS instead
+of over a container fixture. Deployment is GitOps: an `apps/kaas-ui/` directory
+in the cluster repo, picked up by the ArgoCD ApplicationSet that already
+discovers `apps/*`. See `docs/10-release-and-deployment.md`.
+
 **Dogfooding.** Point kaas-ui at `kaas` alongside Strimzi and the UI becomes a
 conformance surface: a wrongly-shaped response renders as a wrong page, and the
 capability diff between the two is visible on one screen. The trap kaas-lib

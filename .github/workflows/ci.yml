@@ -1,0 +1,186 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Self-hosted runners: `arc-runner-set-ui` is an ARC scale set on the kaas-rs
+# k3s cluster (see Woestebanaan/k3s-cluster, apps/arc-runners). It is a third,
+# repo-scoped set alongside `arc-runner-set` (kaas) and `arc-runner-set-lib`
+# (kaas-lib) — the GitHub App has repo-level runner admin only, so org-scoping
+# one set is not available to us. See that repo's 510bed4 / e4b8325.
+#
+# Jobs reachable from a *fork* pull request must NOT land there. The runner
+# pods are privileged DinD with a hostPath mount onto the node, and this repo
+# is public — a fork PR is arbitrary code from a stranger. So every job wired
+# to `pull_request` picks its runner per event.
+#
+# `github.event.pull_request` is null for push and dispatch, so those fall
+# through to ARC.
+
+jobs:
+  # The workspace does not exist until Phase 0 lands (see docs/01-phase-0-*).
+  # Without this gate, a docs-only push queues a job against a runner label
+  # nothing answers to, and it sits pending rather than failing.
+  #
+  # Runs on a hosted runner because that is the one thing guaranteed to be
+  # schedulable. Delete this job and the `needs`/`if` below once Phase 0 has
+  # landed a Cargo.toml.
+  preflight:
+    runs-on: ubuntu-latest
+    outputs:
+      workspace: ${{ steps.check.outputs.workspace }}
+    steps:
+      - uses: actions/checkout@v6
+
+      # Before anything else, because it is seconds and catches a class of bug
+      # nothing else here can. A workflow expression error is not a runtime
+      # failure: GitHub creates the run, fails it in zero seconds with no jobs
+      # and no logs, and `gh run view --log-failed` says only "log not found".
+      # kaas-lib's release.yml carried one from the day it was written, so
+      # every push produced a red run whose publish path had never executed.
+      - name: actionlint
+        env:
+          ACTIONLINT_VERSION: v1.7.7
+        run: |
+          set -euo pipefail
+          curl -sSL "https://github.com/rhysd/actionlint/releases/download/${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION#v}_linux_amd64.tar.gz" \
+            | tar -xz -C /tmp actionlint
+          /tmp/actionlint -color
+
+      - name: Is there a Rust workspace yet?
+        id: check
+        run: |
+          if [ -f Cargo.toml ]; then
+            echo "workspace=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "workspace=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::no Cargo.toml yet — skipping build jobs (Phase 0 creates it)"
+          fi
+
+  # fmt + clippy + unit tests + the invariant greps. No Docker, no broker —
+  # this is the gate that runs on every push. `cargo xtask ci` also asserts
+  # the single `Admin::connect_read_only` call site, that no Kafka version
+  # literal appears anywhere, and that no local kaas-lib path override was
+  # committed.
+  rust:
+    needs: preflight
+    if: needs.preflight.outputs.workspace == 'true'
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || 'arc-runner-set-ui' }}
+    steps:
+      # The ARC runner image (ghcr.io/actions/actions-runner) is minimal: no
+      # cc, gcc, ld, make or pkg-config. `ring` and other build-script crates
+      # need a working C toolchain and linker. curl/unzip/tar/git ARE present,
+      # and uid 1001 is in group 27(sudo) with passwordless sudo.
+      # No-ops on ubuntu-latest, which already has cc.
+      - name: Install C toolchain
+        run: |
+          if command -v cc >/dev/null 2>&1; then
+            echo "cc already present: $(command -v cc)"
+            exit 0
+          fi
+          if [ "$(id -u)" -eq 0 ]; then SUDO=""
+          elif command -v sudo >/dev/null 2>&1; then SUDO="sudo"
+          else
+            echo "::error::no cc, not root, and no sudo — cannot build native deps"
+            exit 1
+          fi
+          $SUDO apt-get update
+          $SUDO apt-get install -y --no-install-recommends \
+            gcc libc6-dev pkg-config ca-certificates
+          echo "cc → $(command -v cc || echo MISSING)"
+
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain (honours rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo xtask ci
+        run: cargo xtask ci
+
+  # The frontend. Separate job so a Rust failure and a TypeScript failure are
+  # distinguishable at a glance, and so the two run concurrently — they share
+  # no inputs until the release build embeds one in the other.
+  web:
+    needs: preflight
+    if: needs.preflight.outputs.workspace == 'true'
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || 'arc-runner-set-ui' }}
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run build
+
+  # The acceptance suite. Talks to the live Strimzi and kaas clusters over
+  # service DNS — this repo has no testcontainers and needs no Docker for it,
+  # because the runner pods sit in the same cluster as the brokers.
+  #
+  # `workflow_dispatch` only for now: it depends on two shared clusters whose
+  # state is not ours, so it is a deliberate act rather than something every
+  # push pays for. Promote it to `push` once Phase 0's runtime is known.
+  #
+  # ARC only — it cannot work anywhere else, so no fork guard is needed and a
+  # fork cannot reach it anyway.
+  live:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: arc-runner-set-ui
+    steps:
+      - name: Install C toolchain
+        run: |
+          if command -v cc >/dev/null 2>&1; then exit 0; fi
+          if [ "$(id -u)" -eq 0 ]; then SUDO=""
+          elif command -v sudo >/dev/null 2>&1; then SUDO="sudo"
+          else
+            echo "::error::no cc, not root, and no sudo — cannot build native deps"
+            exit 1
+          fi
+          $SUDO apt-get update
+          $SUDO apt-get install -y --no-install-recommends \
+            gcc libc6-dev pkg-config ca-certificates
+
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain (honours rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Fail loudly and early if the runner cannot see the brokers, rather
+      # than inside a test with a connect timeout that reads as a flake.
+      - name: Both clusters must be reachable
+        run: |
+          set -euo pipefail
+          for target in \
+            kaas.kaas.svc.cluster.local:9092 \
+            kafka-cluster-kafka-bootstrap.strimzi.svc.cluster.local:9092
+          do
+            host=${target%:*}; port=${target#*:}
+            if timeout 5 bash -c "cat < /dev/null > /dev/tcp/${host}/${port}"; then
+              echo "$target reachable"
+            else
+              echo "::error::$target is not reachable from this runner"
+              exit 1
+            fi
+          done
+
+      - name: cargo xtask live
+        run: cargo xtask live
