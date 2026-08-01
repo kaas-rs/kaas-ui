@@ -167,6 +167,18 @@ than a project.
 | push to `main` | `main`, `sha-<short>` |
 | tag `v1.2.3` | `1.2.3`, `1.2`, `1`, `latest` |
 
+> On a `0.x` tag the `{{major}}` pattern emits nothing — `docker/metadata-action`
+> does not publish a `0` tag, deliberately, because `0` would mean "any 0.x"
+> and 0.x makes no compatibility promise. So `v0.1.2` publishes `0.1.2`,
+> `0.1` and `latest`, and there is no `:0`.
+
+**Bump `[workspace.package] version` in the same commit as the tag.** The
+binary reports `CARGO_PKG_VERSION` from `GET /health`, which exists so a
+running pod can be identified without exec'ing into it — and that only works
+if the number in the manifest, the git tag and the image tag are the same
+number. v0.1.1 shipped without the bump and the pod cheerfully reported
+`0.1.0`, which is exactly the drift the endpoint is meant to expose.
+
 `latest` only ever moves on a semver tag. An ArgoCD deployment pinned to
 `latest` and a `main` build that clobbers it is how a cluster ends up running a
 commit nobody released.
