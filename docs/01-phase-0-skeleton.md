@@ -232,15 +232,15 @@ and the numbers below are what the claim now rests on.
 
 | | |
 |---|---|
-| release binary (glibc, `lto = "thin"`, stripped) | **9.6 MB** |
-| resident memory, idle, three clusters configured | **8.7 MiB** |
+| container image, distroless + static musl | **5 MB** (predicted ~25 MB) |
+| release binary (glibc, `lto = "thin"`, stripped) | 9.6 MB |
+| resident memory, idle, three clusters configured | **8.7 MiB** (predicted ~15 MB) |
 | time to serve after start | 53 ms |
 | `GET /health` | 0.3 ms |
 | `GET /api/clusters`, with `dead` failing in the background | 1.2 ms |
 
-The container image is a static musl build on distroless, so its size differs
-from the binary above; the release workflow measures it on every push and
-writes it into the job summary, which is the number to quote.
+The image number comes from the release job, which measures it on every push
+and writes it into the job summary — so it is checked rather than remembered.
 
 ## Decisions this phase changed
 

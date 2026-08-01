@@ -88,12 +88,15 @@ reassignments, transactions) and the cross-cluster views. See
 The rewrite's headline claim is that this is a small process next to the JVM
 original. Numbers rather than adjectives:
 
-| | |
-|---|---|
-| container image | measured on every release and written into the job summary |
-| resident memory, idle, three clusters | see the table in `docs/01-phase-0-skeleton.md` |
-| `GET /api/clusters` with a dead cluster configured | ~1 ms |
-| `GET /health` | ~0.3 ms, and it never consults a cluster |
+| | | predicted in PLAN.md §10 |
+|---|---|---|
+| container image, distroless + static musl | **5 MB** | ~25 MB |
+| resident memory, idle, three clusters configured | **8.7 MiB** | ~15 MB |
+| `GET /api/clusters` with a dead cluster configured | ~1.2 ms | — |
+| `GET /health` | ~0.3 ms, and it never consults a cluster | — |
+
+The image size is measured by the release job on every push and written into
+its summary, so the number above is checked rather than remembered.
 
 ## Deployment
 
