@@ -1,0 +1,37 @@
+# The development registry.
+#
+# Three clusters, and the third one is not padding: `dead` points at a name
+# that does not resolve, and the acceptance run asserts that it renders as an
+# unreachable card without costing the other two a millisecond. It is the
+# cheapest possible regression test for lazy connection.
+#
+# Both live clusters are reachable on their plaintext listener from inside the
+# Kubernetes cluster this is developed in. See docs/reference/environment.md.
+
+server:
+  listen: "127.0.0.1:8099"
+
+clusters:
+  - id: kaas
+    name: kaas (dev)
+    bootstrap: ["kaas.kaas.svc.cluster.local:9092"]
+    labels:
+      env: dev
+      kind: kaas
+    refresh_interval: 30s
+
+  - id: strimzi
+    name: kafka-cluster (strimzi)
+    bootstrap: ["kafka-cluster-kafka-bootstrap.strimzi.svc.cluster.local:9092"]
+    labels:
+      env: dev
+      kind: strimzi
+    refresh_interval: 30s
+
+  - id: dead
+    name: nonexistent
+    bootstrap: ["nowhere.invalid:9092"]
+    labels:
+      env: dev
+      kind: none
+    connect_timeout: 3s

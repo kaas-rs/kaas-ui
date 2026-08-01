@@ -1,0 +1,22 @@
+[package]
+name        = "xtask"
+description = "Build, check and acceptance tasks for kaas-ui."
+version.workspace      = true
+edition.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+rust-version.workspace = true
+publish     = false
+
+[dependencies]
+kaas-ui-api = { workspace = true }
+
+reqwest    = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+serde_json = { workspace = true }
+tokio      = { workspace = true }
+
+# xtask is a developer tool, not part of the shipped surface: it may panic,
+# unwrap and index freely, and holding it to the runtime's lints would mean
+# writing defensive code in a program whose failure mode is "the build stops".
+[lints.rust]
+unsafe_code = "forbid"

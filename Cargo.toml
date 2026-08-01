@@ -1,0 +1,79 @@
+[workspace]
+resolver = "3"
+members = [
+    "xtask",
+    "crates/kaas-ui-core",
+    "crates/kaas-ui-api",
+    "crates/kaas-ui-server",
+]
+
+[workspace.package]
+version      = "0.1.0"
+edition      = "2024"
+license      = "Apache-2.0"
+repository   = "https://github.com/kaas-rs/kaas-ui"
+rust-version = "1.97"
+
+[workspace.dependencies]
+# kaas-ui's only Kafka dependency, from crates.io. The four release in
+# lockstep and must be pulled at the same version — see docs/00-foundations.md.
+# `cargo xtask link` writes a fenced [patch.crates-io] block for local
+# iteration against ../kaas-lib; `cargo xtask ci` fails if that fence was
+# committed.
+kafka-admin = "0.1"
+kafka-conn  = "0.1"
+kafka-meta  = "0.1"
+kafka-read  = "0.1"
+
+# HTTP
+axum       = { version = "0.8", features = ["macros", "http2"] }
+tower      = "0.5"
+tower-http = { version = "0.6", features = ["trace", "compression-gzip", "set-header"] }
+utoipa     = { version = "5.5", features = ["axum_extras"] }
+
+# async + runtime
+tokio        = { version = "1.53", features = ["full"] }
+tokio-stream = "0.1"
+futures      = "0.3"
+async-stream = "0.3"
+arc-swap     = "1.9"
+
+# config, serialisation, errors, logging
+figment            = { version = "0.10", features = ["yaml", "env"] }
+serde              = { version = "1", features = ["derive"] }
+serde_json         = "1"
+humantime-serde    = "1"
+thiserror          = "2.0"
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap               = { version = "4.5", features = ["derive", "env"] }
+
+# assets
+rust-embed = "8.12"
+mime_guess = "2"
+bytes      = "1.12"
+
+# internal
+kaas-ui-core = { path = "crates/kaas-ui-core" }
+kaas-ui-api  = { path = "crates/kaas-ui-api" }
+
+[workspace.lints.clippy]
+unwrap_used              = "deny"
+expect_used              = "deny"
+panic                    = "deny"
+indexing_slicing         = "deny"
+as_conversions           = "deny"
+cast_possible_truncation = "deny"
+cast_sign_loss           = "deny"
+
+[workspace.lints.rust]
+unsafe_code                   = "forbid"
+missing_debug_implementations = "warn"
+
+[profile.release]
+# A read-only UI binary: size and a clean backtrace matter more than the last
+# few percent of throughput, and LTO is what gets the distroless image near
+# the number PLAN.md §10 claims.
+lto           = "thin"
+codegen-units = 1
+strip         = true
