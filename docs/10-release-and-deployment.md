@@ -197,13 +197,30 @@ change and easier to read in a diff.
 The cluster repo is `Woestebanaan/k3s-cluster`, checked out at
 `/home/coder/repos/k3s-cluster`.
 
-### It deploys itself
+### It registers itself; it does not sync itself
 
 `argocd-apps/appset-production.yaml` is an ApplicationSet with a git directory
-generator over `apps/*`. **Creating `apps/kaas-ui/` and pushing is the
-deployment** — there is no Application to write, no registration step. The
+generator over `apps/*`. **Creating `apps/kaas-ui/` and pushing registers the
+Application** — there is no Application to write, no registration step. The
 namespace is the directory basename and is created automatically
 (`CreateNamespace=true`).
+
+**Sync is manual.** The template sets `syncOptions` but no `automated:` block,
+and no app in this cluster except `app-of-apps` has auto-sync enabled — several
+(`apicurio`, `kaas`, `media`, `spire`, `strimzi`, `trivy-operator`) sit
+`OutOfSync` as their steady state. So a push makes ArgoCD *notice* the change;
+applying it is a deliberate act:
+
+```sh
+argocd app sync kaas-ui
+# or: kubectl -n argocd patch application kaas-ui --type merge \
+#       -p '{"operation":{"sync":{"revision":"HEAD"}}}'
+```
+
+This is worth knowing in both directions. It means a bad manifest cannot deploy
+itself — but it also means a green CI run and a merged commit are **not**
+evidence that anything changed in the cluster. Check `argocd app get kaas-ui`,
+not the git log.
 
 One edit is needed outside the new directory. The template assigns the ArgoCD
 project by name:
@@ -216,10 +233,10 @@ kaas-ui belongs with the eventing set, so `"kaas-ui"` is added to that first
 `or`. Without it the app lands in `platform`, which works but files it under the
 wrong project.
 
-> **Consequence worth stating plainly: a commit to `apps/kaas-ui/` deploys to
-> the live cluster.** The manifests should not be committed before the first
-> image exists in GHCR, or ArgoCD will happily sync a `Deployment` that
-> `ImagePullBackOff`s and page nobody about it.
+> **Still hold the manifests until the first image exists.** Manual sync means
+> a premature commit will not deploy a broken `Deployment` by itself — but it
+> will leave a permanently `OutOfSync` app in a cluster that already has six of
+> them, which is exactly how a real drift stops being noticeable.
 
 ### What `apps/kaas-ui/` contains
 
