@@ -164,7 +164,11 @@ impl Config {
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
         let config: Config = Figment::new()
             .merge(Yaml::file_exact(path))
-            .merge(Env::prefixed("KAAS_UI_").split("__"))
+            .merge(
+                Env::prefixed("KAAS_UI_")
+                    .split("__")
+                    .filter(|key| is_ours(key.as_str())),
+            )
             .extract()
             .map_err(|e| ConfigError::Load(Box::new(e)))?;
         config.validate()?;
@@ -245,6 +249,30 @@ impl ClusterEntry {
     pub fn display_name(&self) -> &str {
         self.name.as_deref().unwrap_or(&self.id)
     }
+}
+
+/// Whether a `KAAS_UI_*` variable is one of ours.
+///
+/// The environment is **not** ours alone. Kubernetes injects service links for
+/// every Service in the namespace, so a Service named `kaas-ui` in namespace
+/// `kaas-ui` produces `KAAS_UI_PORT`, `KAAS_UI_SERVICE_HOST`,
+/// `KAAS_UI_PORT_80_TCP_ADDR` and several more — none of which are
+/// configuration, all of which land under this prefix. `--config` also reads
+/// `KAAS_UI_CONFIG`.
+///
+/// Combined with `deny_unknown_fields`, taking the whole prefix meant the
+/// process refused to start in the namespace named after itself. That
+/// combination is worth keeping — a `schema_registry:` block someone writes
+/// before the phase that reads it exists *should* be a startup error — so the
+/// overlay is narrowed to the two roots the file has instead.
+fn is_ours(key: &str) -> bool {
+    let key = key.to_ascii_lowercase();
+    for root in ["server", "clusters"] {
+        if key == root || key.starts_with(&format!("{root}__")) {
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -337,6 +365,33 @@ clusters:
     fn empty_registry_is_rejected() {
         let err = Config::from_yaml("clusters: []").unwrap_err();
         assert!(format!("{err}").contains("no clusters"), "{err}");
+    }
+
+    #[test]
+    fn the_environment_overlay_ignores_variables_that_are_not_ours() {
+        // Every one of these is injected by Kubernetes into a pod in a
+        // namespace containing a Service named `kaas-ui`. Before this filter
+        // existed, `KAAS_UI_PORT` alone was enough to stop the process from
+        // starting — in exactly the deployment it was written for.
+        for injected in [
+            "PORT",
+            "PORT_80_TCP",
+            "PORT_80_TCP_ADDR",
+            "SERVICE_HOST",
+            "SERVICE_PORT",
+            "SERVICE_PORT_HTTP",
+            "CONFIG",
+        ] {
+            assert!(!is_ours(injected), "{injected} should be ignored");
+        }
+
+        for ours in ["SERVER__LISTEN", "server__listen", "CLUSTERS", "SERVER"] {
+            assert!(is_ours(ours), "{ours} should be read");
+        }
+
+        // A near miss is still read, so a typo is a startup error rather than
+        // a setting that silently did nothing.
+        assert!(is_ours("SERVER__LISTENN"));
     }
 
     #[test]
