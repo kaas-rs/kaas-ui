@@ -1,0 +1,29 @@
+[package]
+name        = "kaas-ui-core"
+description = "Configuration, cluster registry and domain types for kaas-ui."
+version.workspace      = true
+edition.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+rust-version.workspace = true
+
+[dependencies]
+kafka-admin = { workspace = true }
+kafka-conn  = { workspace = true }
+kafka-meta  = { workspace = true }
+kafka-read  = { workspace = true }
+
+arc-swap        = { workspace = true }
+figment         = { workspace = true }
+humantime-serde = { workspace = true }
+serde           = { workspace = true }
+thiserror       = { workspace = true }
+tokio           = { workspace = true }
+tracing         = { workspace = true }
+utoipa          = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[lints]
+workspace = true
