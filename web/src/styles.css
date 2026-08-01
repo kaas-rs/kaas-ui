@@ -1,0 +1,156 @@
+@import "tailwindcss";
+
+/* The mdbook `rust` theme palette — the same colours as the kaas-lib book, so
+ * pointing the two at each other feels like one project. Components reference
+ * the semantic tokens below and never the raw hexes.
+ *
+ * One trap, and it is the easiest thing here to get wrong: #E69F67 is roughly
+ * 2:1 on the paper ground. It is a SURFACE colour — active nav, focus ring,
+ * selected edge, the rule under an active tab. Accent-coloured *text* on light
+ * uses --color-accent-ink. Getting this wrong makes the whole UI look washed
+ * out. */
+@theme {
+  /* Ground and ink */
+  --color-surface: #e1e1db;
+  --color-surface-raised: #eaeae4;
+  --color-surface-sunken: #dadad3;
+  --color-surface-nav: #3b2e2a;
+  --color-ink: #262625;
+  --color-ink-muted: #6e6b5e;
+  --color-ink-faint: #99908a;
+  --color-ink-on-nav: #c8c9db;
+
+  /* Lines */
+  --color-line: #d5d5cd;
+  --color-line-strong: #b6b6af;
+  --color-line-nav: #45373a;
+
+  /* Accent — rust orange */
+  --color-accent: #e69f67;
+  --color-accent-edge: #b38f6b;
+  --color-accent-ink: #8f5a2b;
+
+  --color-link: #2b79a2;
+
+  /* Status. Not in mdbook — a Kafka UI needs them; tuned to the warm ground. */
+  --color-ok: #3f6431;
+  --color-ok-soft: #dde4d6;
+  --color-warn: #ff8e00;
+  --color-warn-ink: #8a5200;
+  --color-warn-soft: #f5e3c8;
+  --color-danger: #a33a2b;
+  --color-danger-soft: #efd8d3;
+
+  --font-sans: "Inter var", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --radius-sm: 3px;
+  --radius-md: 5px;
+  --radius-lg: 8px;
+}
+
+/* Dark mode is derived, not borrowed: mdbook's `rust` theme is light-only and
+ * its dark themes are cool-toned enough to read as a different product. So the
+ * paper inverts, the sidebar browns become the surfaces, and the accent stays.
+ * On dark, #E69F67 IS legible as text, so accent-ink collapses into it. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-surface: #241d1a;
+    --color-surface-raised: #2e2521;
+    --color-surface-sunken: #1c1613;
+    --color-ink: #e8e6df;
+    --color-ink-muted: #a9a296;
+    --color-ink-faint: #7d746c;
+    --color-line: #3f332e;
+    --color-line-strong: #52433c;
+    --color-accent-ink: #e69f67;
+    --color-link: #7ab8d9;
+    --color-ok: #8fbf7a;
+    --color-ok-soft: #2a3524;
+    --color-warn-ink: #f0a94c;
+    --color-warn-soft: #3a2c15;
+    --color-danger: #e08272;
+    --color-danger-soft: #3a211c;
+  }
+}
+
+/* The header carries a theme toggle, and an explicit choice must win over the
+ * media query in both directions. */
+:root[data-theme="dark"] {
+  --color-surface: #241d1a;
+  --color-surface-raised: #2e2521;
+  --color-surface-sunken: #1c1613;
+  --color-ink: #e8e6df;
+  --color-ink-muted: #a9a296;
+  --color-ink-faint: #7d746c;
+  --color-line: #3f332e;
+  --color-line-strong: #52433c;
+  --color-accent-ink: #e69f67;
+  --color-link: #7ab8d9;
+  --color-ok: #8fbf7a;
+  --color-ok-soft: #2a3524;
+  --color-warn-ink: #f0a94c;
+  --color-warn-soft: #3a2c15;
+  --color-danger: #e08272;
+  --color-danger-soft: #3a211c;
+}
+
+:root[data-theme="light"] {
+  --color-surface: #e1e1db;
+  --color-surface-raised: #eaeae4;
+  --color-surface-sunken: #dadad3;
+  --color-ink: #262625;
+  --color-ink-muted: #6e6b5e;
+  --color-ink-faint: #99908a;
+  --color-line: #d5d5cd;
+  --color-line-strong: #b6b6af;
+  --color-accent-ink: #8f5a2b;
+  --color-link: #2b79a2;
+  --color-ok: #3f6431;
+  --color-ok-soft: #dde4d6;
+  --color-warn-ink: #8a5200;
+  --color-warn-soft: #f5e3c8;
+  --color-danger: #a33a2b;
+  --color-danger-soft: #efd8d3;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: var(--color-surface);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Transitions on colour and opacity only. Rows appearing in a live tail must
+ * not slide: a moving target is a target you cannot click. */
+* {
+  transition-property: color, background-color, border-color, opacity;
+  transition-duration: 120ms;
+  transition-timing-function: ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    animation: none !important;
+  }
+}
+
+/* Never suppressed. */
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: var(--color-accent);
+  color: #262625;
+}
