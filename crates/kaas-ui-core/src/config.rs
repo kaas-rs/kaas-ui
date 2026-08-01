@@ -265,10 +265,19 @@ impl ClusterEntry {
 /// combination is worth keeping — a `schema_registry:` block someone writes
 /// before the phase that reads it exists *should* be a startup error — so the
 /// overlay is narrowed to the two roots the file has instead.
+/// Both separators are accepted because figment applies `split("__")` to the
+/// key **before** the filter sees it, so `KAAS_UI_SERVER__LISTEN` arrives here
+/// as `server.listen` rather than `server__listen`. Matching only the raw
+/// spelling silently drops every legitimate override — which is exactly what
+/// the first version of this function did, and what
+/// `the_environment_overlay_still_overrides_the_file` now catches.
 fn is_ours(key: &str) -> bool {
     let key = key.to_ascii_lowercase();
     for root in ["server", "clusters"] {
-        if key == root || key.starts_with(&format!("{root}__")) {
+        if key == root
+            || key.starts_with(&format!("{root}."))
+            || key.starts_with(&format!("{root}__"))
+        {
             return true;
         }
     }
@@ -392,6 +401,41 @@ clusters:
         // A near miss is still read, so a typo is a startup error rather than
         // a setting that silently did nothing.
         assert!(is_ours("SERVER__LISTENN"));
+    }
+
+    /// The other half of the filter above: it must let ours through.
+    ///
+    /// Written after shipping a filter that rejected Kubernetes' variables
+    /// *and* every real override, because `--check` does not print the listen
+    /// address and so the first test of it proved nothing.
+    #[test]
+    // `figment::Error` is a large type and `Jail` insists on it by signature.
+    #[allow(clippy::result_large_err)]
+    fn the_environment_overlay_still_overrides_the_file() {
+        figment::Jail::expect_with(|jail| {
+            jail.create_file(
+                "config.yaml",
+                r#"
+server:
+  listen: "127.0.0.1:8080"
+clusters:
+  - id: kaas
+    bootstrap: ["a:9092"]
+"#,
+            )?;
+
+            // What Kubernetes injects, alongside what an operator sets.
+            jail.set_env("KAAS_UI_PORT", "tcp://10.43.1.2:80");
+            jail.set_env("KAAS_UI_SERVICE_HOST", "10.43.1.2");
+            jail.set_env("KAAS_UI_SERVER__LISTEN", "0.0.0.0:9999");
+
+            let config = Config::load(std::path::Path::new("config.yaml"))
+                .map_err(|error| figment::Error::from(error.to_string()))?;
+
+            assert_eq!(config.server.listen.port(), 9999);
+            assert_eq!(config.clusters.len(), 1);
+            Ok(())
+        });
     }
 
     #[test]

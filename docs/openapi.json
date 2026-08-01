@@ -6,7 +6,7 @@
     "license": {
       "name": "Apache-2.0"
     },
-    "version": "0.1.0"
+    "version": "0.1.2"
   },
   "paths": {
     "/api/clusters": {
@@ -646,6 +646,24 @@
                   "$ref": "#/components/schemas/Envelope_Partition"
                 }
               }
+            }
+          }
+        }
+      }
+    },
+    "/api/openapi.json": {
+      "get": {
+        "tags": [
+          "meta"
+        ],
+        "summary": "`GET /api/openapi.json`",
+        "description": "A GET, like everything else. The document it returns describes an API with\nno other verb in it, which the document itself is the easiest way to check.",
+        "operationId": "spec",
+        "responses": {
+          "200": {
+            "description": "The OpenAPI document",
+            "content": {
+              "application/json": {}
             }
           }
         }
@@ -3548,6 +3566,10 @@
     {
       "name": "messages",
       "description": "The message browser."
+    },
+    {
+      "name": "meta",
+      "description": "The API describing itself."
     }
   ]
 }

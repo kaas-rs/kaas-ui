@@ -127,9 +127,11 @@ pub fn router(state: AppState) -> Router {
 }
 
 fn api_router() -> Router<AppState> {
-    use routes::{capabilities, clusters, configs, groups, messages, topics};
+    use routes::{capabilities, clusters, configs, groups, messages, spec, topics};
 
     Router::new()
+        // The document that describes everything below it, including itself.
+        .route("/openapi.json", get(spec::spec))
         .route("/clusters", get(clusters::list))
         .route("/clusters/{id}", get(clusters::detail))
         .route(

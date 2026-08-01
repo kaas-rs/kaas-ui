@@ -11,6 +11,7 @@ pub mod configs;
 pub mod groups;
 pub mod health;
 pub mod messages;
+pub mod spec;
 pub mod topics;
 
 /// Split a repeated query parameter given as `a,b,c`.

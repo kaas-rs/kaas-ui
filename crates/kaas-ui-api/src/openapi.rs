@@ -35,6 +35,7 @@ use utoipa::OpenApi;
         crate::routes::groups::detail,
         crate::routes::groups::offsets,
         crate::routes::messages::tail,
+        crate::routes::spec::spec,
     ),
     components(schemas(
         crate::error::ApiErrorBody,
@@ -79,6 +80,7 @@ use utoipa::OpenApi;
         (name = "configs", description = "Configuration viewing. There is no writing."),
         (name = "groups", description = "Consumer groups, committed offsets and lag."),
         (name = "messages", description = "The message browser."),
+        (name = "meta", description = "The API describing itself."),
     ),
 )]
 pub struct ApiDoc;

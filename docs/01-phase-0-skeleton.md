@@ -217,7 +217,7 @@ With the three clusters from
 ## Exit criteria
 
 - [x] `cargo xtask ci` green, including all four checks and the call-site test
-- [x] `cargo xtask live` green against `kaas` + `strimzi` + `dead` — 27 assertions
+- [x] `cargo xtask live` green against `kaas` + `strimzi` + `dead` — 28 assertions
 - [x] fleet page served from the embedded assets, not from Vite dev
 - [x] distroless image defined; size measured by the release job, RSS below
 - [x] config reload adds and removes a cluster without dropping connections to

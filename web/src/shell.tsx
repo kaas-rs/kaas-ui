@@ -91,9 +91,9 @@ export function Shell() {
       <footer className="border-t border-line">
         <div className="max-w-[1400px] mx-auto px-8 py-4 text-[12px] text-ink-faint flex gap-4">
           <span>read-only by construction — kaas-ui has no mutating endpoint</span>
-          <a className="ml-auto hover:underline" href="/api/clusters">
+          <Link className="ml-auto hover:underline" to="/api-docs">
             api
-          </a>
+          </Link>
         </div>
       </footer>
     </div>

@@ -24,6 +24,9 @@ utoipa          = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
+# `Jail` isolates environment variables and the working directory, which is the
+# only honest way to test an overlay that reads the real environment.
+figment = { workspace = true, features = ["test"] }
 
 [lints]
 workspace = true

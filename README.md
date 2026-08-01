@@ -34,7 +34,12 @@ clusters:
 ```
 
 `--check` loads the configuration and reports what it says without serving.
-`--openapi` prints the OpenAPI document and exits.
+`--openapi` prints the OpenAPI document and exits; the running server serves
+the same document at `GET /api/openapi.json` and renders it at `/api-docs`.
+
+There is no Swagger UI: it would have cost 2–3 MB on a 5 MB image for a
+try-it console that, on an API with one verb and no request bodies, is a link.
+The document is the same document either way.
 
 The file is re-read every five seconds. A change **swaps the registry**,
 reusing the handle of every cluster that did not change — adding a cluster does
@@ -60,7 +65,7 @@ cargo xtask docs    # write docs/openapi.json
 
 `cargo xtask ci` runs anywhere: unit tests are cluster-free and Docker-free.
 Anything that needs a broker lives in `live`, which starts the real binary
-against the real clusters and asserts over HTTP — 27 assertions, including that
+against the real clusters and asserts over HTTP — 28 assertions, including that
 an unreachable cluster costs the fleet request nothing measurable.
 
 There is no `cargo xtask integration` and no `testcontainers`: Docker is not
@@ -77,6 +82,7 @@ clusters are a better target than one container anyway.
 | **topics** | server-side filtered/sorted/paged list, partitions, replica placement grid, configs, offsets |
 | **messages** | the tail of a topic, merged across partitions, keys and values rendered with the encoding said out loud |
 | **groups** | the four group kinds, members, committed offsets and lag in its four states |
+| **api** | `/api-docs` renders the OpenAPI document the binary serves at `/api/openapi.json` — endpoints by tag, parameters, response schemas |
 
 Not built yet: the SSE scan half of the message browser, OIDC/Dex and roles,
 schema registry, the read-only admin views (ACLs, quotas, SCRAM,

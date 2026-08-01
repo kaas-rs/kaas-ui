@@ -16,6 +16,7 @@ import { Fleet } from "./pages/fleet";
 import { CapabilitiesPage, ClusterConfigs, ClusterOverview } from "./pages/cluster";
 import { TopicDetail, Topics } from "./pages/topics";
 import { GroupDetail, Groups } from "./pages/groups";
+import { ApiDocs } from "./pages/apidocs";
 
 const rootRoute = createRootRoute({ component: Shell });
 
@@ -23,6 +24,12 @@ const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
   component: Fleet,
+});
+
+const apiDocsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/api-docs",
+  component: ApiDocs,
 });
 
 /** Everything under a cluster carries the tab bar. */
@@ -109,6 +116,7 @@ const capabilitiesRoute = createRoute({
 
 const routeTree = rootRoute.addChildren([
   indexRoute,
+  apiDocsRoute,
   clusterRoute.addChildren([
     overviewRoute,
     topicsRoute,

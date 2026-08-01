@@ -44,7 +44,7 @@ Running alongside all of them:
 
 **Phases 0, 1 and 2 are built, plus the group views from Phase 5 and the tail
 half of Phase 3.** The workspace is three crates, a frontend and an xtask;
-`cargo xtask ci` is green and `cargo xtask live` passes 27 assertions against
+`cargo xtask ci` is green and `cargo xtask live` passes 28 assertions against
 `kaas`, `strimzi` and a deliberately dead third cluster.
 
 | phase | state |

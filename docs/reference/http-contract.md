@@ -108,6 +108,7 @@ Phase in brackets.
 
 ```
 GET  /health                                                    [0] liveness, never blocks on a cluster
+GET  /api/openapi.json                                          [0] the document describing everything below
 GET  /api/clusters                                              [0] fleet view, one entry per configured cluster
 GET  /api/clusters/{id}                                         [1] cluster detail
 GET  /api/clusters/{id}/capabilities                            [1] the capability projection
