@@ -19,6 +19,7 @@ sequenced entirely on its own merits.
 | 7 | pool and connection introspection | Phase 1/3 | medium |
 | 8 | `ListConfigResources` (70) | Phase 1 | low |
 | 9 | upstream `kafka-protocol` contributions | Phase 5 | low, long lead |
+| 10 | `topic_offset_range` will not compile in an axum handler | Phase 2 | **worked around** |
 
 ---
 
@@ -166,6 +167,37 @@ workaround, and streams groups appear on any Strimzi cluster running Kafka
 Streams. Long lead time, so worth starting early even though nothing blocks on
 it: `GroupDescription::Unrecognized` degrades correctly in the meantime, which is
 the whole reason that variant exists.
+
+## 10. `topic_offset_range` is unusable from an axum handler
+
+Found while building Phase 2, and it is a compiler-level blocker rather than a
+missing feature.
+
+`Admin::topic_offset_range(&self, topic: &str)` builds its partition list with
+`partitions.iter().map(|p| (topic.to_owned(), *p))` — a closure of shape
+`fn(&i32) -> (String, i32)` held across an `await`. Awaiting that future inside
+an axum handler fails to compile:
+
+```
+error: implementation of `FnOnce` is not general enough
+  --> crates/kaas-ui-api/src/lib.rs
+   | .route("/clusters/{id}/topics/{topic}", get(topics::detail))
+   = note: closure with signature `fn(&'0 i32) -> (String, i32)` must implement
+           `FnOnce<(&'1 i32,)>`, for any two lifetimes `'0` and `'1`...
+```
+
+The error surfaces at the `get(handler)` call site, names none of the caller's
+code, and `Box::pin` does not fix it — which makes it expensive to diagnose
+from the consumer side.
+
+**Workaround in kaas-ui today:** build the `Vec<(String, i32)>` *before* the
+first await and call `list_offsets` twice, which is what the topic detail and
+group offset handlers do. That is also the cheaper call — `topic_offset_range`
+refreshes metadata first, which a list view must not do per row.
+
+**The fix upstream** is to collect the partition list into an owned `Vec`
+before the await rather than mapping lazily across it. One line, and it makes
+the helper usable from the only kind of caller a UI has.
 
 ---
 

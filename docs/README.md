@@ -42,7 +42,27 @@ Running alongside all of them:
 
 ## Status
 
-Nothing is built yet. The repository contains `PLAN.md` and this folder.
+**Phases 0, 1 and 2 are built, plus the group views from Phase 5 and the tail
+half of Phase 3.** The workspace is three crates, a frontend and an xtask;
+`cargo xtask ci` is green and `cargo xtask live` passes 27 assertions against
+`kaas`, `strimzi` and a deliberately dead third cluster.
+
+| phase | state |
+|---|---|
+| 0 — skeleton | **done.** Config, registry, lazy connect, `/health`, fleet view, embedded frontend, image, CI |
+| 1 — capabilities | **done.** Projection, `source` naming the broker, degradation components, brokers, log dirs, configs |
+| 2 — topics | **done.** Server-side filter/sort/page, detail, partitions, placement grid, configs, offsets |
+| 3 — messages | **partial.** The tail is built; the SSE scan is not |
+| 4 — auth | not started. There is no Dex in the cluster yet, which is a prerequisite rather than a step |
+| 5 — groups | **mostly done.** Four kinds, members, committed offsets, four-state lag. No offset-reset view (it would be mutating anyway) |
+| 6 — schema registry | not started |
+| 7 — read-only admin | not started. ACLs, quotas, SCRAM, reassignments, transactions |
+| 8 — cross-cluster | not started |
+
+What each finished phase decided differently from its plan is recorded in that
+phase's own file, under "Decisions this phase changed". Nothing was quietly
+skipped: `kaas-ui-serde` and `kaas-ui-auth` do not exist because the phases that
+fill them have not run, which is the rule rather than an omission.
 
 Three things were established before writing this plan, by running code rather
 than by reading docs, and they shape everything below:

@@ -1,0 +1,3553 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "kaas-ui",
+    "description": "A read-only, multi-cluster Kafka UI. Every data route is a GET; there is no mutating endpoint in this document because there is none in the router.",
+    "license": {
+      "name": "Apache-2.0"
+    },
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/clusters": {
+      "get": {
+        "tags": [
+          "clusters"
+        ],
+        "summary": "`GET /api/clusters`",
+        "description": "One card per configured cluster, reachable or not.\n\n**Reads `Cluster::snapshot()` and nothing else**, so it never awaits: the\nsnapshot sits behind an `ArcSwap` and carries brokers, controller id,\ncluster id and every partition's replicas, ISR and offline set. An\nunreachable cluster costs a timeout on its own background task, not on this\nrequest — which is the property the dead-cluster fixture exists to prove.",
+        "operationId": "list",
+        "responses": {
+          "200": {
+            "description": "Every configured cluster",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope_ClusterCard"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/clusters/{id}": {
+      "get": {
+        "tags": [
+          "clusters"
+        ],
+        "summary": "`GET /api/clusters/{id}`",
+        "description": "The card, the broker list, and `DescribeCluster` where the cluster answers\nit. Where it does not — which is one of the two development clusters today\n— the description is absent and the reason travels in `errors`. The page\nrenders, with a note.",
+        "operationId": "detail",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Cluster id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cluster detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope_ClusterDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such cluster"
+          },
+          "503": {
+            "description": "Configured but not connected"
+          }
+        }
+      }
+    },
+    "/api/clusters/{id}/brokers": {
+      "get": {
+        "tags": [
+          "clusters"
+        ],
+        "summary": "`GET /api/clusters/{id}/brokers`",
+        "operationId": "brokers",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Cluster id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Brokers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope_Broker"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/clusters/{id}/brokers/{node}/log-dirs": {
+      "get": {
+        "tags": [
+          "clusters"
+        ],
+        "summary": "`GET /api/clusters/{id}/brokers/{node}/log-dirs`",
+        "description": "One of the four RPCs that go to a *specific* broker. A broker that is down\nyields an error for that node, not for the call — which is why this is\nper-node rather than a fan-out that one dead broker can blank.",
+        "operationId": "log_dirs",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Cluster id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "node",
+            "in": "path",
+            "description": "Broker node id",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Log directories",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope_LogDirDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/clusters/{id}/capabilities": {
+      "get": {
+        "tags": [
+          "capabilities"
+        ],
+        "summary": "`GET /api/clusters/{id}/capabilities`",
+        "description": "kaas-lib's version table is **per connection**, deliberately: brokers\nmid-rolling-upgrade genuinely disagree, and a cluster-wide table would be\nwrong during exactly the window when being right matters. There is no\n`cluster.capabilities()` to project from, and fabricating one by using\nwhichever connection answered gives a UI whose tabs flicker.\n\nSo the table is read from an **explicitly named** broker — the lowest node\nid unless `?broker=` says otherwise — and `source` says which. The UI\nrenders that as \"as reported by broker 1\".",
+        "operationId": "capabilities",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Cluster id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "broker",
+            "in": "query",
+            "description": "Read the table from this broker",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "What this cluster can be asked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Capabilities"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such cluster"
+          },
+          "503": {
+            "description": "Configured but not connected"
+          }
+        }
+      }
+    },
+    "/api/clusters/{id}/configs": {
+      "get": {
+        "tags": [
+          "configs"
+        ],
+        "summary": "`GET /api/clusters/{id}/configs?resource=broker:1`",
+        "operationId": "cluster_configs",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Cluster id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resource",
+            "in": "query",
+            "description": "Comma-separated `type:name` list",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Configurations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope_ConfigResourceEntry"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/clusters/{id}/groups": {
+      "get": {
+        "tags": [
+          "groups"
+        ],
+        "summary": "`GET /api/clusters/{id}/groups`",
+        "operationId": "list",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Cluster id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Groups",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope_GroupSummary"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/clusters/{id}/groups/{group}": {
+      "get": {
+        "tags": [
+          "groups"
+        ],
+        "summary": "`GET /api/clusters/{id}/groups/{group}`",
+        "description": "Four kinds, not one struct with optional fields. `Unrecognized` is a\n*successful* description of an undescribable group — it exists, it is\nlisted, and the UI can say what it is rather than showing a spinner that\nnever resolves.",
+        "operationId": "detail",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Cluster id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "group",
+            "in": "path",
+            "description": "Group id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Group detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope_GroupDetail"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/clusters/{id}/groups/{group}/offsets": {
+      "get": {
+        "tags": [
+          "groups"
+        ],
+        "summary": "`GET /api/clusters/{id}/groups/{group}/offsets`",
+        "description": "Committed offsets joined to the log ends, so lag can be classified rather\nthan subtracted. \"No commit yet\", \"empty partition\", \"caught up\" and\n\"behind by n\" are four different answers and rendering them all as `0` is\nhow a lag column becomes something nobody trusts.",
+        "operationId": "offsets",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Cluster id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "group",
+            "in": "path",
+            "description": "Group id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Committed offsets and lag",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope_GroupOffset"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/clusters/{id}/topics": {
+      "get": {
+        "tags": [
+          "topics"
+        ],
+        "summary": "`GET /api/clusters/{id}/topics`",
+        "operationId": "list",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Cluster id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "description": "Substring match",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "internal",
+            "in": "query",
+            "description": "Include internal topics",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "name | partitions | size | underReplicated",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "description": "asc | desc",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Page offset",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "sizes",
+            "in": "query",
+            "description": "Fetch per-topic sizes",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "name",
+            "in": "query",
+            "description": "Describe these topics instead of listing",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Topics",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope_TopicSummary"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/clusters/{id}/topics/{topic}": {
+      "get": {
+        "tags": [
+          "topics"
+        ],
+        "summary": "`GET /api/clusters/{id}/topics/{topic}`",
+        "description": "`describe_topics` prefers `DescribeTopicPartitions` and falls back to\n`Metadata` where the newer call is unreachable. Both branches are live\nagainst the two development clusters, and **there is no branch here** —\nwhich is the claim that a partially-implemented broker is indistinguishable\nfrom an old one, made good.",
+        "operationId": "detail",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Cluster id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "topic",
+            "in": "path",
+            "description": "Topic name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "offsets",
+            "in": "query",
+            "description": "Also fetch the offset range",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Topic detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope_TopicDetail"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/clusters/{id}/topics/{topic}/configs": {
+      "get": {
+        "tags": [
+          "configs"
+        ],
+        "summary": "`GET /api/clusters/{id}/topics/{topic}/configs`",
+        "operationId": "topic_configs",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Cluster id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "topic",
+            "in": "path",
+            "description": "Topic name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Topic configuration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope_ConfigResourceEntry"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/clusters/{id}/topics/{topic}/messages/tail": {
+      "get": {
+        "tags": [
+          "messages"
+        ],
+        "summary": "`GET /api/clusters/{id}/topics/{topic}/messages/tail`",
+        "description": "`TailSpec::limit` is a per-topic target that kaas-lib spreads across\npartitions with `div_ceil`, so asking for 20 on a 16-partition topic\ngenuinely fetches 32. \"The last n of a topic\" has no single answer across\npartitions, so this layer picks one and says so: **the n most recent by\ntimestamp**, merged across partitions and truncated after the fact.\n`total` reports how many were fetched before truncation.",
+        "operationId": "tail",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Cluster id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "topic",
+            "in": "path",
+            "description": "Topic name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Records to return after merging",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "partitions",
+            "in": "query",
+            "description": "Comma-separated partition list",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The tail of a topic",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope_Message"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/clusters/{id}/topics/{topic}/offsets": {
+      "get": {
+        "tags": [
+          "topics"
+        ],
+        "summary": "`GET /api/clusters/{id}/topics/{topic}/offsets`",
+        "operationId": "offsets",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Cluster id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "topic",
+            "in": "path",
+            "description": "Topic name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Offset ranges",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope_Partition"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "`GET /health`",
+        "description": "**Must not consult a cluster.** A liveness probe that fails because\nsomeone's broker is down is a liveness probe that restarts a healthy\nprocess — and with a dozen clusters configured, it restarts it constantly.\nThis handler touches nothing but the constant below, which is the point.",
+        "operationId": "health",
+        "responses": {
+          "200": {
+            "description": "The process is alive",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ApiErrorBody": {
+        "type": "object",
+        "description": "The body of a failed request.",
+        "required": [
+          "message",
+          "retriable"
+        ],
+        "properties": {
+          "code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The broker's error code name."
+          },
+          "codeNumber": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Its number, which survives when the name does not."
+          },
+          "kind": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ErrorKind",
+                "description": "Its taxonomy, where it came from a cluster."
+              }
+            ]
+          },
+          "message": {
+            "type": "string",
+            "description": "The failure, rendered."
+          },
+          "retriable": {
+            "type": "boolean",
+            "description": "Whether retrying is worth offering."
+          },
+          "unsupportedApi": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/UnsupportedApiDetail",
+                "description": "Both version ranges, when an api was unsupported."
+              }
+            ]
+          }
+        }
+      },
+      "ApiKeyEntry": {
+        "type": "object",
+        "description": "One api key as the broker and this build see it.",
+        "required": [
+          "name",
+          "key",
+          "brokerAhead"
+        ],
+        "properties": {
+          "broker": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "The broker's advertised range."
+          },
+          "brokerAhead": {
+            "type": "boolean",
+            "description": "Whether the broker offers a newer version than this build can encode."
+          },
+          "key": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The key's number."
+          },
+          "name": {
+            "type": "string",
+            "description": "The key's name, or `Unknown(n)` where this build has none."
+          },
+          "negotiated": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The version that would be used."
+          },
+          "ours": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "This build's range."
+          }
+        }
+      },
+      "Broker": {
+        "type": "object",
+        "description": "A broker, as the snapshot reports it — optionally enriched.",
+        "required": [
+          "nodeId",
+          "host",
+          "port",
+          "isController",
+          "leaderPartitionCount",
+          "replicaPartitionCount"
+        ],
+        "properties": {
+          "host": {
+            "type": "string",
+            "description": "Advertised host."
+          },
+          "isController": {
+            "type": "boolean",
+            "description": "Whether this broker is the controller."
+          },
+          "isFenced": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether the controller has fenced it.\n\n`None` on a cluster that does not implement `DescribeCluster`: absent,\nnot false. Rendering an unknown as \"healthy\" is the one thing a fleet\ndashboard must never do."
+          },
+          "leaderPartitionCount": {
+            "type": "integer",
+            "description": "Partitions this broker leads.",
+            "minimum": 0
+          },
+          "nodeId": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Node id."
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Advertised port."
+          },
+          "rack": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Rack, when the broker declares one."
+          },
+          "replicaPartitionCount": {
+            "type": "integer",
+            "description": "Partition replicas hosted here.",
+            "minimum": 0
+          }
+        }
+      },
+      "Capabilities": {
+        "type": "object",
+        "description": "The capability answer.",
+        "required": [
+          "features",
+          "source",
+          "apiKeys",
+          "brokerAheadCount"
+        ],
+        "properties": {
+          "apiKeys": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ApiKeyEntry"
+            },
+            "description": "The whole table, for the api-versions panel."
+          },
+          "brokerAheadCount": {
+            "type": "integer",
+            "description": "How many keys the broker advertises that this build cannot encode.\n\nNot a failure — a fact about a broker newer than the codec. Two of\nthese on the Strimzi cluster today cannot even be named.",
+            "minimum": 0
+          },
+          "features": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FeatureEntry"
+            },
+            "description": "Feature name to state."
+          },
+          "source": {
+            "$ref": "#/components/schemas/CapabilitySource",
+            "description": "Which broker answered."
+          }
+        }
+      },
+      "CapabilitySource": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "One named broker answered. Interim: see the module comment.",
+            "required": [
+              "peer",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "broker"
+                ]
+              },
+              "nodeId": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int32",
+                "description": "Which broker, rendered by the UI as \"as reported by broker 1\"."
+              },
+              "peer": {
+                "type": "string",
+                "description": "Its address, for when the node id is not known."
+              }
+            }
+          }
+        ],
+        "description": "Where the version table came from."
+      },
+      "ClusterCard": {
+        "type": "object",
+        "description": "One cluster on the fleet dashboard.\n\nBuilt from `Cluster::snapshot()` and nothing else. The snapshot carries\nbrokers, controller id, cluster id and every partition's replicas, ISR and\noffline set — everything a card renders — and it works on clusters that do\nnot implement `DescribeCluster`. Enrichment that only some clusters can\nanswer belongs on the detail page, not on the landing page.",
+        "required": [
+          "id",
+          "name",
+          "labels",
+          "status",
+          "attempts",
+          "brokerCount",
+          "topicCount",
+          "internalTopicCount",
+          "partitionCount",
+          "offlinePartitionCount",
+          "underReplicatedPartitionCount",
+          "maxStalenessMs"
+        ],
+        "properties": {
+          "attempts": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many attempts have failed.",
+            "minimum": 0
+          },
+          "brokerCount": {
+            "type": "integer",
+            "description": "Brokers in the snapshot.",
+            "minimum": 0
+          },
+          "clusterId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The broker-reported cluster id, when the snapshot carries one."
+          },
+          "controllerId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The controller, as the snapshot reports it."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The failure, when unreachable."
+          },
+          "id": {
+            "type": "string",
+            "description": "The configured id."
+          },
+          "internalTopicCount": {
+            "type": "integer",
+            "description": "Internal topics, of that count.",
+            "minimum": 0
+          },
+          "labels": {
+            "type": "object",
+            "description": "Grouping labels.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "maxStalenessMs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The staleness ceiling this cluster was configured with, so the UI can\ncolour the age rather than guessing a threshold.",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string",
+            "description": "The configured name."
+          },
+          "offlinePartitionCount": {
+            "type": "integer",
+            "description": "Partitions with no leader or a replica on a dead broker.",
+            "minimum": 0
+          },
+          "partitionCount": {
+            "type": "integer",
+            "description": "Partitions across all topics.",
+            "minimum": 0
+          },
+          "snapshotAgeMs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Age of the snapshot this was built from.",
+            "minimum": 0
+          },
+          "status": {
+            "$ref": "#/components/schemas/ClusterStatus",
+            "description": "Reachability."
+          },
+          "topicCount": {
+            "type": "integer",
+            "description": "Topics, including internal ones.",
+            "minimum": 0
+          },
+          "underReplicatedPartitionCount": {
+            "type": "integer",
+            "description": "Partitions whose ISR is smaller than their replica set.",
+            "minimum": 0
+          }
+        }
+      },
+      "ClusterDescriptionDto": {
+        "type": "object",
+        "description": "`DescribeCluster`, where the cluster implements it.",
+        "required": [
+          "clusterId"
+        ],
+        "properties": {
+          "clusterId": {
+            "type": "string",
+            "description": "The broker-reported cluster id."
+          },
+          "controllerId": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The authoritative controller."
+          }
+        }
+      },
+      "ClusterDetail": {
+        "type": "object",
+        "description": "The cluster detail page.\n\nThe card, plus the two things a detail page adds: the broker list, and\n`DescribeCluster` **where the cluster implements it**. Where it does not,\n`description` is `None` and the failure travels in the envelope's `errors`\nas a named resource — the page renders the snapshot data with a note, not\nan error.",
+        "required": [
+          "cluster",
+          "brokers"
+        ],
+        "properties": {
+          "brokers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Broker"
+            },
+            "description": "Brokers, from the snapshot, enriched where possible."
+          },
+          "cluster": {
+            "$ref": "#/components/schemas/ClusterCard",
+            "description": "Everything the fleet card shows."
+          },
+          "description": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ClusterDescriptionDto",
+                "description": "`DescribeCluster`, where it answered."
+              }
+            ]
+          }
+        }
+      },
+      "ClusterStatus": {
+        "type": "string",
+        "description": "The health state, flattened for the wire.",
+        "enum": [
+          "connecting",
+          "ready",
+          "unreachable"
+        ]
+      },
+      "ConfigEntryDto": {
+        "type": "object",
+        "description": "One configuration entry.",
+        "required": [
+          "name",
+          "source",
+          "isExplicit",
+          "isSensitive",
+          "readOnly"
+        ],
+        "properties": {
+          "documentation": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The broker's own documentation, for the tooltip."
+          },
+          "isExplicit": {
+            "type": "boolean",
+            "description": "Whether it was set explicitly rather than inherited."
+          },
+          "isSensitive": {
+            "type": "boolean",
+            "description": "Whether the broker redacted the value. Rendered as a redaction, never\nas an empty string."
+          },
+          "name": {
+            "type": "string",
+            "description": "Key."
+          },
+          "readOnly": {
+            "type": "boolean",
+            "description": "Whether the broker refuses to change it."
+          },
+          "source": {
+            "type": "string",
+            "description": "Where the value came from."
+          },
+          "value": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Value. `None` when the broker redacted it."
+          }
+        }
+      },
+      "ConfigResourceEntry": {
+        "type": "object",
+        "description": "One resource's configuration.",
+        "required": [
+          "resource",
+          "resourceType",
+          "name",
+          "entries"
+        ],
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConfigEntryDto"
+            },
+            "description": "The entries, sorted by key."
+          },
+          "name": {
+            "type": "string",
+            "description": "Its name."
+          },
+          "resource": {
+            "type": "string",
+            "description": "The resource, as it was asked for — `broker:1`, `topic:orders`."
+          },
+          "resourceType": {
+            "type": "string",
+            "description": "Its type."
+          }
+        }
+      },
+      "Envelope_Broker": {
+        "type": "object",
+        "description": "What every data endpoint returns.",
+        "required": [
+          "items",
+          "errors"
+        ],
+        "properties": {
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResourceError"
+            },
+            "description": "The resources that did not. Non-empty is still `200 OK`."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "A broker, as the snapshot reports it — optionally enriched.",
+              "required": [
+                "nodeId",
+                "host",
+                "port",
+                "isController",
+                "leaderPartitionCount",
+                "replicaPartitionCount"
+              ],
+              "properties": {
+                "host": {
+                  "type": "string",
+                  "description": "Advertised host."
+                },
+                "isController": {
+                  "type": "boolean",
+                  "description": "Whether this broker is the controller."
+                },
+                "isFenced": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ],
+                  "description": "Whether the controller has fenced it.\n\n`None` on a cluster that does not implement `DescribeCluster`: absent,\nnot false. Rendering an unknown as \"healthy\" is the one thing a fleet\ndashboard must never do."
+                },
+                "leaderPartitionCount": {
+                  "type": "integer",
+                  "description": "Partitions this broker leads.",
+                  "minimum": 0
+                },
+                "nodeId": {
+                  "type": "integer",
+                  "format": "int32",
+                  "description": "Node id."
+                },
+                "port": {
+                  "type": "integer",
+                  "format": "int32",
+                  "description": "Advertised port."
+                },
+                "rack": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Rack, when the broker declares one."
+                },
+                "replicaPartitionCount": {
+                  "type": "integer",
+                  "description": "Partition replicas hosted here.",
+                  "minimum": 0
+                }
+              }
+            },
+            "description": "The resources that answered."
+          },
+          "snapshotAgeMs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Age of the metadata snapshot the answer was built from, where one was\ninvolved. This is what makes \"as of 4 seconds ago\" honest.",
+            "minimum": 0
+          },
+          "total": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "How many resources matched before paging or truncation.\n\nPresent only where the endpoint pages. Filtering and sorting happen on\nthe server — a fleet with a five-thousand-topic cluster in it is real —\nso the browser needs to be told what it is looking at a window into.",
+            "minimum": 0
+          }
+        }
+      },
+      "Envelope_ClusterCard": {
+        "type": "object",
+        "description": "What every data endpoint returns.",
+        "required": [
+          "items",
+          "errors"
+        ],
+        "properties": {
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResourceError"
+            },
+            "description": "The resources that did not. Non-empty is still `200 OK`."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One cluster on the fleet dashboard.\n\nBuilt from `Cluster::snapshot()` and nothing else. The snapshot carries\nbrokers, controller id, cluster id and every partition's replicas, ISR and\noffline set — everything a card renders — and it works on clusters that do\nnot implement `DescribeCluster`. Enrichment that only some clusters can\nanswer belongs on the detail page, not on the landing page.",
+              "required": [
+                "id",
+                "name",
+                "labels",
+                "status",
+                "attempts",
+                "brokerCount",
+                "topicCount",
+                "internalTopicCount",
+                "partitionCount",
+                "offlinePartitionCount",
+                "underReplicatedPartitionCount",
+                "maxStalenessMs"
+              ],
+              "properties": {
+                "attempts": {
+                  "type": "integer",
+                  "format": "int32",
+                  "description": "How many attempts have failed.",
+                  "minimum": 0
+                },
+                "brokerCount": {
+                  "type": "integer",
+                  "description": "Brokers in the snapshot.",
+                  "minimum": 0
+                },
+                "clusterId": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The broker-reported cluster id, when the snapshot carries one."
+                },
+                "controllerId": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int32",
+                  "description": "The controller, as the snapshot reports it."
+                },
+                "error": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The failure, when unreachable."
+                },
+                "id": {
+                  "type": "string",
+                  "description": "The configured id."
+                },
+                "internalTopicCount": {
+                  "type": "integer",
+                  "description": "Internal topics, of that count.",
+                  "minimum": 0
+                },
+                "labels": {
+                  "type": "object",
+                  "description": "Grouping labels.",
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  }
+                },
+                "maxStalenessMs": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "The staleness ceiling this cluster was configured with, so the UI can\ncolour the age rather than guessing a threshold.",
+                  "minimum": 0
+                },
+                "name": {
+                  "type": "string",
+                  "description": "The configured name."
+                },
+                "offlinePartitionCount": {
+                  "type": "integer",
+                  "description": "Partitions with no leader or a replica on a dead broker.",
+                  "minimum": 0
+                },
+                "partitionCount": {
+                  "type": "integer",
+                  "description": "Partitions across all topics.",
+                  "minimum": 0
+                },
+                "snapshotAgeMs": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int64",
+                  "description": "Age of the snapshot this was built from.",
+                  "minimum": 0
+                },
+                "status": {
+                  "$ref": "#/components/schemas/ClusterStatus",
+                  "description": "Reachability."
+                },
+                "topicCount": {
+                  "type": "integer",
+                  "description": "Topics, including internal ones.",
+                  "minimum": 0
+                },
+                "underReplicatedPartitionCount": {
+                  "type": "integer",
+                  "description": "Partitions whose ISR is smaller than their replica set.",
+                  "minimum": 0
+                }
+              }
+            },
+            "description": "The resources that answered."
+          },
+          "snapshotAgeMs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Age of the metadata snapshot the answer was built from, where one was\ninvolved. This is what makes \"as of 4 seconds ago\" honest.",
+            "minimum": 0
+          },
+          "total": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "How many resources matched before paging or truncation.\n\nPresent only where the endpoint pages. Filtering and sorting happen on\nthe server — a fleet with a five-thousand-topic cluster in it is real —\nso the browser needs to be told what it is looking at a window into.",
+            "minimum": 0
+          }
+        }
+      },
+      "Envelope_ClusterDetail": {
+        "type": "object",
+        "description": "What every data endpoint returns.",
+        "required": [
+          "items",
+          "errors"
+        ],
+        "properties": {
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResourceError"
+            },
+            "description": "The resources that did not. Non-empty is still `200 OK`."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "The cluster detail page.\n\nThe card, plus the two things a detail page adds: the broker list, and\n`DescribeCluster` **where the cluster implements it**. Where it does not,\n`description` is `None` and the failure travels in the envelope's `errors`\nas a named resource — the page renders the snapshot data with a note, not\nan error.",
+              "required": [
+                "cluster",
+                "brokers"
+              ],
+              "properties": {
+                "brokers": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Broker"
+                  },
+                  "description": "Brokers, from the snapshot, enriched where possible."
+                },
+                "cluster": {
+                  "$ref": "#/components/schemas/ClusterCard",
+                  "description": "Everything the fleet card shows."
+                },
+                "description": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ClusterDescriptionDto",
+                      "description": "`DescribeCluster`, where it answered."
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "The resources that answered."
+          },
+          "snapshotAgeMs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Age of the metadata snapshot the answer was built from, where one was\ninvolved. This is what makes \"as of 4 seconds ago\" honest.",
+            "minimum": 0
+          },
+          "total": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "How many resources matched before paging or truncation.\n\nPresent only where the endpoint pages. Filtering and sorting happen on\nthe server — a fleet with a five-thousand-topic cluster in it is real —\nso the browser needs to be told what it is looking at a window into.",
+            "minimum": 0
+          }
+        }
+      },
+      "Envelope_ConfigResourceEntry": {
+        "type": "object",
+        "description": "What every data endpoint returns.",
+        "required": [
+          "items",
+          "errors"
+        ],
+        "properties": {
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResourceError"
+            },
+            "description": "The resources that did not. Non-empty is still `200 OK`."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One resource's configuration.",
+              "required": [
+                "resource",
+                "resourceType",
+                "name",
+                "entries"
+              ],
+              "properties": {
+                "entries": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ConfigEntryDto"
+                  },
+                  "description": "The entries, sorted by key."
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Its name."
+                },
+                "resource": {
+                  "type": "string",
+                  "description": "The resource, as it was asked for — `broker:1`, `topic:orders`."
+                },
+                "resourceType": {
+                  "type": "string",
+                  "description": "Its type."
+                }
+              }
+            },
+            "description": "The resources that answered."
+          },
+          "snapshotAgeMs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Age of the metadata snapshot the answer was built from, where one was\ninvolved. This is what makes \"as of 4 seconds ago\" honest.",
+            "minimum": 0
+          },
+          "total": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "How many resources matched before paging or truncation.\n\nPresent only where the endpoint pages. Filtering and sorting happen on\nthe server — a fleet with a five-thousand-topic cluster in it is real —\nso the browser needs to be told what it is looking at a window into.",
+            "minimum": 0
+          }
+        }
+      },
+      "Envelope_GroupDetail": {
+        "type": "object",
+        "description": "What every data endpoint returns.",
+        "required": [
+          "items",
+          "errors"
+        ],
+        "properties": {
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResourceError"
+            },
+            "description": "The resources that did not. Non-empty is still `200 OK`."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "description": "A classic consumer group.",
+                  "required": [
+                    "groupId",
+                    "state",
+                    "protocolType",
+                    "protocol",
+                    "members",
+                    "kind"
+                  ],
+                  "properties": {
+                    "groupId": {
+                      "type": "string",
+                      "description": "Group id."
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "classic"
+                      ]
+                    },
+                    "members": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/GroupMember"
+                      },
+                      "description": "Members."
+                    },
+                    "protocol": {
+                      "type": "string",
+                      "description": "Assignment protocol."
+                    },
+                    "protocolType": {
+                      "type": "string",
+                      "description": "Protocol type."
+                    },
+                    "state": {
+                      "type": "string",
+                      "description": "State."
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "description": "A KIP-848 consumer group.",
+                  "required": [
+                    "groupId",
+                    "state",
+                    "groupEpoch",
+                    "assignmentEpoch",
+                    "assignor",
+                    "members",
+                    "kind"
+                  ],
+                  "properties": {
+                    "assignmentEpoch": {
+                      "type": "integer",
+                      "format": "int32",
+                      "description": "Assignment epoch."
+                    },
+                    "assignor": {
+                      "type": "string",
+                      "description": "Server-side assignor."
+                    },
+                    "groupEpoch": {
+                      "type": "integer",
+                      "format": "int32",
+                      "description": "Group epoch."
+                    },
+                    "groupId": {
+                      "type": "string",
+                      "description": "Group id."
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "consumer"
+                      ]
+                    },
+                    "members": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/GroupMember"
+                      },
+                      "description": "Members."
+                    },
+                    "state": {
+                      "type": "string",
+                      "description": "State."
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "description": "A share group.",
+                  "required": [
+                    "groupId",
+                    "state",
+                    "groupEpoch",
+                    "assignmentEpoch",
+                    "assignor",
+                    "members",
+                    "kind"
+                  ],
+                  "properties": {
+                    "assignmentEpoch": {
+                      "type": "integer",
+                      "format": "int32",
+                      "description": "Assignment epoch."
+                    },
+                    "assignor": {
+                      "type": "string",
+                      "description": "Server-side assignor."
+                    },
+                    "groupEpoch": {
+                      "type": "integer",
+                      "format": "int32",
+                      "description": "Group epoch."
+                    },
+                    "groupId": {
+                      "type": "string",
+                      "description": "Group id."
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "share"
+                      ]
+                    },
+                    "members": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/GroupMember"
+                      },
+                      "description": "Members."
+                    },
+                    "state": {
+                      "type": "string",
+                      "description": "State."
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "description": "A group of a kind this build has no schema for — a streams group,\ntoday. Successfully described as \"exists, cannot be opened\".",
+                  "required": [
+                    "groupId",
+                    "groupType",
+                    "state",
+                    "kind"
+                  ],
+                  "properties": {
+                    "groupId": {
+                      "type": "string",
+                      "description": "Group id."
+                    },
+                    "groupType": {
+                      "type": "string",
+                      "description": "The type string the broker reported."
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "unrecognized"
+                      ]
+                    },
+                    "state": {
+                      "type": "string",
+                      "description": "State."
+                    }
+                  }
+                }
+              ],
+              "description": "A described group.\n\nFour kinds, not one struct with optional fields. `Unrecognized` is a\n**successful** description of an undescribable group: it exists, it is\nlisted, and the UI can say what it is. Flattening the four into one\nall-optional shape moves that knowledge somewhere the compiler cannot\ncheck it."
+            },
+            "description": "The resources that answered."
+          },
+          "snapshotAgeMs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Age of the metadata snapshot the answer was built from, where one was\ninvolved. This is what makes \"as of 4 seconds ago\" honest.",
+            "minimum": 0
+          },
+          "total": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "How many resources matched before paging or truncation.\n\nPresent only where the endpoint pages. Filtering and sorting happen on\nthe server — a fleet with a five-thousand-topic cluster in it is real —\nso the browser needs to be told what it is looking at a window into.",
+            "minimum": 0
+          }
+        }
+      },
+      "Envelope_GroupOffset": {
+        "type": "object",
+        "description": "What every data endpoint returns.",
+        "required": [
+          "items",
+          "errors"
+        ],
+        "properties": {
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResourceError"
+            },
+            "description": "The resources that did not. Non-empty is still `200 OK`."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "A group's committed offset for one partition, with lag.",
+              "required": [
+                "topic",
+                "partition",
+                "lag"
+              ],
+              "properties": {
+                "committedOffset": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int64",
+                  "description": "The committed offset, where there is one."
+                },
+                "lag": {
+                  "$ref": "#/components/schemas/Lag",
+                  "description": "Lag, in its four distinguishable states."
+                },
+                "latestOffset": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int64",
+                  "description": "The partition's next offset."
+                },
+                "metadata": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Commit metadata."
+                },
+                "partition": {
+                  "type": "integer",
+                  "format": "int32",
+                  "description": "Partition."
+                },
+                "topic": {
+                  "type": "string",
+                  "description": "Topic."
+                }
+              }
+            },
+            "description": "The resources that answered."
+          },
+          "snapshotAgeMs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Age of the metadata snapshot the answer was built from, where one was\ninvolved. This is what makes \"as of 4 seconds ago\" honest.",
+            "minimum": 0
+          },
+          "total": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "How many resources matched before paging or truncation.\n\nPresent only where the endpoint pages. Filtering and sorting happen on\nthe server — a fleet with a five-thousand-topic cluster in it is real —\nso the browser needs to be told what it is looking at a window into.",
+            "minimum": 0
+          }
+        }
+      },
+      "Envelope_GroupSummary": {
+        "type": "object",
+        "description": "What every data endpoint returns.",
+        "required": [
+          "items",
+          "errors"
+        ],
+        "properties": {
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResourceError"
+            },
+            "description": "The resources that did not. Non-empty is still `200 OK`."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One row of the group list.",
+              "required": [
+                "groupId",
+                "state",
+                "groupType",
+                "protocolType",
+                "describable"
+              ],
+              "properties": {
+                "describable": {
+                  "type": "boolean",
+                  "description": "Whether this group can be described at all."
+                },
+                "groupId": {
+                  "type": "string",
+                  "description": "Group id."
+                },
+                "groupType": {
+                  "type": "string",
+                  "description": "Group type. Empty on brokers too old to report one — which is not the\nsame as unknown, and takes the classic path."
+                },
+                "protocolType": {
+                  "type": "string",
+                  "description": "Protocol type."
+                },
+                "state": {
+                  "type": "string",
+                  "description": "State, as the broker names it."
+                }
+              }
+            },
+            "description": "The resources that answered."
+          },
+          "snapshotAgeMs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Age of the metadata snapshot the answer was built from, where one was\ninvolved. This is what makes \"as of 4 seconds ago\" honest.",
+            "minimum": 0
+          },
+          "total": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "How many resources matched before paging or truncation.\n\nPresent only where the endpoint pages. Filtering and sorting happen on\nthe server — a fleet with a five-thousand-topic cluster in it is real —\nso the browser needs to be told what it is looking at a window into.",
+            "minimum": 0
+          }
+        }
+      },
+      "Envelope_LogDirDto": {
+        "type": "object",
+        "description": "What every data endpoint returns.",
+        "required": [
+          "items",
+          "errors"
+        ],
+        "properties": {
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResourceError"
+            },
+            "description": "The resources that did not. Non-empty is still `200 OK`."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One log directory on one broker.",
+              "required": [
+                "path",
+                "replicas"
+              ],
+              "properties": {
+                "error": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The directory's own error, if it has one."
+                },
+                "path": {
+                  "type": "string",
+                  "description": "Broker-local path."
+                },
+                "replicas": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/LogDirReplicaDto"
+                  },
+                  "description": "Replicas stored here."
+                },
+                "totalBytes": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int64",
+                  "description": "Total capacity, where the broker reports it."
+                },
+                "usableBytes": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int64",
+                  "description": "Free capacity."
+                }
+              }
+            },
+            "description": "The resources that answered."
+          },
+          "snapshotAgeMs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Age of the metadata snapshot the answer was built from, where one was\ninvolved. This is what makes \"as of 4 seconds ago\" honest.",
+            "minimum": 0
+          },
+          "total": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "How many resources matched before paging or truncation.\n\nPresent only where the endpoint pages. Filtering and sorting happen on\nthe server — a fleet with a five-thousand-topic cluster in it is real —\nso the browser needs to be told what it is looking at a window into.",
+            "minimum": 0
+          }
+        }
+      },
+      "Envelope_Message": {
+        "type": "object",
+        "description": "What every data endpoint returns.",
+        "required": [
+          "items",
+          "errors"
+        ],
+        "properties": {
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResourceError"
+            },
+            "description": "The resources that did not. Non-empty is still `200 OK`."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One record in the message browser.",
+              "required": [
+                "partition",
+                "offset",
+                "timestamp",
+                "timestampType",
+                "headers",
+                "transactional",
+                "sizeBytes"
+              ],
+              "properties": {
+                "headers": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Header"
+                  },
+                  "description": "Headers."
+                },
+                "key": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Payload",
+                      "description": "The key, rendered."
+                    }
+                  ]
+                },
+                "offset": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "Offset."
+                },
+                "partition": {
+                  "type": "integer",
+                  "format": "int32",
+                  "description": "Partition."
+                },
+                "sizeBytes": {
+                  "type": "integer",
+                  "description": "Size of the value in bytes, before rendering.",
+                  "minimum": 0
+                },
+                "timestamp": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "Timestamp, in milliseconds."
+                },
+                "timestampType": {
+                  "type": "string",
+                  "description": "Whether the timestamp is the producer's or the broker's."
+                },
+                "transactional": {
+                  "type": "boolean",
+                  "description": "Whether the record was written transactionally."
+                },
+                "value": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Payload",
+                      "description": "The value, rendered. `None` is a tombstone, which is not the same as\nan empty value."
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "The resources that answered."
+          },
+          "snapshotAgeMs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Age of the metadata snapshot the answer was built from, where one was\ninvolved. This is what makes \"as of 4 seconds ago\" honest.",
+            "minimum": 0
+          },
+          "total": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "How many resources matched before paging or truncation.\n\nPresent only where the endpoint pages. Filtering and sorting happen on\nthe server — a fleet with a five-thousand-topic cluster in it is real —\nso the browser needs to be told what it is looking at a window into.",
+            "minimum": 0
+          }
+        }
+      },
+      "Envelope_Partition": {
+        "type": "object",
+        "description": "What every data endpoint returns.",
+        "required": [
+          "items",
+          "errors"
+        ],
+        "properties": {
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResourceError"
+            },
+            "description": "The resources that did not. Non-empty is still `200 OK`."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One partition.",
+              "required": [
+                "partition",
+                "leaderEpoch",
+                "replicas",
+                "isr",
+                "offlineReplicas",
+                "underReplicated"
+              ],
+              "properties": {
+                "earliestOffset": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int64",
+                  "description": "Earliest available offset, on the detail page only."
+                },
+                "error": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The broker's error for this partition, if any."
+                },
+                "isr": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "int32"
+                  },
+                  "description": "In-sync replicas."
+                },
+                "latestOffset": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int64",
+                  "description": "Next offset to be written."
+                },
+                "leader": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int32",
+                  "description": "Leader, or `None` when the partition has none."
+                },
+                "leaderEpoch": {
+                  "type": "integer",
+                  "format": "int32",
+                  "description": "Leader epoch."
+                },
+                "offlineReplicas": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "int32"
+                  },
+                  "description": "Replicas on brokers that are down."
+                },
+                "partition": {
+                  "type": "integer",
+                  "format": "int32",
+                  "description": "Partition index."
+                },
+                "replicas": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "int32"
+                  },
+                  "description": "The replica set, in assignment order — the placement grid's rows."
+                },
+                "underReplicated": {
+                  "type": "boolean",
+                  "description": "ISR smaller than the replica set."
+                }
+              }
+            },
+            "description": "The resources that answered."
+          },
+          "snapshotAgeMs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Age of the metadata snapshot the answer was built from, where one was\ninvolved. This is what makes \"as of 4 seconds ago\" honest.",
+            "minimum": 0
+          },
+          "total": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "How many resources matched before paging or truncation.\n\nPresent only where the endpoint pages. Filtering and sorting happen on\nthe server — a fleet with a five-thousand-topic cluster in it is real —\nso the browser needs to be told what it is looking at a window into.",
+            "minimum": 0
+          }
+        }
+      },
+      "Envelope_TopicDetail": {
+        "type": "object",
+        "description": "What every data endpoint returns.",
+        "required": [
+          "items",
+          "errors"
+        ],
+        "properties": {
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResourceError"
+            },
+            "description": "The resources that did not. Non-empty is still `200 OK`."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "A topic and its partitions.",
+              "required": [
+                "name",
+                "internal",
+                "partitions",
+                "brokerIds"
+              ],
+              "properties": {
+                "brokerIds": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "int32"
+                  },
+                  "description": "The brokers holding replicas, for the placement grid's columns."
+                },
+                "internal": {
+                  "type": "boolean",
+                  "description": "Whether Kafka considers this internal."
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Topic name."
+                },
+                "partitions": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Partition"
+                  },
+                  "description": "Every partition."
+                },
+                "topicId": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The topic uuid, where reported."
+                }
+              }
+            },
+            "description": "The resources that answered."
+          },
+          "snapshotAgeMs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Age of the metadata snapshot the answer was built from, where one was\ninvolved. This is what makes \"as of 4 seconds ago\" honest.",
+            "minimum": 0
+          },
+          "total": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "How many resources matched before paging or truncation.\n\nPresent only where the endpoint pages. Filtering and sorting happen on\nthe server — a fleet with a five-thousand-topic cluster in it is real —\nso the browser needs to be told what it is looking at a window into.",
+            "minimum": 0
+          }
+        }
+      },
+      "Envelope_TopicSummary": {
+        "type": "object",
+        "description": "What every data endpoint returns.",
+        "required": [
+          "items",
+          "errors"
+        ],
+        "properties": {
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResourceError"
+            },
+            "description": "The resources that did not. Non-empty is still `200 OK`."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One row of the topic list.",
+              "required": [
+                "name",
+                "internal",
+                "partitionCount",
+                "replicationFactor",
+                "offlinePartitionCount",
+                "underReplicatedPartitionCount"
+              ],
+              "properties": {
+                "internal": {
+                  "type": "boolean",
+                  "description": "Whether Kafka considers this internal."
+                },
+                "logicalBytes": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int64",
+                  "description": "Bytes on disk for one copy, when log dirs were asked for."
+                },
+                "name": {
+                  "type": "string",
+                  "description": "Topic name."
+                },
+                "offlinePartitionCount": {
+                  "type": "integer",
+                  "description": "Partitions with no leader or an offline replica.",
+                  "minimum": 0
+                },
+                "partitionCount": {
+                  "type": "integer",
+                  "description": "Partition count.",
+                  "minimum": 0
+                },
+                "replicatedBytes": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int64",
+                  "description": "Bytes on disk across replicas."
+                },
+                "replicationFactor": {
+                  "type": "integer",
+                  "description": "The smallest replica count across partitions, which is what anyone\nmeans by \"replication factor\".",
+                  "minimum": 0
+                },
+                "topicId": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The topic uuid, or `None` on a cluster that does not report one.\n\nAbsent rather than an empty uuid: a column of zeroes reads as missing\ndata, and the honest render is no column at all."
+                },
+                "underReplicatedPartitionCount": {
+                  "type": "integer",
+                  "description": "Partitions whose ISR is short.",
+                  "minimum": 0
+                }
+              }
+            },
+            "description": "The resources that answered."
+          },
+          "snapshotAgeMs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Age of the metadata snapshot the answer was built from, where one was\ninvolved. This is what makes \"as of 4 seconds ago\" honest.",
+            "minimum": 0
+          },
+          "total": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "How many resources matched before paging or truncation.\n\nPresent only where the endpoint pages. Filtering and sorting happen on\nthe server — a fleet with a five-thousand-topic cluster in it is real —\nso the browser needs to be told what it is looking at a window into.",
+            "minimum": 0
+          }
+        }
+      },
+      "ErrorKind": {
+        "type": "string",
+        "description": "The error taxonomy as the frontend sees it.\n\nA projection of [`kafka_conn::Error`]'s variants, not a re-listing: the\nfrontend renders a transport failure and a closed connection identically,\nso they share a kind.",
+        "enum": [
+          "transport",
+          "timeout",
+          "auth",
+          "authorization",
+          "broker",
+          "decode",
+          "unsupported",
+          "invalid",
+          "readOnly",
+          "other"
+        ]
+      },
+      "Feature": {
+        "type": "string",
+        "description": "A thing the UI can show, named in kaas-ui's vocabulary rather than Kafka's.\n\nThese names are a UI contract: adding an api key to an existing feature\nmust not rename it.",
+        "enum": [
+          "clusterDescription",
+          "topicPartitions",
+          "logDirs",
+          "configs",
+          "consumerGroups",
+          "modernConsumerGroups",
+          "shareGroups",
+          "committedOffsets",
+          "acls",
+          "quotas",
+          "scramUsers",
+          "reassignments",
+          "transactions",
+          "producers",
+          "quorum",
+          "messages"
+        ]
+      },
+      "FeatureEntry": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/FeatureState",
+            "description": "Its state."
+          },
+          {
+            "type": "object",
+            "required": [
+              "feature"
+            ],
+            "properties": {
+              "feature": {
+                "$ref": "#/components/schemas/Feature",
+                "description": "The feature."
+              }
+            }
+          }
+        ],
+        "description": "One row of the feature table."
+      },
+      "FeatureState": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Every api key the feature needs negotiated a version.",
+            "required": [
+              "state"
+            ],
+            "properties": {
+              "state": {
+                "type": "string",
+                "enum": [
+                  "available"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "At least one did not. Both ranges travel with the answer, because the\npair is the diagnosis: `broker: null` means the cluster does not\nimplement it, `ours: null` means this build has no schema for it, and\ntwo disjoint ranges mean the cluster is behind.",
+            "required": [
+              "api",
+              "apiKey",
+              "state"
+            ],
+            "properties": {
+              "api": {
+                "type": "string",
+                "description": "The api key that decided it."
+              },
+              "apiKey": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Its number."
+              },
+              "broker": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "description": "What the broker advertises."
+              },
+              "ours": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "description": "What this build speaks."
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "unsupported"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Whether a feature can be shown, and if not, why not."
+      },
+      "GroupDetail": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A classic consumer group.",
+            "required": [
+              "groupId",
+              "state",
+              "protocolType",
+              "protocol",
+              "members",
+              "kind"
+            ],
+            "properties": {
+              "groupId": {
+                "type": "string",
+                "description": "Group id."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "classic"
+                ]
+              },
+              "members": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/GroupMember"
+                },
+                "description": "Members."
+              },
+              "protocol": {
+                "type": "string",
+                "description": "Assignment protocol."
+              },
+              "protocolType": {
+                "type": "string",
+                "description": "Protocol type."
+              },
+              "state": {
+                "type": "string",
+                "description": "State."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A KIP-848 consumer group.",
+            "required": [
+              "groupId",
+              "state",
+              "groupEpoch",
+              "assignmentEpoch",
+              "assignor",
+              "members",
+              "kind"
+            ],
+            "properties": {
+              "assignmentEpoch": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Assignment epoch."
+              },
+              "assignor": {
+                "type": "string",
+                "description": "Server-side assignor."
+              },
+              "groupEpoch": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Group epoch."
+              },
+              "groupId": {
+                "type": "string",
+                "description": "Group id."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "consumer"
+                ]
+              },
+              "members": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/GroupMember"
+                },
+                "description": "Members."
+              },
+              "state": {
+                "type": "string",
+                "description": "State."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A share group.",
+            "required": [
+              "groupId",
+              "state",
+              "groupEpoch",
+              "assignmentEpoch",
+              "assignor",
+              "members",
+              "kind"
+            ],
+            "properties": {
+              "assignmentEpoch": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Assignment epoch."
+              },
+              "assignor": {
+                "type": "string",
+                "description": "Server-side assignor."
+              },
+              "groupEpoch": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Group epoch."
+              },
+              "groupId": {
+                "type": "string",
+                "description": "Group id."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "share"
+                ]
+              },
+              "members": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/GroupMember"
+                },
+                "description": "Members."
+              },
+              "state": {
+                "type": "string",
+                "description": "State."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A group of a kind this build has no schema for — a streams group,\ntoday. Successfully described as \"exists, cannot be opened\".",
+            "required": [
+              "groupId",
+              "groupType",
+              "state",
+              "kind"
+            ],
+            "properties": {
+              "groupId": {
+                "type": "string",
+                "description": "Group id."
+              },
+              "groupType": {
+                "type": "string",
+                "description": "The type string the broker reported."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "unrecognized"
+                ]
+              },
+              "state": {
+                "type": "string",
+                "description": "State."
+              }
+            }
+          }
+        ],
+        "description": "A described group.\n\nFour kinds, not one struct with optional fields. `Unrecognized` is a\n**successful** description of an undescribable group: it exists, it is\nlisted, and the UI can say what it is. Flattening the four into one\nall-optional shape moves that knowledge somewhere the compiler cannot\ncheck it."
+      },
+      "GroupMember": {
+        "type": "object",
+        "description": "One member of a group, in the shape all three describable kinds share.",
+        "required": [
+          "memberId",
+          "clientId",
+          "clientHost",
+          "subscribedTopics",
+          "assignment"
+        ],
+        "properties": {
+          "assignment": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TopicPartitions"
+            },
+            "description": "The member's assignment, where the protocol reports it decoded."
+          },
+          "clientHost": {
+            "type": "string",
+            "description": "Client host."
+          },
+          "clientId": {
+            "type": "string",
+            "description": "Client id."
+          },
+          "instanceId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Static membership instance id."
+          },
+          "memberEpoch": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Member epoch, for the kinds that have one."
+          },
+          "memberId": {
+            "type": "string",
+            "description": "Member id."
+          },
+          "rackId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Rack, where reported."
+          },
+          "subscribedTopics": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Topics the member subscribed to, where the protocol reports them."
+          }
+        }
+      },
+      "GroupOffset": {
+        "type": "object",
+        "description": "A group's committed offset for one partition, with lag.",
+        "required": [
+          "topic",
+          "partition",
+          "lag"
+        ],
+        "properties": {
+          "committedOffset": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The committed offset, where there is one."
+          },
+          "lag": {
+            "$ref": "#/components/schemas/Lag",
+            "description": "Lag, in its four distinguishable states."
+          },
+          "latestOffset": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The partition's next offset."
+          },
+          "metadata": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Commit metadata."
+          },
+          "partition": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Partition."
+          },
+          "topic": {
+            "type": "string",
+            "description": "Topic."
+          }
+        }
+      },
+      "GroupSummary": {
+        "type": "object",
+        "description": "One row of the group list.",
+        "required": [
+          "groupId",
+          "state",
+          "groupType",
+          "protocolType",
+          "describable"
+        ],
+        "properties": {
+          "describable": {
+            "type": "boolean",
+            "description": "Whether this group can be described at all."
+          },
+          "groupId": {
+            "type": "string",
+            "description": "Group id."
+          },
+          "groupType": {
+            "type": "string",
+            "description": "Group type. Empty on brokers too old to report one — which is not the\nsame as unknown, and takes the classic path."
+          },
+          "protocolType": {
+            "type": "string",
+            "description": "Protocol type."
+          },
+          "state": {
+            "type": "string",
+            "description": "State, as the broker names it."
+          }
+        }
+      },
+      "Header": {
+        "type": "object",
+        "description": "A record header.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Header name."
+          },
+          "value": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Payload",
+                "description": "Header value."
+              }
+            ]
+          }
+        }
+      },
+      "Health": {
+        "type": "object",
+        "description": "The liveness answer.",
+        "required": [
+          "status",
+          "version"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "Always `\"ok\"` — reaching the handler is the whole check."
+          },
+          "version": {
+            "type": "string",
+            "description": "The running version, so a deployment can be identified without exec'ing\ninto the pod."
+          }
+        }
+      },
+      "Lag": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "The group has never committed here. Not zero lag — no data at all.",
+            "required": [
+              "state"
+            ],
+            "properties": {
+              "state": {
+                "type": "string",
+                "enum": [
+                  "noCommit"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The partition is empty, so there is nothing to be behind.",
+            "required": [
+              "state"
+            ],
+            "properties": {
+              "state": {
+                "type": "string",
+                "enum": [
+                  "emptyPartition"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Committed at the log end.",
+            "required": [
+              "state"
+            ],
+            "properties": {
+              "state": {
+                "type": "string",
+                "enum": [
+                  "caughtUp"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Behind by a known amount.",
+            "required": [
+              "records",
+              "state"
+            ],
+            "properties": {
+              "records": {
+                "type": "integer",
+                "format": "int64",
+                "description": "How many records."
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "lagging"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The partition's end offset could not be read, so lag is unknown —\nwhich is not the same as zero.",
+            "required": [
+              "state"
+            ],
+            "properties": {
+              "state": {
+                "type": "string",
+                "enum": [
+                  "unknown"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Lag has four states and they must not all render as `0`."
+      },
+      "LogDirDto": {
+        "type": "object",
+        "description": "One log directory on one broker.",
+        "required": [
+          "path",
+          "replicas"
+        ],
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The directory's own error, if it has one."
+          },
+          "path": {
+            "type": "string",
+            "description": "Broker-local path."
+          },
+          "replicas": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LogDirReplicaDto"
+            },
+            "description": "Replicas stored here."
+          },
+          "totalBytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Total capacity, where the broker reports it."
+          },
+          "usableBytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Free capacity."
+          }
+        }
+      },
+      "LogDirReplicaDto": {
+        "type": "object",
+        "description": "One replica in a log directory.",
+        "required": [
+          "topic",
+          "partition",
+          "sizeBytes",
+          "offsetLag",
+          "isFuture"
+        ],
+        "properties": {
+          "isFuture": {
+            "type": "boolean",
+            "description": "Whether this is a future replica being moved in."
+          },
+          "offsetLag": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How far behind the log end this replica is."
+          },
+          "partition": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Partition."
+          },
+          "sizeBytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Bytes on disk."
+          },
+          "topic": {
+            "type": "string",
+            "description": "Topic."
+          }
+        }
+      },
+      "Message": {
+        "type": "object",
+        "description": "One record in the message browser.",
+        "required": [
+          "partition",
+          "offset",
+          "timestamp",
+          "timestampType",
+          "headers",
+          "transactional",
+          "sizeBytes"
+        ],
+        "properties": {
+          "headers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Header"
+            },
+            "description": "Headers."
+          },
+          "key": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Payload",
+                "description": "The key, rendered."
+              }
+            ]
+          },
+          "offset": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Offset."
+          },
+          "partition": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Partition."
+          },
+          "sizeBytes": {
+            "type": "integer",
+            "description": "Size of the value in bytes, before rendering.",
+            "minimum": 0
+          },
+          "timestamp": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Timestamp, in milliseconds."
+          },
+          "timestampType": {
+            "type": "string",
+            "description": "Whether the timestamp is the producer's or the broker's."
+          },
+          "transactional": {
+            "type": "boolean",
+            "description": "Whether the record was written transactionally."
+          },
+          "value": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Payload",
+                "description": "The value, rendered. `None` is a tombstone, which is not the same as\nan empty value."
+              }
+            ]
+          }
+        }
+      },
+      "Partition": {
+        "type": "object",
+        "description": "One partition.",
+        "required": [
+          "partition",
+          "leaderEpoch",
+          "replicas",
+          "isr",
+          "offlineReplicas",
+          "underReplicated"
+        ],
+        "properties": {
+          "earliestOffset": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Earliest available offset, on the detail page only."
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The broker's error for this partition, if any."
+          },
+          "isr": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "In-sync replicas."
+          },
+          "latestOffset": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Next offset to be written."
+          },
+          "leader": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Leader, or `None` when the partition has none."
+          },
+          "leaderEpoch": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Leader epoch."
+          },
+          "offlineReplicas": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Replicas on brokers that are down."
+          },
+          "partition": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Partition index."
+          },
+          "replicas": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "The replica set, in assignment order — the placement grid's rows."
+          },
+          "underReplicated": {
+            "type": "boolean",
+            "description": "ISR smaller than the replica set."
+          }
+        }
+      },
+      "PartitionOffsets": {
+        "type": "object",
+        "description": "One partition's offset range.",
+        "required": [
+          "partition"
+        ],
+        "properties": {
+          "earliestOffset": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The first offset still retained."
+          },
+          "latestOffset": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The next offset to be written."
+          },
+          "partition": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Partition index."
+          },
+          "records": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "How many records are between them."
+          }
+        }
+      },
+      "Payload": {
+        "type": "object",
+        "description": "A key or value, rendered with the encoding that was used said out loud.\n\nAuto-detection that cannot be seen is worse than none: the reader has to\nknow whether they are looking at text the producer wrote or at kaas-ui's\nguess.",
+        "required": [
+          "encoding",
+          "text",
+          "bytes",
+          "truncated"
+        ],
+        "properties": {
+          "bytes": {
+            "type": "integer",
+            "description": "Length in bytes of the original.",
+            "minimum": 0
+          },
+          "encoding": {
+            "type": "string",
+            "description": "`utf8` or `hex`."
+          },
+          "text": {
+            "type": "string",
+            "description": "The rendering."
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "Whether `text` was cut short."
+          }
+        }
+      },
+      "ResourceError": {
+        "type": "object",
+        "description": "One resource's failure, named.",
+        "required": [
+          "resource",
+          "kind",
+          "message",
+          "retriable"
+        ],
+        "properties": {
+          "code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The broker's error code name, when this build has one for it."
+          },
+          "codeNumber": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The error code's number.\n\nPresent even when `code` is null: against a broker newer than the codec\n`ErrorCode::Unknown(i16)` is all there is, and the number is the only\nsearchable thing."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ErrorKind",
+            "description": "The taxonomy."
+          },
+          "message": {
+            "type": "string",
+            "description": "The error, rendered."
+          },
+          "resource": {
+            "type": "string",
+            "description": "Which resource — a topic name, a broker id, a group id."
+          },
+          "retriable": {
+            "type": "boolean",
+            "description": "Whether retrying this one resource is worth offering."
+          },
+          "unsupportedApi": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/UnsupportedApiDetail",
+                "description": "Both version ranges, when the failure was an unsupported api."
+              }
+            ]
+          }
+        }
+      },
+      "TopicDetail": {
+        "type": "object",
+        "description": "A topic and its partitions.",
+        "required": [
+          "name",
+          "internal",
+          "partitions",
+          "brokerIds"
+        ],
+        "properties": {
+          "brokerIds": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "The brokers holding replicas, for the placement grid's columns."
+          },
+          "internal": {
+            "type": "boolean",
+            "description": "Whether Kafka considers this internal."
+          },
+          "name": {
+            "type": "string",
+            "description": "Topic name."
+          },
+          "partitions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Partition"
+            },
+            "description": "Every partition."
+          },
+          "topicId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The topic uuid, where reported."
+          }
+        }
+      },
+      "TopicPartitions": {
+        "type": "object",
+        "description": "A topic and the partitions of it assigned to a member.",
+        "required": [
+          "topic",
+          "partitions"
+        ],
+        "properties": {
+          "partitions": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Partitions."
+          },
+          "topic": {
+            "type": "string",
+            "description": "Topic."
+          }
+        }
+      },
+      "TopicSummary": {
+        "type": "object",
+        "description": "One row of the topic list.",
+        "required": [
+          "name",
+          "internal",
+          "partitionCount",
+          "replicationFactor",
+          "offlinePartitionCount",
+          "underReplicatedPartitionCount"
+        ],
+        "properties": {
+          "internal": {
+            "type": "boolean",
+            "description": "Whether Kafka considers this internal."
+          },
+          "logicalBytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Bytes on disk for one copy, when log dirs were asked for."
+          },
+          "name": {
+            "type": "string",
+            "description": "Topic name."
+          },
+          "offlinePartitionCount": {
+            "type": "integer",
+            "description": "Partitions with no leader or an offline replica.",
+            "minimum": 0
+          },
+          "partitionCount": {
+            "type": "integer",
+            "description": "Partition count.",
+            "minimum": 0
+          },
+          "replicatedBytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Bytes on disk across replicas."
+          },
+          "replicationFactor": {
+            "type": "integer",
+            "description": "The smallest replica count across partitions, which is what anyone\nmeans by \"replication factor\".",
+            "minimum": 0
+          },
+          "topicId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The topic uuid, or `None` on a cluster that does not report one.\n\nAbsent rather than an empty uuid: a column of zeroes reads as missing\ndata, and the honest render is no column at all."
+          },
+          "underReplicatedPartitionCount": {
+            "type": "integer",
+            "description": "Partitions whose ISR is short.",
+            "minimum": 0
+          }
+        }
+      },
+      "UnsupportedApiDetail": {
+        "type": "object",
+        "description": "The two version ranges an [`Error::UnsupportedApi`] carries.\n\nThe pair is a diagnosis rather than a failure, and the three cases render\ndifferently:\n\n* `ours: None` — this build has no schema for the key; bump the codec.\n* `broker: None` — the cluster does not implement it at all.\n* both present but disjoint — the cluster is behind.",
+        "required": [
+          "api",
+          "apiKey"
+        ],
+        "properties": {
+          "api": {
+            "type": "string",
+            "description": "The api key's name."
+          },
+          "apiKey": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Its number, which is the searchable thing when the name is unknown."
+          },
+          "broker": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "What the broker advertises, as `[min, max]`."
+          },
+          "ours": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "What this build speaks, as `[min, max]`."
+          }
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "health",
+      "description": "Liveness. Never consults a cluster."
+    },
+    {
+      "name": "clusters",
+      "description": "The fleet, and one cluster's detail."
+    },
+    {
+      "name": "capabilities",
+      "description": "What a cluster can be asked."
+    },
+    {
+      "name": "topics",
+      "description": "Topics, partitions and offsets."
+    },
+    {
+      "name": "configs",
+      "description": "Configuration viewing. There is no writing."
+    },
+    {
+      "name": "groups",
+      "description": "Consumer groups, committed offsets and lag."
+    },
+    {
+      "name": "messages",
+      "description": "The message browser."
+    }
+  ]
+}
