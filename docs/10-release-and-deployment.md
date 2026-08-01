@@ -259,7 +259,6 @@ apps/kaas-ui/
   configmap.yaml        the cluster registry — both Kafka clusters
   deployment.yaml
   service.yaml
-  httproute.yaml        Gateway API, traefik-gateway in kube-system
   external-secret.yaml  Phase 4 only: the OIDC client secret from Vault
 ```
 
@@ -320,7 +319,7 @@ to automate.
 | phase | release/deploy work |
 |---|---|
 | 0 | scale set added; `ci.yml` green on ARC; Dockerfile; `release.yml` pushing to GHCR; `apps/kaas-ui/` written but **not committed** |
-| 0 → 1 | first `v0.1.0` tag; image published; `apps/kaas-ui/` committed; app live at `kaas-ui.smeding.cloud` |
+| 0 → 1 | first `v0.1.0` tag; image published; `apps/kaas-ui/` committed; app live at `kaas.smeding.cloud` |
 | 1–3 | tag bumps only |
 | 4 | `external-secret.yaml` for the OIDC client secret; a Dex instance to point at — **there is none in this cluster today**, so this is a prerequisite, not a step |
 | 4+ | consider publishing a chart to `oci://ghcr.io/kaas-rs/charts` |
@@ -334,6 +333,7 @@ to automate.
 - a `v*` tag publishes `ghcr.io/kaas-rs/kaas-ui:<version>` and `:latest`,
   cosign-signed, with image size and idle RSS in the job summary;
 - `kubectl -n kaas-ui get deploy` shows 1/1 and ArgoCD reports Synced/Healthy;
-- `https://kaas-ui.smeding.cloud/health` returns 200;
+- `https://kaas.smeding.cloud/health` returns 200 — which needs the DNS record as
+  well as the tunnel rule;
 - the fleet page in the browser shows both live clusters — which is also the
   end-to-end proof that the deployed binary reaches them.

@@ -47,7 +47,7 @@ auth:
   issuer: https://dex.smeding.cloud
   client_id: kaas-ui
   client_secret_file: /etc/kaas-ui/secrets/oidc-client-secret
-  redirect_url: https://kaas-ui.smeding.cloud/auth/callback
+  redirect_url: https://kaas.smeding.cloud/auth/callback
   scopes: [openid, profile, email, groups]
 ```
 

@@ -109,6 +109,11 @@ its summary, so the number above is checked rather than remembered.
 Images publish to `ghcr.io/kaas-rs/kaas-ui`. Deployment is GitOps via
 `Woestebanaan/k3s-cluster` (`apps/kaas-ui/`).
 
+Public access is the cluster's Cloudflare tunnel at **`kaas.smeding.cloud`** —
+a rule in `apps/cloudflare/values.yaml`, not an Ingress or an HTTPRoute. Only
+the apex is routed through Traefik, so a Gateway API route would report healthy
+and never be reachable.
+
 **ArgoCD auto-sync is off in that cluster.** A merged commit registers a change;
 applying it is a manual `argocd app sync kaas-ui`. A green pipeline is not
 evidence that the cluster changed.
