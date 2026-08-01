@@ -6,12 +6,19 @@
     <meta name="color-scheme" content="light dark" />
     <title>kaas-ui</title>
     <script>
-      // Before first paint, so a dark-mode user never sees a white flash.
+      // Resolve the theme before first paint, so a dark-mode user never sees a
+      // white flash. `data-theme` is always written, whether the choice was
+      // stored or inferred, so the CSS has exactly one thing to look at — and
+      // the `.dark` class alongside it, because that is what a copied-in
+      // shadcn component expects.
       (function () {
         var stored = localStorage.getItem("kaas-ui-theme");
-        if (stored === "dark" || stored === "light") {
-          document.documentElement.setAttribute("data-theme", stored);
-        }
+        var dark =
+          stored === "dark" ||
+          (stored !== "light" &&
+            window.matchMedia("(prefers-color-scheme: dark)").matches);
+        document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+        document.documentElement.classList.toggle("dark", dark);
       })();
     </script>
   </head>

@@ -1,12 +1,18 @@
 import { useEffect, useState, type ReactNode } from "react";
+import { AlertTriangle, Check, CircleDashed, X } from "lucide-react";
+
+import { Badge } from "@/components/ui/badge";
+import { Card } from "@/components/ui/card";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 import type {
-  ClusterCard,
+  ClusterCard as ClusterCardData,
   ClusterStatus,
   FeatureEntry,
   Lag,
   Partition,
   ResourceError,
-} from "./api/types";
+} from "@/api/types";
 
 /* ------------------------------------------------------------------ format */
 
@@ -38,22 +44,6 @@ export function duration(ms: number): string {
 
 /* -------------------------------------------------------------- primitives */
 
-export function Card({
-  children,
-  className = "",
-}: {
-  children: ReactNode;
-  className?: string;
-}) {
-  return (
-    <div
-      className={`bg-surface-raised border border-line rounded-md ${className}`}
-    >
-      {children}
-    </div>
-  );
-}
-
 export function Section({
   title,
   actions,
@@ -65,7 +55,7 @@ export function Section({
 }) {
   return (
     <section className="mb-8">
-      <div className="flex items-baseline justify-between gap-4 mb-3">
+      <div className="mb-3 flex items-baseline justify-between gap-4">
         <h2 className="text-[15px] font-semibold tracking-[-0.01em]">{title}</h2>
         {actions}
       </div>
@@ -74,94 +64,47 @@ export function Section({
   );
 }
 
+/**
+ * Everything a broker said verbatim is mono; everything kaas-ui wrote is sans.
+ *
+ * That split does real work: it tells the reader at a glance which strings they
+ * can paste into `kafka-configs.sh`.
+ */
 export function Mono({ children }: { children: ReactNode }) {
-  // Everything a broker said verbatim is mono; everything kaas-ui wrote is
-  // sans. The split tells the reader which strings they can paste into
-  // kafka-configs.sh.
   return <span className="font-mono text-[13px] text-ink-muted">{children}</span>;
 }
 
 export function Empty({ children }: { children: ReactNode }) {
   return (
-    <div className="text-ink-muted text-[13px] py-8 text-center border border-dashed border-line rounded-md">
+    <div className="rounded-md border border-dashed py-8 text-center text-[13px] text-ink-muted">
       {children}
     </div>
   );
 }
 
 export function Spinner({ label = "loading" }: { label?: string }) {
-  return <div className="text-ink-faint text-[13px] py-8">{label}…</div>;
-}
-
-/* ------------------------------------------------------------------ tables */
-
-export function Table({ children }: { children: ReactNode }) {
-  return (
-    <div className="overflow-x-auto border border-line rounded-md">
-      <table className="w-full text-[13px] border-collapse">{children}</table>
-    </div>
-  );
-}
-
-export function Th({
-  children,
-  align = "left",
-}: {
-  children: ReactNode;
-  align?: "left" | "right";
-}) {
-  return (
-    <th
-      className={`${align === "right" ? "text-right" : "text-left"} font-semibold text-ink-muted bg-surface-sunken px-3 py-2 border-b border-line whitespace-nowrap`}
-    >
-      {children}
-    </th>
-  );
-}
-
-export function Td({
-  children,
-  align = "left",
-  className = "",
-}: {
-  children: ReactNode;
-  align?: "left" | "right";
-  className?: string;
-}) {
-  return (
-    <td
-      className={`${align === "right" ? "text-right" : "text-left"} px-3 py-2 border-b border-line align-top ${className}`}
-    >
-      {children}
-    </td>
-  );
+  return <div className="py-8 text-[13px] text-ink-faint">{label}…</div>;
 }
 
 /* ------------------------------------------------------------------ status */
 
-const STATUS_TONE: Record<ClusterStatus, string> = {
-  ready: "bg-ok",
-  connecting: "bg-warn",
-  unreachable: "bg-danger",
-};
-
 /** Never colour alone: a red/green dashboard is useless to ~8% of men. */
-const STATUS_GLYPH: Record<ClusterStatus, string> = {
-  ready: "●",
-  connecting: "◐",
-  unreachable: "✕",
+const STATUS: Record<
+  ClusterStatus,
+  { dot: string; icon: typeof Check; label: string }
+> = {
+  ready: { dot: "bg-ok", icon: Check, label: "ready" },
+  connecting: { dot: "bg-warn", icon: CircleDashed, label: "connecting" },
+  unreachable: { dot: "bg-danger", icon: X, label: "unreachable" },
 };
 
 export function StatusBadge({ status }: { status: ClusterStatus }) {
+  const { dot, icon: Icon, label } = STATUS[status];
   return (
     <span className="inline-flex items-center gap-1.5 text-[12px] font-medium">
-      <span
-        aria-hidden
-        className={`inline-block w-2 h-2 rounded-full ${STATUS_TONE[status]}`}
-      />
-      <span>
-        {STATUS_GLYPH[status]} {status}
-      </span>
+      <span aria-hidden className={cn("inline-block size-2 rounded-full", dot)} />
+      <Icon aria-hidden className="size-3.5" />
+      {label}
     </span>
   );
 }
@@ -184,6 +127,15 @@ function hash(text: string): number {
   return value;
 }
 
+export function clusterTone(id: string, labels?: Record<string, string>) {
+  // prod must not look like anything else, whatever its id happens to hash to.
+  if (labels?.env === "prod") {
+    return { bg: "var(--danger-soft)", fg: "var(--danger)", edge: "var(--danger)" };
+  }
+  const tone = CHIP_RAMP[hash(id) % CHIP_RAMP.length]!;
+  return { bg: tone.bg, fg: tone.fg, edge: "transparent" };
+}
+
 export function ClusterChip({
   id,
   labels,
@@ -193,19 +145,14 @@ export function ClusterChip({
   labels?: Record<string, string>;
   size?: "normal" | "small";
 }) {
-  // prod must not look like anything else, whatever its id hashes to.
-  const isProd = labels?.env === "prod";
-  const tone = CHIP_RAMP[hash(id) % CHIP_RAMP.length]!;
-  const style = isProd
-    ? { background: "var(--color-danger-soft)", color: "var(--color-danger)", borderColor: "var(--color-danger)" }
-    : { background: tone.bg, color: tone.fg, borderColor: "transparent" };
-
+  const tone = clusterTone(id, labels);
   return (
     <span
-      style={style}
-      className={`inline-flex items-center gap-1.5 border rounded-sm font-medium ${
-        size === "small" ? "text-[11px] px-1.5 py-0.5" : "text-[12px] px-2 py-1"
-      }`}
+      style={{ background: tone.bg, color: tone.fg, borderColor: tone.edge }}
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-sm border font-medium",
+        size === "small" ? "px-1.5 py-0.5 text-[11px]" : "px-2 py-1 text-[12px]",
+      )}
     >
       <span aria-hidden>●</span>
       <span className="font-mono">{id}</span>
@@ -235,12 +182,23 @@ export function SnapshotAge({
   const stale = maxStalenessMs !== undefined && age > maxStalenessMs;
 
   return (
-    <span
-      className={`text-[12px] ${stale ? "text-warn-ink font-medium" : "text-ink-faint"}`}
-      title={stale ? "older than this cluster's staleness ceiling" : undefined}
-    >
-      as of {duration(age)} ago
-    </span>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          className={cn(
+            "text-[12px]",
+            stale ? "font-medium text-warn-ink" : "text-ink-faint",
+          )}
+        >
+          as of {duration(age)} ago
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>
+        {stale
+          ? "older than this cluster's staleness ceiling"
+          : "age of the metadata snapshot this was built from"}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -249,46 +207,54 @@ export function SnapshotAge({
 /** `ErrorCode::Unknown(30000)` — the number is the only searchable thing. */
 export function UnknownCodeChip({ code }: { code: number }) {
   return (
-    <span
-      className="font-mono text-[12px] px-1.5 py-0.5 rounded-sm"
-      style={{ background: "var(--color-warn-soft)", color: "var(--color-warn-ink)" }}
-      title="this build has no name for this error code"
-    >
-      code {code}
-    </span>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          className="rounded-sm px-1.5 py-0.5 font-mono text-[12px]"
+          style={{ background: "var(--warn-soft)", color: "var(--warn-ink)" }}
+        >
+          code {code}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>this build has no name for this error code</TooltipContent>
+    </Tooltip>
   );
 }
 
 /**
  * The per-resource failures that rode along with a successful request.
  *
- * These are data, not a failed request: the page renders and these say which
+ * These are data, not a failed request: the page renders, and these say which
  * parts of it did not.
  */
 export function ErrorChips({ errors }: { errors: ResourceError[] }) {
   if (errors.length === 0) return null;
   return (
-    <div className="flex flex-wrap gap-2 mb-4">
+    <div className="mb-4 flex flex-wrap gap-2">
       {errors.map((error, index) => (
-        <span
-          key={`${error.resource}-${index}`}
-          title={error.message}
-          className="inline-flex items-center gap-2 text-[12px] px-2 py-1 rounded-sm border"
-          style={{
-            background: "var(--color-warn-soft)",
-            color: "var(--color-warn-ink)",
-            borderColor: "var(--color-accent-edge)",
-          }}
-        >
-          <span className="font-mono">{error.resource}</span>
-          {error.code ? (
-            <span className="font-mono opacity-80">{error.code}</span>
-          ) : error.codeNumber !== null ? (
-            <UnknownCodeChip code={error.codeNumber} />
-          ) : (
-            <span className="opacity-80">{error.kind}</span>
-          )}
-        </span>
+        <Tooltip key={`${error.resource}-${index}`}>
+          <TooltipTrigger asChild>
+            <span
+              className="inline-flex items-center gap-2 rounded-sm border px-2 py-1 text-[12px]"
+              style={{
+                background: "var(--warn-soft)",
+                color: "var(--warn-ink)",
+                borderColor: "var(--rust-edge)",
+              }}
+            >
+              <AlertTriangle aria-hidden className="size-3.5" />
+              <span className="font-mono">{error.resource}</span>
+              {error.code ? (
+                <span className="font-mono opacity-80">{error.code}</span>
+              ) : error.codeNumber !== null ? (
+                <span className="font-mono opacity-80">code {error.codeNumber}</span>
+              ) : (
+                <span className="opacity-80">{error.kind}</span>
+              )}
+            </span>
+          </TooltipTrigger>
+          <TooltipContent className="max-w-md">{error.message}</TooltipContent>
+        </Tooltip>
       ))}
     </div>
   );
@@ -319,26 +285,22 @@ export function UnsupportedApiPanel({
     value ? `v${value[0]} – v${value[1]}` : null;
 
   return (
-    <Card className="p-5 max-w-2xl">
-      <div className="flex items-baseline justify-between gap-4 border-b border-line pb-2 mb-3">
-        <h3 className="font-semibold text-[15px]">{api}</h3>
+    <Card className="max-w-2xl gap-0 p-5">
+      <div className="mb-3 flex items-baseline justify-between gap-4 border-b pb-2">
+        <h3 className="text-[15px] font-semibold">{api}</h3>
         <Mono>api key {apiKey}</Mono>
       </div>
       <dl className="grid grid-cols-[10rem_1fr] gap-y-2 text-[13px]">
         <dt className="text-ink-muted">this cluster</dt>
         <dd className="font-mono">
-          {range(broker) ?? (
-            <span className="text-danger">does not implement it</span>
-          )}
+          {range(broker) ?? <span className="text-danger">does not implement it</span>}
         </dd>
         <dt className="text-ink-muted">kaas-ui speaks</dt>
         <dd className="font-mono">
-          {range(ours) ?? (
-            <span className="text-warn-ink">no schema in this build</span>
-          )}
+          {range(ours) ?? <span className="text-warn-ink">no schema in this build</span>}
         </dd>
       </dl>
-      <p className="text-[13px] text-ink-muted mt-4">
+      <p className="mt-4 text-[13px] text-ink-muted">
         {broker === null
           ? `This cluster does not answer ${api}, so ${what ?? "this view"} has nothing behind it. The same URL against a cluster that does will render normally.`
           : ours === null
@@ -349,42 +311,50 @@ export function UnsupportedApiPanel({
   );
 }
 
-/* --------------------------------------------------------------- kafka bits */
+/* -------------------------------------------------------------- kafka bits */
 
 /** Three states that must not all render as `0`, plus "not known". */
 export function LagCell({ lag }: { lag: Lag }) {
-  switch (lag.state) {
-    case "noCommit":
-      return (
-        <span className="text-ink-faint" title="the group has never committed here">
-          —
-        </span>
-      );
-    case "emptyPartition":
-      return (
-        <span className="text-ink-faint" title="the partition is empty">
-          ∅
-        </span>
-      );
-    case "caughtUp":
-      return (
-        <span className="text-ok font-medium" title="committed at the log end">
-          0
-        </span>
-      );
-    case "lagging":
-      return (
-        <span className="font-mono text-warn-ink" title="records behind the log end">
-          {count(lag.records)}
-        </span>
-      );
-    case "unknown":
-      return (
-        <span className="text-ink-faint" title="the log end could not be read">
-          ?
-        </span>
-      );
-  }
+  const render = () => {
+    switch (lag.state) {
+      case "noCommit":
+        return {
+          text: "—",
+          className: "text-ink-faint",
+          why: "the group has never committed here",
+        };
+      case "emptyPartition":
+        return { text: "∅", className: "text-ink-faint", why: "the partition is empty" };
+      case "caughtUp":
+        return {
+          text: "0",
+          className: "font-medium text-ok",
+          why: "committed at the log end",
+        };
+      case "lagging":
+        return {
+          text: count(lag.records),
+          className: "font-mono text-warn-ink",
+          why: "records behind the log end",
+        };
+      case "unknown":
+        return {
+          text: "?",
+          className: "text-ink-faint",
+          why: "the log end could not be read",
+        };
+    }
+  };
+
+  const { text, className, why } = render();
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className={className}>{text}</span>
+      </TooltipTrigger>
+      <TooltipContent>{why}</TooltipContent>
+    </Tooltip>
+  );
 }
 
 /**
@@ -410,27 +380,27 @@ export function PartitionGrid({
     if (partition.offlineReplicas.includes(broker)) {
       return {
         label: "✕",
-        style: { background: "var(--color-danger-soft)", color: "var(--color-danger)" },
+        style: { background: "var(--danger-soft)", color: "var(--danger)" },
         title: "offline replica",
       };
     }
     if (!partition.isr.includes(broker)) {
       return {
         label: "△",
-        style: { background: "var(--color-warn-soft)", color: "var(--color-warn-ink)" },
+        style: { background: "var(--warn-soft)", color: "var(--warn-ink)" },
         title: "out of sync",
       };
     }
     if (partition.leader === broker) {
       return {
         label: "L",
-        style: { background: "var(--color-accent)", color: "#3B2E2A" },
+        style: { background: "var(--rust)", color: "#3B2E2A" },
         title: "leader",
       };
     }
     return {
       label: "·",
-      style: { background: "var(--color-ok-soft)", color: "var(--color-ok)" },
+      style: { background: "var(--ok-soft)", color: "var(--ok)" },
       title: "in-sync follower",
     };
   };
@@ -440,9 +410,12 @@ export function PartitionGrid({
       <table className="border-collapse text-[12px]">
         <thead>
           <tr>
-            <th className="text-left text-ink-muted font-semibold px-2 py-1">p</th>
+            <th className="px-2 py-1 text-left font-semibold text-ink-muted">p</th>
             {brokerIds.map((broker) => (
-              <th key={broker} className="px-2 py-1 text-ink-muted font-mono font-normal">
+              <th
+                key={broker}
+                className="px-2 py-1 font-mono font-normal text-ink-muted"
+              >
                 {broker}
               </th>
             ))}
@@ -461,7 +434,7 @@ export function PartitionGrid({
                     <div
                       title={`p${partition.partition} on broker ${broker}: ${title}`}
                       style={style}
-                      className="w-6 h-5 grid place-items-center rounded-[2px] font-mono"
+                      className="grid h-5 w-6 place-items-center rounded-[2px] font-mono"
                     >
                       {label}
                     </div>
@@ -473,34 +446,26 @@ export function PartitionGrid({
         </tbody>
       </table>
       {partitions.length > shown.length ? (
-        <p className="text-[12px] text-ink-faint mt-2">
+        <p className="mt-2 text-[12px] text-ink-faint">
           showing the first {shown.length} of {partitions.length} partitions
         </p>
       ) : null}
-      <div className="flex gap-4 mt-3 text-[12px] text-ink-muted">
-        <Legend fill="var(--color-accent)" glyph="L" label="leader" />
-        <Legend fill="var(--color-ok-soft)" glyph="·" label="in sync" />
-        <Legend fill="var(--color-warn-soft)" glyph="△" label="out of sync" />
-        <Legend fill="var(--color-danger-soft)" glyph="✕" label="offline" />
+      <div className="mt-3 flex gap-4 text-[12px] text-ink-muted">
+        <Legend fill="var(--rust)" glyph="L" label="leader" />
+        <Legend fill="var(--ok-soft)" glyph="·" label="in sync" />
+        <Legend fill="var(--warn-soft)" glyph="△" label="out of sync" />
+        <Legend fill="var(--danger-soft)" glyph="✕" label="offline" />
       </div>
     </div>
   );
 }
 
-function Legend({
-  fill,
-  glyph,
-  label,
-}: {
-  fill: string;
-  glyph: string;
-  label: string;
-}) {
+function Legend({ fill, glyph, label }: { fill: string; glyph: string; label: string }) {
   return (
     <span className="inline-flex items-center gap-1.5">
       <span
         style={{ background: fill }}
-        className="w-4 h-4 grid place-items-center rounded-[2px] font-mono text-[10px]"
+        className="grid size-4 place-items-center rounded-[2px] font-mono text-[10px]"
       >
         {glyph}
       </span>
@@ -509,8 +474,8 @@ function Legend({
   );
 }
 
-/** The summary line a fleet card and a cluster header both want. */
-export function ClusterCounts({ card }: { card: ClusterCard }) {
+/** The summary a fleet card and a cluster header both want. */
+export function ClusterCounts({ card }: { card: ClusterCardData }) {
   return (
     <dl className="grid grid-cols-3 gap-x-4 gap-y-2 text-[13px]">
       <Stat label="brokers" value={count(card.brokerCount)} />
@@ -549,16 +514,49 @@ export function Stat({
   note?: string;
   tone?: "warn" | "danger";
 }) {
-  const colour =
-    tone === "danger" ? "text-danger" : tone === "warn" ? "text-warn-ink" : "";
   return (
     <div>
       <dt className="text-[12px] text-ink-muted">{label}</dt>
-      <dd className={`font-mono text-[15px] ${colour}`}>
+      <dd
+        className={cn(
+          "font-mono text-[15px]",
+          tone === "danger" && "text-danger",
+          tone === "warn" && "text-warn-ink",
+        )}
+      >
         {value}
-        {note ? <span className="text-[11px] text-ink-faint ml-1.5">{note}</span> : null}
+        {note ? <span className="ml-1.5 text-[11px] text-ink-faint">{note}</span> : null}
       </dd>
     </div>
+  );
+}
+
+/** A feature the cluster does or does not have. */
+export function FeatureBadge({ entry }: { entry: FeatureEntry }) {
+  if (entry.state === "available") {
+    return (
+      <Badge variant="outline" className="text-ok">
+        <Check aria-hidden className="size-3" />
+        available
+      </Badge>
+    );
+  }
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Badge variant="outline" className="font-mono text-ink-faint">
+          <X aria-hidden className="size-3" />
+          {entry.api}
+        </Badge>
+      </TooltipTrigger>
+      <TooltipContent>
+        {entry.api} (key {entry.apiKey}): broker{" "}
+        {entry.broker
+          ? `v${entry.broker[0]}–v${entry.broker[1]}`
+          : "does not implement it"}
+        , kaas-ui {entry.ours ? `v${entry.ours[0]}–v${entry.ours[1]}` : "has no schema"}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 

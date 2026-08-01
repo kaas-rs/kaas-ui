@@ -1,27 +1,33 @@
 import { useState } from "react";
+
+import { useCapabilities, useCluster, useClusterConfigs, useLogDirs } from "@/api/client";
+import type { ConfigEntry } from "@/api/types";
 import {
-  useCapabilities,
-  useCluster,
-  useClusterConfigs,
-  useLogDirs,
-} from "../api/client";
-import type { FeatureEntry } from "../api/types";
-import {
-  Card,
   ClusterCounts,
   ErrorChips,
+  FeatureBadge,
   Mono,
   Section,
   SnapshotAge,
   Spinner,
   StatusBadge,
-  Table,
-  Td,
-  Th,
   bytes,
   count,
-} from "../components";
-import { PageTitle } from "../shell";
+} from "@/components/domain";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Label } from "@/components/ui/label";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { PageTitle } from "@/shell";
 
 export function ClusterOverview({ clusterId }: { clusterId: string }) {
   const cluster = useCluster(clusterId);
@@ -32,9 +38,9 @@ export function ClusterOverview({ clusterId }: { clusterId: string }) {
   if (cluster.error) {
     return (
       <Card className="p-5">
-        <p className="text-danger font-medium mb-1">{clusterId} is not available</p>
+        <p className="mb-1 font-medium text-danger">{clusterId} is not available</p>
         <p className="text-[13px] text-ink-muted">{String(cluster.error)}</p>
-        <p className="text-[13px] text-ink-muted mt-3">
+        <p className="mt-3 text-[13px] text-ink-muted">
           kaas-ui keeps retrying in the background; this page will fill in when the
           cluster answers. Nothing else in the fleet is affected.
         </p>
@@ -57,115 +63,111 @@ export function ClusterOverview({ clusterId }: { clusterId: string }) {
           </span>
         }
         actions={
-          <SnapshotAge
-            ageMs={card.snapshotAgeMs}
-            maxStalenessMs={card.maxStalenessMs}
-          />
+          <SnapshotAge ageMs={card.snapshotAgeMs} maxStalenessMs={card.maxStalenessMs} />
         }
       />
 
       <ErrorChips errors={cluster.data?.errors ?? []} />
 
       <Section title="Cluster">
-        <Card className="p-4">
-          <ClusterCounts card={card} />
-          {detail.description === null ? (
-            <p className="text-[12px] text-ink-muted mt-4 pt-3 border-t border-line">
-              This cluster does not answer <Mono>DescribeCluster</Mono>, so the
-              broker list below comes from the metadata snapshot alone. Everything
-              on this page is real; the one thing missing is whether the controller
-              has fenced a broker.
-            </p>
-          ) : null}
+        <Card>
+          <CardContent>
+            <ClusterCounts card={card} />
+            {detail.description === null ? (
+              <p className="mt-4 border-t pt-3 text-[12px] text-ink-muted">
+                This cluster does not answer <Mono>DescribeCluster</Mono>, so the broker
+                list below comes from the metadata snapshot alone. Everything on this
+                page is real; the one thing missing is whether the controller has fenced
+                a broker.
+              </p>
+            ) : null}
+          </CardContent>
         </Card>
       </Section>
 
       <Section title="Brokers">
-        <Table>
-          <thead>
-            <tr>
-              <Th>node</Th>
-              <Th>host</Th>
-              <Th align="right">port</Th>
-              <Th>rack</Th>
-              <Th align="right">leads</Th>
-              <Th align="right">replicas</Th>
-              <Th>role</Th>
-              <Th>log dirs</Th>
-            </tr>
-          </thead>
-          <tbody>
-            {detail.brokers.map((broker) => (
-              <tr key={broker.nodeId} className="hover:bg-surface-sunken">
-                <Td>
-                  <span className="font-mono">{broker.nodeId}</span>
-                </Td>
-                <Td>
-                  <span className="font-mono text-ink-muted">{broker.host}</span>
-                </Td>
-                <Td align="right">
-                  <span className="font-mono">{broker.port}</span>
-                </Td>
-                <Td>{broker.rack ?? <span className="text-ink-faint">—</span>}</Td>
-                <Td align="right">
-                  <span className="font-mono">{count(broker.leaderPartitionCount)}</span>
-                </Td>
-                <Td align="right">
-                  <span className="font-mono">
+        <div className="rounded-md border">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>node</TableHead>
+                <TableHead>host</TableHead>
+                <TableHead className="text-right">port</TableHead>
+                <TableHead>rack</TableHead>
+                <TableHead className="text-right">leads</TableHead>
+                <TableHead className="text-right">replicas</TableHead>
+                <TableHead>role</TableHead>
+                <TableHead>log dirs</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {detail.brokers.map((broker) => (
+                <TableRow key={broker.nodeId}>
+                  <TableCell className="font-mono">{broker.nodeId}</TableCell>
+                  <TableCell className="font-mono text-ink-muted">{broker.host}</TableCell>
+                  <TableCell className="text-right font-mono">{broker.port}</TableCell>
+                  <TableCell>
+                    {broker.rack ?? <span className="text-ink-faint">—</span>}
+                  </TableCell>
+                  <TableCell className="text-right font-mono">
+                    {count(broker.leaderPartitionCount)}
+                  </TableCell>
+                  <TableCell className="text-right font-mono">
                     {count(broker.replicaPartitionCount)}
-                  </span>
-                </Td>
-                <Td>
-                  <div className="flex gap-2">
-                    {broker.isController ? (
-                      <span
-                        className="text-[11px] px-1.5 py-0.5 rounded-sm"
-                        style={{
-                          background: "var(--color-accent)",
-                          color: "#3B2E2A",
-                        }}
-                      >
-                        controller
-                      </span>
-                    ) : null}
-                    {broker.isFenced === true ? (
-                      <span
-                        className="text-[11px] px-1.5 py-0.5 rounded-sm"
-                        style={{
-                          background: "var(--color-danger-soft)",
-                          color: "var(--color-danger)",
-                        }}
-                      >
-                        fenced
-                      </span>
-                    ) : broker.isFenced === null ? (
-                      <span
-                        className="text-[11px] text-ink-faint"
-                        title="this cluster does not report fencing"
-                      >
-                        fencing unknown
-                      </span>
-                    ) : null}
-                  </div>
-                </Td>
-                <Td>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setLogDirBroker(
-                        logDirBroker === broker.nodeId ? null : broker.nodeId,
-                      )
-                    }
-                    className="text-[12px] hover:underline"
-                    style={{ color: "var(--color-link)" }}
-                  >
-                    {logDirBroker === broker.nodeId ? "hide" : "show"}
-                  </button>
-                </Td>
-              </tr>
-            ))}
-          </tbody>
-        </Table>
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex gap-2">
+                      {broker.isController ? (
+                        <Badge
+                          style={{ background: "var(--rust)", color: "#3B2E2A" }}
+                          className="border-transparent"
+                        >
+                          controller
+                        </Badge>
+                      ) : null}
+                      {broker.isFenced === true ? (
+                        <Badge
+                          style={{
+                            background: "var(--danger-soft)",
+                            color: "var(--danger)",
+                          }}
+                          className="border-transparent"
+                        >
+                          fenced
+                        </Badge>
+                      ) : broker.isFenced === null ? (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <span className="text-[11px] text-ink-faint">
+                              fencing unknown
+                            </span>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            this cluster does not report fencing — unknown, not false
+                          </TooltipContent>
+                        </Tooltip>
+                      ) : null}
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <Button
+                      variant="link"
+                      size="sm"
+                      className="h-auto p-0 text-[12px]"
+                      onClick={() =>
+                        setLogDirBroker(
+                          logDirBroker === broker.nodeId ? null : broker.nodeId,
+                        )
+                      }
+                    >
+                      {logDirBroker === broker.nodeId ? "hide" : "show"}
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
 
         {logDirBroker !== null ? (
           <div className="mt-4">
@@ -176,37 +178,41 @@ export function ClusterOverview({ clusterId }: { clusterId: string }) {
                 broker {logDirBroker}: {String(logDirs.error)}
               </Card>
             ) : (
-              <Table>
-                <thead>
-                  <tr>
-                    <Th>path (broker {logDirBroker})</Th>
-                    <Th align="right">total</Th>
-                    <Th align="right">usable</Th>
-                    <Th align="right">replicas</Th>
-                    <Th align="right">on disk</Th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(logDirs.data?.items ?? []).map((dir) => (
-                    <tr key={dir.path}>
-                      <Td>
-                        <span className="font-mono">{dir.path}</span>
-                      </Td>
-                      <Td align="right">{bytes(dir.totalBytes)}</Td>
-                      <Td align="right">{bytes(dir.usableBytes)}</Td>
-                      <Td align="right">{count(dir.replicas.length)}</Td>
-                      <Td align="right">
-                        {bytes(
-                          dir.replicas.reduce(
-                            (total, replica) => total + replica.sizeBytes,
-                            0,
-                          ),
-                        )}
-                      </Td>
-                    </tr>
-                  ))}
-                </tbody>
-              </Table>
+              <div className="rounded-md border">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>path (broker {logDirBroker})</TableHead>
+                      <TableHead className="text-right">total</TableHead>
+                      <TableHead className="text-right">usable</TableHead>
+                      <TableHead className="text-right">replicas</TableHead>
+                      <TableHead className="text-right">on disk</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {(logDirs.data?.items ?? []).map((dir) => (
+                      <TableRow key={dir.path}>
+                        <TableCell className="font-mono">{dir.path}</TableCell>
+                        <TableCell className="text-right">{bytes(dir.totalBytes)}</TableCell>
+                        <TableCell className="text-right">
+                          {bytes(dir.usableBytes)}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          {count(dir.replicas.length)}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          {bytes(
+                            dir.replicas.reduce(
+                              (total, replica) => total + replica.sizeBytes,
+                              0,
+                            ),
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
             )}
           </div>
         ) : null}
@@ -223,9 +229,7 @@ export function CapabilitiesPage({ clusterId }: { clusterId: string }) {
   if (capabilities.error) {
     return (
       <Card className="p-5 text-[13px]">
-        <p className="text-danger font-medium mb-1">
-          the version table could not be read
-        </p>
+        <p className="mb-1 font-medium text-danger">the version table could not be read</p>
         <p className="text-ink-muted">{String(capabilities.error)}</p>
       </Card>
     );
@@ -251,17 +255,25 @@ export function CapabilitiesPage({ clusterId }: { clusterId: string }) {
         }
       />
 
-      <Card className="p-4 mb-6 text-[13px] text-ink-muted max-w-3xl">
-        The version table is <strong>per connection</strong>, deliberately: brokers
-        mid-rolling-upgrade genuinely disagree, and a cluster-wide table would be
-        wrong during exactly the window when being right matters. So this page names
-        the broker it asked instead of pretending the answer is cluster-wide.
+      <Card className="mb-6 max-w-3xl">
+        <CardContent className="text-[13px] text-ink-muted">
+          The version table is <strong>per connection</strong>, deliberately: brokers
+          mid-rolling-upgrade genuinely disagree, and a cluster-wide table would be wrong
+          during exactly the window when being right matters. So this page names the
+          broker it asked instead of pretending the answer is cluster-wide.
+        </CardContent>
       </Card>
 
       <Section title="Features">
         <div className="grid gap-2 grid-cols-[repeat(auto-fill,minmax(22rem,1fr))]">
           {data.features.map((entry) => (
-            <FeatureRow key={entry.feature} entry={entry} />
+            <div
+              key={entry.feature}
+              className="flex items-center justify-between gap-3 rounded-sm border bg-card px-3 py-2"
+            >
+              <span className="text-[13px]">{entry.feature}</span>
+              <FeatureBadge entry={entry} />
+            </div>
           ))}
         </div>
       </Section>
@@ -269,91 +281,53 @@ export function CapabilitiesPage({ clusterId }: { clusterId: string }) {
       <Section
         title={`API keys (${data.apiKeys.length} advertised, ${data.brokerAheadCount} ahead of this build)`}
         actions={
-          <button
-            type="button"
-            onClick={() => setShowAll(!showAll)}
-            className="text-[12px] hover:underline"
-            style={{ color: "var(--color-link)" }}
-          >
+          <Button variant="link" size="sm" onClick={() => setShowAll(!showAll)}>
             {showAll ? "show only the interesting ones" : "show all"}
-          </button>
+          </Button>
         }
       >
-        <Table>
-          <thead>
-            <tr>
-              <Th align="right">key</Th>
-              <Th>name</Th>
-              <Th>broker</Th>
-              <Th>kaas-ui</Th>
-              <Th align="right">negotiated</Th>
-              <Th>note</Th>
-            </tr>
-          </thead>
-          <tbody>
-            {keys.map((key) => (
-              <tr key={key.key} className="hover:bg-surface-sunken">
-                <Td align="right">
-                  <span className="font-mono">{key.key}</span>
-                </Td>
-                <Td>
-                  <span className="font-mono">{key.name}</span>
-                </Td>
-                <Td>
-                  <span className="font-mono text-ink-muted">
+        <div className="rounded-md border">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="text-right">key</TableHead>
+                <TableHead>name</TableHead>
+                <TableHead>broker</TableHead>
+                <TableHead>kaas-ui</TableHead>
+                <TableHead className="text-right">negotiated</TableHead>
+                <TableHead>note</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {keys.map((key) => (
+                <TableRow key={key.key}>
+                  <TableCell className="text-right font-mono">{key.key}</TableCell>
+                  <TableCell className="font-mono">{key.name}</TableCell>
+                  <TableCell className="font-mono text-ink-muted">
                     {key.broker ? `v${key.broker[0]}–v${key.broker[1]}` : "—"}
-                  </span>
-                </Td>
-                <Td>
-                  <span className="font-mono text-ink-muted">
+                  </TableCell>
+                  <TableCell className="font-mono text-ink-muted">
                     {key.ours ? `v${key.ours[0]}–v${key.ours[1]}` : "—"}
-                  </span>
-                </Td>
-                <Td align="right">
-                  <span className="font-mono">
+                  </TableCell>
+                  <TableCell className="text-right font-mono">
                     {key.negotiated === null ? "—" : `v${key.negotiated}`}
-                  </span>
-                </Td>
-                <Td>
-                  {key.ours === null ? (
-                    <span className="text-[12px] text-warn-ink">
-                      no schema in this build
-                    </span>
-                  ) : key.brokerAhead ? (
-                    <span className="text-[12px] text-ink-muted">broker is ahead</span>
-                  ) : null}
-                </Td>
-              </tr>
-            ))}
-          </tbody>
-        </Table>
+                  </TableCell>
+                  <TableCell>
+                    {key.ours === null ? (
+                      <span className="text-[12px] text-warn-ink">
+                        no schema in this build
+                      </span>
+                    ) : key.brokerAhead ? (
+                      <span className="text-[12px] text-ink-muted">broker is ahead</span>
+                    ) : null}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
       </Section>
     </>
-  );
-}
-
-function FeatureRow({ entry }: { entry: FeatureEntry }) {
-  const available = entry.state === "available";
-  return (
-    <div
-      className="flex items-center justify-between gap-3 border border-line rounded-sm px-3 py-2 bg-surface-raised"
-      title={
-        entry.state === "unsupported"
-          ? `${entry.api} (key ${entry.apiKey}): broker ${
-              entry.broker ? `v${entry.broker[0]}–v${entry.broker[1]}` : "does not implement it"
-            }, kaas-ui ${entry.ours ? `v${entry.ours[0]}–v${entry.ours[1]}` : "has no schema"}`
-          : undefined
-      }
-    >
-      <span className="text-[13px]">{entry.feature}</span>
-      {available ? (
-        <span className="text-[12px] text-ok">✓ available</span>
-      ) : (
-        <span className="text-[12px] text-ink-faint font-mono">
-          ✕ {entry.api}
-        </span>
-      )}
-    </div>
   );
 }
 
@@ -375,38 +349,30 @@ export function ClusterConfigs({ clusterId }: { clusterId: string }) {
         subtitle="A viewer. AlterConfigs is a mutating api and is absent from kaas-ui entirely."
       />
 
-      <div className="flex flex-wrap items-center gap-2 mb-4">
+      <div className="mb-4 flex flex-wrap items-center gap-2">
         {brokers.map((broker) => {
           const value = `broker:${broker.nodeId}`;
           const active = resource === value;
           return (
-            <button
+            <Button
               key={broker.nodeId}
-              type="button"
+              size="sm"
+              variant={active ? "default" : "outline"}
+              className="font-mono text-[12px]"
               onClick={() => setSelected(value)}
-              className="text-[12px] px-2.5 py-1 rounded-sm border font-mono"
-              style={
-                active
-                  ? {
-                      background: "var(--color-accent)",
-                      color: "#3B2E2A",
-                      borderColor: "var(--color-accent-edge)",
-                    }
-                  : { borderColor: "var(--color-line-strong)" }
-              }
             >
               broker {broker.nodeId}
-            </button>
+            </Button>
           );
         })}
-        <label className="ml-auto text-[12px] flex items-center gap-2 text-ink-muted">
+        <Label className="ml-auto text-[12px] font-normal text-ink-muted">
           <input
             type="checkbox"
             checked={onlyExplicit}
             onChange={(event) => setOnlyExplicit(event.target.checked)}
           />
           only values someone set
-        </label>
+        </Label>
       </div>
 
       <ErrorChips errors={configs.data?.errors ?? []} />
@@ -424,72 +390,75 @@ export function ConfigTable({
   entries,
   total,
 }: {
-  entries: {
-    name: string;
-    value: string | null;
-    source: string;
-    isExplicit: boolean;
-    isSensitive: boolean;
-    readOnly: boolean;
-    documentation: string | null;
-  }[];
+  entries: ConfigEntry[];
   total?: number;
 }) {
   return (
     <>
-      <Table>
-        <thead>
-          <tr>
-            <Th>key</Th>
-            <Th>value</Th>
-            <Th>source</Th>
-          </tr>
-        </thead>
-        <tbody>
-          {entries.map((entry) => (
-            <tr key={entry.name} className="hover:bg-surface-sunken">
-              <Td>
-                <span className="font-mono" title={entry.documentation ?? undefined}>
-                  {entry.name}
-                </span>
-                {entry.documentation ? (
-                  <span className="text-ink-faint ml-1.5 text-[11px]">ⓘ</span>
-                ) : null}
-              </Td>
-              <Td className="max-w-[28rem] break-all">
-                {entry.isSensitive ? (
+      <div className="rounded-md border">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>key</TableHead>
+              <TableHead>value</TableHead>
+              <TableHead>source</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {entries.map((entry) => (
+              <TableRow key={entry.name}>
+                <TableCell>
+                  {entry.documentation ? (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="font-mono">
+                          {entry.name}
+                          <span className="ml-1.5 text-[11px] text-ink-faint">ⓘ</span>
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent className="max-w-lg">
+                        <span
+                          // The broker's own documentation, which is HTML.
+                          dangerouslySetInnerHTML={{
+                            __html: entry.documentation.replace(/<[^>]*>/g, ""),
+                          }}
+                        />
+                      </TooltipContent>
+                    </Tooltip>
+                  ) : (
+                    <span className="font-mono">{entry.name}</span>
+                  )}
+                </TableCell>
+                <TableCell className="max-w-[28rem] break-all whitespace-normal">
+                  {entry.isSensitive ? (
+                    <Badge variant="secondary" className="text-ink-muted">
+                      redacted by the broker
+                    </Badge>
+                  ) : entry.value === null ? (
+                    <span className="text-ink-faint">—</span>
+                  ) : (
+                    <span className="font-mono">{entry.value}</span>
+                  )}
+                </TableCell>
+                <TableCell>
                   <span
-                    className="text-[12px] px-1.5 py-0.5 rounded-sm"
-                    style={{
-                      background: "var(--color-surface-sunken)",
-                      color: "var(--color-ink-muted)",
-                    }}
-                    title="the broker redacted this value"
+                    className={
+                      entry.isExplicit
+                        ? "font-mono text-[12px] font-medium text-rust-ink"
+                        : "font-mono text-[12px] text-ink-faint"
+                    }
+                    title={entry.isExplicit ? "set explicitly" : "inherited default"}
                   >
-                    redacted by the broker
+                    {entry.source}
                   </span>
-                ) : entry.value === null ? (
-                  <span className="text-ink-faint">—</span>
-                ) : (
-                  <span className="font-mono">{entry.value}</span>
-                )}
-              </Td>
-              <Td>
-                <span
-                  className={`text-[12px] font-mono ${
-                    entry.isExplicit ? "text-accent-ink font-medium" : "text-ink-faint"
-                  }`}
-                  title={entry.isExplicit ? "set explicitly" : "inherited default"}
-                >
-                  {entry.source}
-                </span>
-              </Td>
-            </tr>
-          ))}
-        </tbody>
-      </Table>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
       {total !== undefined && total !== entries.length ? (
-        <p className="text-[12px] text-ink-faint mt-2">
+        <p className="mt-2 text-[12px] text-ink-faint">
           {entries.length} of {total} entries
         </p>
       ) : null}

@@ -1,7 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
-import { Card, Empty, Mono, Spinner } from "../components";
-import { PageTitle } from "../shell";
+import { Empty, Mono, Spinner } from "@/components/domain";
+import { Card } from "@/components/ui/card";
+import { PageTitle } from "@/shell";
 
 /* The subset of OpenAPI 3.1 this document actually uses. Typing it honestly
  * rather than as `any` is what lets the renderer below say "this field is
@@ -125,7 +126,7 @@ export function ApiDocs() {
           <a
             href="/api/openapi.json"
             className="text-[13px] hover:underline"
-            style={{ color: "var(--color-link)" }}
+            style={{ color: "var(--link)" }}
           >
             openapi.json →
           </a>
@@ -163,7 +164,7 @@ export function ApiDocs() {
                     >
                       <span
                         className="text-[11px] font-semibold px-1.5 py-0.5 rounded-sm uppercase"
-                        style={{ background: "var(--color-ok-soft)", color: "var(--color-ok)" }}
+                        style={{ background: "var(--ok-soft)", color: "var(--ok)" }}
                       >
                         {method}
                       </span>
@@ -215,7 +216,7 @@ function Detail({
           <a
             href={path}
             className="font-mono hover:underline"
-            style={{ color: "var(--color-link)" }}
+            style={{ color: "var(--link)" }}
           >
             {path} ↗
           </a>
@@ -264,8 +265,8 @@ function Detail({
                 className="font-mono text-[12px] px-1.5 py-0.5 rounded-sm mr-2"
                 style={
                   status.startsWith("2")
-                    ? { background: "var(--color-ok-soft)", color: "var(--color-ok)" }
-                    : { background: "var(--color-warn-soft)", color: "var(--color-warn-ink)" }
+                    ? { background: "var(--ok-soft)", color: "var(--ok)" }
+                    : { background: "var(--warn-soft)", color: "var(--warn-ink)" }
                 }
               >
                 {status}

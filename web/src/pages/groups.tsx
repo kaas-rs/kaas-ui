@@ -1,22 +1,31 @@
 import { Link } from "@tanstack/react-router";
-import { useCapabilities, useGroup, useGroupOffsets, useGroups } from "../api/client";
-import type { GroupDetail as GroupDetailType, GroupMember } from "../api/types";
+import { ArrowLeft } from "lucide-react";
+
+import { useCapabilities, useGroup, useGroupOffsets, useGroups } from "@/api/client";
+import type { GroupDetail as GroupDetailType, GroupMember } from "@/api/types";
 import {
-  Card,
   Empty,
   ErrorChips,
   LagCell,
   Mono,
   Section,
   Spinner,
-  Table,
-  Td,
-  Th,
   UnsupportedApiPanel,
   count,
   featureState,
-} from "../components";
-import { PageTitle } from "../shell";
+} from "@/components/domain";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { PageTitle } from "@/shell";
 
 export function Groups({ clusterId }: { clusterId: string }) {
   const capabilities = useCapabilities(clusterId);
@@ -53,59 +62,66 @@ export function Groups({ clusterId }: { clusterId: string }) {
       ) : items.length === 0 ? (
         <Empty>this cluster has no groups</Empty>
       ) : (
-        <Table>
-          <thead>
-            <tr>
-              <Th>group</Th>
-              <Th>state</Th>
-              <Th>type</Th>
-              <Th>protocol</Th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((group) => (
-              <tr key={group.groupId} className="hover:bg-surface-sunken">
-                <Td>
-                  {group.describable ? (
-                    <Link
-                      to="/clusters/$clusterId/groups/$groupId"
-                      params={{ clusterId, groupId: group.groupId }}
-                      className="font-mono hover:underline"
-                      style={{ color: "var(--color-accent-ink)" }}
-                    >
-                      {group.groupId}
-                    </Link>
-                  ) : (
-                    <span
-                      className="font-mono text-ink-muted"
-                      title="this build has no schema for this group kind"
-                    >
-                      {group.groupId}
-                    </span>
-                  )}
-                </Td>
-                <Td>
-                  <GroupState state={group.state} />
-                </Td>
-                <Td>
-                  <span className="font-mono text-ink-muted">
-                    {group.groupType || (
-                      <span
-                        className="text-ink-faint"
-                        title="this broker is too old to report a group type; it takes the classic path"
+        <div className="rounded-md border">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>group</TableHead>
+                <TableHead>state</TableHead>
+                <TableHead>type</TableHead>
+                <TableHead>protocol</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {items.map((group) => (
+                <TableRow key={group.groupId}>
+                  <TableCell>
+                    {group.describable ? (
+                      <Link
+                        to="/clusters/$clusterId/groups/$groupId"
+                        params={{ clusterId, groupId: group.groupId }}
+                        className="font-mono hover:underline"
+                        style={{ color: "var(--rust-ink)" }}
                       >
-                        unreported
-                      </span>
+                        {group.groupId}
+                      </Link>
+                    ) : (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span className="font-mono text-ink-muted">
+                            {group.groupId}
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          this build has no schema for this group kind
+                        </TooltipContent>
+                      </Tooltip>
                     )}
-                  </span>
-                </Td>
-                <Td>
-                  <span className="font-mono text-ink-muted">{group.protocolType}</span>
-                </Td>
-              </tr>
-            ))}
-          </tbody>
-        </Table>
+                  </TableCell>
+                  <TableCell>
+                    <GroupState state={group.state} />
+                  </TableCell>
+                  <TableCell className="font-mono text-ink-muted">
+                    {group.groupType || (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span className="text-ink-faint">unreported</span>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          this broker is too old to report a group type; it takes the
+                          classic path
+                        </TooltipContent>
+                      </Tooltip>
+                    )}
+                  </TableCell>
+                  <TableCell className="font-mono text-ink-muted">
+                    {group.protocolType}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
       )}
     </>
   );
@@ -139,14 +155,12 @@ export function GroupDetail({
         title={<span className="font-mono text-[18px]">{groupId}</span>}
         subtitle={detail ? <GroupSubtitle detail={detail} /> : undefined}
         actions={
-          <Link
-            to="/clusters/$clusterId/groups"
-            params={{ clusterId }}
-            className="text-[13px] hover:underline"
-            style={{ color: "var(--color-link)" }}
-          >
-            ← all groups
-          </Link>
+          <Button variant="ghost" size="sm" asChild>
+            <Link to="/clusters/$clusterId/groups" params={{ clusterId }}>
+              <ArrowLeft aria-hidden />
+              all groups
+            </Link>
+          </Button>
         }
       />
 
@@ -162,14 +176,13 @@ export function GroupDetail({
         // A *successful* description of an undescribable group: it exists, it
         // is listed, and this build has no schema for its kind. That is a
         // different thing from a failure and it renders differently.
-        <Card className="p-5 max-w-2xl">
-          <h3 className="font-semibold mb-2">This group cannot be opened</h3>
+        <Card className="max-w-2xl p-5">
+          <h3 className="mb-2 font-semibold">This group cannot be opened</h3>
           <p className="text-[13px] text-ink-muted">
-            The cluster reports it as{" "}
-            <Mono>{detail.groupType || "an unnamed type"}</Mono>, which this build
-            of kaas-ui has no schema for. The group is real and its state is{" "}
-            <Mono>{detail.state}</Mono>; what is missing is the ability to describe
-            its members. Upgrading kaas-ui is what changes this.
+            The cluster reports it as <Mono>{detail.groupType || "an unnamed type"}</Mono>
+            , which this build of kaas-ui has no schema for. The group is real and its
+            state is <Mono>{detail.state}</Mono>; what is missing is the ability to
+            describe its members. Upgrading kaas-ui is what changes this.
           </p>
         </Card>
       ) : (
@@ -183,51 +196,51 @@ export function GroupDetail({
         ) : (offsets.data?.items.length ?? 0) === 0 ? (
           <Empty>this group has committed no offsets</Empty>
         ) : (
-          <Table>
-            <thead>
-              <tr>
-                <Th>topic</Th>
-                <Th align="right">partition</Th>
-                <Th align="right">committed</Th>
-                <Th align="right">log end</Th>
-                <Th align="right">lag</Th>
-                <Th>metadata</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {(offsets.data?.items ?? []).map((row) => (
-                <tr key={`${row.topic}-${row.partition}`} className="hover:bg-surface-sunken">
-                  <Td>
-                    <Link
-                      to="/clusters/$clusterId/topics/$topic"
-                      params={{ clusterId, topic: row.topic }}
-                      className="font-mono hover:underline"
-                      style={{ color: "var(--color-accent-ink)" }}
-                    >
-                      {row.topic}
-                    </Link>
-                  </Td>
-                  <Td align="right">
-                    <span className="font-mono">{row.partition}</span>
-                  </Td>
-                  <Td align="right">
-                    <span className="font-mono">{count(row.committedOffset)}</span>
-                  </Td>
-                  <Td align="right">
-                    <span className="font-mono">{count(row.latestOffset)}</span>
-                  </Td>
-                  <Td align="right">
-                    <LagCell lag={row.lag} />
-                  </Td>
-                  <Td>
-                    <span className="font-mono text-ink-faint text-[12px]">
+          <div className="rounded-md border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>topic</TableHead>
+                  <TableHead className="text-right">partition</TableHead>
+                  <TableHead className="text-right">committed</TableHead>
+                  <TableHead className="text-right">log end</TableHead>
+                  <TableHead className="text-right">lag</TableHead>
+                  <TableHead>metadata</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(offsets.data?.items ?? []).map((row) => (
+                  <TableRow key={`${row.topic}-${row.partition}`}>
+                    <TableCell>
+                      <Link
+                        to="/clusters/$clusterId/topics/$topic"
+                        params={{ clusterId, topic: row.topic }}
+                        className="font-mono hover:underline"
+                        style={{ color: "var(--rust-ink)" }}
+                      >
+                        {row.topic}
+                      </Link>
+                    </TableCell>
+                    <TableCell className="text-right font-mono">
+                      {row.partition}
+                    </TableCell>
+                    <TableCell className="text-right font-mono">
+                      {count(row.committedOffset)}
+                    </TableCell>
+                    <TableCell className="text-right font-mono">
+                      {count(row.latestOffset)}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <LagCell lag={row.lag} />
+                    </TableCell>
+                    <TableCell className="font-mono text-[12px] text-ink-faint">
                       {row.metadata ?? ""}
-                    </span>
-                  </Td>
-                </tr>
-              ))}
-            </tbody>
-          </Table>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
         )}
       </Section>
     </>
@@ -271,60 +284,65 @@ function Members({ members }: { members: GroupMember[] }) {
     return <Empty>no members — the group exists but nothing is consuming</Empty>;
   }
   return (
-    <Table>
-      <thead>
-        <tr>
-          <Th>member</Th>
-          <Th>client</Th>
-          <Th>host</Th>
-          <Th align="right">epoch</Th>
-          <Th>assignment</Th>
-        </tr>
-      </thead>
-      <tbody>
-        {members.map((member) => (
-          <tr key={member.memberId} className="hover:bg-surface-sunken">
-            <Td>
-              <span className="font-mono text-[12px] break-all">{member.memberId}</span>
-              {member.instanceId ? (
-                <span className="block text-[11px] text-ink-faint">
-                  static: {member.instanceId}
+    <div className="rounded-md border">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>member</TableHead>
+            <TableHead>client</TableHead>
+            <TableHead>host</TableHead>
+            <TableHead className="text-right">epoch</TableHead>
+            <TableHead>assignment</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {members.map((member) => (
+            <TableRow key={member.memberId}>
+              <TableCell>
+                <span className="font-mono text-[12px] break-all">
+                  {member.memberId}
                 </span>
-              ) : null}
-            </Td>
-            <Td>
-              <span className="font-mono">{member.clientId}</span>
-            </Td>
-            <Td>
-              <span className="font-mono text-ink-muted">{member.clientHost}</span>
-            </Td>
-            <Td align="right">
-              <span className="font-mono">{member.memberEpoch ?? "—"}</span>
-            </Td>
-            <Td>
-              {member.assignment.length === 0 ? (
-                <span
-                  className="text-ink-faint text-[12px]"
-                  title="the classic protocol carries an assignor-defined blob that kaas-ui does not guess at"
-                >
-                  not reported
-                </span>
-              ) : (
-                <div className="flex flex-col gap-0.5">
-                  {member.assignment.map((assignment) => (
-                    <span key={assignment.topic} className="font-mono text-[12px]">
-                      {assignment.topic}{" "}
-                      <span className="text-ink-faint">
-                        [{assignment.partitions.join(", ")}]
+                {member.instanceId ? (
+                  <span className="block text-[11px] text-ink-faint">
+                    static: {member.instanceId}
+                  </span>
+                ) : null}
+              </TableCell>
+              <TableCell className="font-mono">{member.clientId}</TableCell>
+              <TableCell className="font-mono text-ink-muted">
+                {member.clientHost}
+              </TableCell>
+              <TableCell className="text-right font-mono">
+                {member.memberEpoch ?? "—"}
+              </TableCell>
+              <TableCell>
+                {member.assignment.length === 0 ? (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="text-[12px] text-ink-faint">not reported</span>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      the classic protocol carries an assignor-defined blob that kaas-ui
+                      does not guess at
+                    </TooltipContent>
+                  </Tooltip>
+                ) : (
+                  <div className="flex flex-col gap-0.5">
+                    {member.assignment.map((assignment) => (
+                      <span key={assignment.topic} className="font-mono text-[12px]">
+                        {assignment.topic}{" "}
+                        <span className="text-ink-faint">
+                          [{assignment.partitions.join(", ")}]
+                        </span>
                       </span>
-                    </span>
-                  ))}
-                </div>
-              )}
-            </Td>
-          </tr>
-        ))}
-      </tbody>
-    </Table>
+                    ))}
+                  </div>
+                )}
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
   );
 }

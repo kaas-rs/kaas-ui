@@ -11,12 +11,13 @@ import {
 } from "@tanstack/react-router";
 
 import "./styles.css";
-import { ClusterTabs, Shell } from "./shell";
-import { Fleet } from "./pages/fleet";
-import { CapabilitiesPage, ClusterConfigs, ClusterOverview } from "./pages/cluster";
-import { TopicDetail, Topics } from "./pages/topics";
-import { GroupDetail, Groups } from "./pages/groups";
-import { ApiDocs } from "./pages/apidocs";
+import { Shell } from "@/shell";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { Fleet } from "@/pages/fleet";
+import { CapabilitiesPage, ClusterConfigs, ClusterOverview } from "@/pages/cluster";
+import { TopicDetail, Topics } from "@/pages/topics";
+import { GroupDetail, Groups } from "@/pages/groups";
+import { ApiDocs } from "@/pages/apidocs";
 
 const rootRoute = createRootRoute({ component: Shell });
 
@@ -32,19 +33,11 @@ const apiDocsRoute = createRoute({
   component: ApiDocs,
 });
 
-/** Everything under a cluster carries the tab bar. */
+/** Everything under a cluster. Navigation lives in the sidebar, not in tabs. */
 const clusterRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/clusters/$clusterId",
-  component: function ClusterLayout() {
-    const { clusterId } = useParams({ from: "/clusters/$clusterId" });
-    return (
-      <>
-        <ClusterTabs clusterId={clusterId} />
-        <Outlet />
-      </>
-    );
-  },
+  component: Outlet,
 });
 
 const overviewRoute = createRoute({
@@ -152,7 +145,9 @@ if (container) {
   createRoot(container).render(
     <StrictMode>
       <QueryClientProvider client={queryClient}>
-        <RouterProvider router={router} />
+        <TooltipProvider delayDuration={200}>
+          <RouterProvider router={router} />
+        </TooltipProvider>
       </QueryClientProvider>
     </StrictMode>,
   );
