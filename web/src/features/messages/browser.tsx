@@ -9,7 +9,7 @@
 // the seek parameters belong to that page's URL, not to this file.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, Loader2 } from "lucide-react";
+import { AlertTriangle, Loader2, RotateCw } from "lucide-react";
 import { useDefaultLayout } from "react-resizable-panels";
 
 import { fetchMessagePage, useOldestTimestamp, usePartitionBounds } from "@/api/client";
@@ -26,6 +26,7 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { count } from "@/components/domain";
 import { cn } from "@/lib/utils";
+import { downloadBuffer } from "./download";
 import { MessageDetailPanel } from "./message-detail";
 import { MessageList, ROW_HEIGHT } from "./message-list";
 import { withIds } from "./rows";
@@ -156,15 +157,21 @@ export function MessageBrowser({
         onPartitionsChange={(partitions) => onSearch({ partitions, selected: undefined })}
         onVisibilityChange={(visibility) => onSearch({ visibility, selected: undefined })}
         onRestart={stream.restart}
-        status={
-          <StreamStatus
-            phase={stream.phase}
-            live={config.live}
-            reconnecting={stream.reconnecting}
-            rows={stream.rows.length}
-          />
-        }
       />
+
+      {/* A row of its own under the controls. It was riding at the end of the
+          toolbar to save height, and it read as one more control — which is
+          the opposite of what a status line is for. */}
+      <div className="flex shrink-0 items-center justify-end border-b border-line px-4 py-1">
+        <StreamStatus
+          phase={stream.phase}
+          live={config.live}
+          reconnecting={stream.reconnecting}
+          rows={stream.rows.length}
+          onDownload={() => downloadBuffer(clusterId, topic, mode, stream.rows)}
+          onRestart={stream.restart}
+        />
+      </div>
 
       <Notices
         dropped={stream.dropped}
@@ -220,6 +227,8 @@ export function MessageBrowser({
               defaultSize="38"
               minSize="22"
               className="min-h-0"
+              // Same as the list: the payload pane below has its own scroller.
+              style={{ overflow: "hidden" }}
             >
               <MessageDetailPanel
                 clusterId={clusterId}
@@ -259,15 +268,34 @@ function StreamStatus({
   live,
   reconnecting,
   rows,
+  onDownload,
+  onRestart,
 }: {
   phase: string | null;
   live: boolean;
   reconnecting: boolean;
   rows: number;
+  onDownload(): void;
+  onRestart(): void;
 }) {
   return (
     <div className="flex items-center gap-2 text-[11px] text-ink-muted">
-      <span className="tabular-nums">{count(rows)} buffered</span>
+      {/* The count is also the way out of the browser: what is buffered is
+          what the file contains, so the number that says how much there is
+          is the thing you click to get it. */}
+      {rows > 0 ? (
+        <button
+          type="button"
+          onClick={onDownload}
+          title={`Download these ${count(rows)} records as JSON — payload text is the list preview, truncated at 256 characters`}
+          className="cursor-pointer tabular-nums underline decoration-dotted underline-offset-2 hover:text-ink"
+        >
+          {count(rows)} buffered
+        </button>
+      ) : (
+        <span className="tabular-nums">0 buffered</span>
+      )}
+
       {reconnecting ? (
         <Badge variant="outline" className="gap-1 text-warn-ink">
           <Loader2 className="size-3 animate-spin" aria-hidden /> reconnecting
@@ -279,6 +307,20 @@ function StreamStatus({
       ) : phase === "streaming" && live ? (
         <Badge variant="outline" className="gap-1 text-ok">
           <span className="size-1.5 rounded-full bg-ok" aria-hidden /> live
+        </Badge>
+      ) : phase === "done" && live ? (
+        // A live stream only ends because the server ended it — a rollout, or
+        // a lifetime expiring. The toolbar has no restart button in this mode,
+        // on the grounds that a live tail does not need one, so the badge that
+        // reports the ending is what picks it back up.
+        <Badge
+          asChild
+          variant="outline"
+          className="cursor-pointer gap-1 text-warn-ink hover:bg-surface-raised"
+        >
+          <button type="button" onClick={onRestart} title="Open the stream again">
+            <RotateCw className="size-3" aria-hidden /> stream ended
+          </button>
         </Badge>
       ) : phase === "done" ? (
         <Badge variant="outline">window read</Badge>

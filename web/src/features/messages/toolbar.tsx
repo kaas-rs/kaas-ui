@@ -1,7 +1,7 @@
 // The toolbar. Driven entirely by SEEK_MODES — no component below here asks
 // which mode is selected.
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import { RotateCw } from "lucide-react";
 
 import type { PartitionOffsets } from "@/api/types";
@@ -37,14 +37,6 @@ export interface ToolbarProps {
   onPartitionsChange(partitions: string | undefined): void;
   onVisibilityChange(visibility: "all" | "committed"): void;
   onRestart(): void;
-  /**
-   * What the stream is doing, rendered at the end of the row.
-   *
-   * Here rather than in a bar of its own because the browser is a panel on a
-   * page now, and a second full-width strip to hold two words costs height the
-   * list needs more.
-   */
-  status?: ReactNode;
 }
 
 export function Toolbar({
@@ -62,7 +54,6 @@ export function Toolbar({
   onPartitionsChange,
   onVisibilityChange,
   onRestart,
-  status,
 }: ToolbarProps) {
   const config = SEEK_MODES[mode];
 
@@ -154,14 +145,15 @@ export function Toolbar({
         />
       ) : null}
 
+      {/* Default size, not `sm`: every control on this row is `h-9` — the
+          selects, the inputs, the date picker — and a button a notch shorter
+          than its neighbours reads as a different kind of thing. */}
       {draftConfig.input !== "none" ? (
-        <Button size="sm" onClick={apply} disabled={incomplete}>
+        <Button onClick={apply} disabled={incomplete}>
           Apply
         </Button>
       ) : draftMode !== mode ? (
-        <Button size="sm" onClick={apply}>
-          Apply
-        </Button>
+        <Button onClick={apply}>Apply</Button>
       ) : null}
 
       <span className="text-[11px] text-ink-faint">{SEEK_MODES[draftMode].hint}</span>
@@ -208,13 +200,23 @@ export function Toolbar({
         onChange={(event) => onPartitionsChange(event.target.value.trim() || undefined)}
       />
 
-      {config.live ? (
-        <Button size="sm" variant="outline" onClick={onRestart} aria-label="Restart the stream">
+      {/* For the bounded modes, and only those. A window is a snapshot with no
+          way to age visibly, so re-reading it has to be something you can ask
+          for — it used to happen by accident, when the finished stream
+          reconnected. A live tail is already the answer to that question, and
+          a button offering to restart what has not stopped is a button that
+          only ever loses your place. */}
+      {config.live ? null : (
+        <Button
+          size="icon"
+          variant="outline"
+          onClick={onRestart}
+          aria-label="Read this window again"
+          title="Read this window again"
+        >
           <RotateCw className="size-3.5" aria-hidden />
         </Button>
-      ) : null}
-
-      {status}
+      )}
     </div>
   );
 }
