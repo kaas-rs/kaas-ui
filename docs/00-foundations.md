@@ -21,19 +21,27 @@ Edition 2024, matching kaas-lib.
 ## How kaas-lib is consumed
 
 **Depend on crates.io.** `kafka-admin`, `kafka-read`, `kafka-meta` and
-`kafka-conn` are published at `0.1.0` and verified to work against both target
+`kafka-conn` are published at `0.2.0` and verified to work against both target
 clusters from this workspace. A path dependency on a sibling checkout would make
 the repository unbuildable for anyone who does not have one.
 
 ```toml
 [workspace.dependencies]
-kafka-admin = "0.1"
-kafka-read  = "0.1"
-kafka-meta  = "0.1"
-kafka-conn  = "0.1"
+kafka-admin = "0.2"
+kafka-read  = "0.2"
+kafka-meta  = "0.2"
+kafka-conn  = "0.2"
 ```
 
 The four release in lockstep and must be pulled at the same version.
+
+0.2.0 rather than 0.1.x because Phase 3 needed three things from the library
+and two of them add public fields to structs that are not `#[non_exhaustive]`
+— breaking, however additive they feel, and in 0.x the minor is where breaking
+goes. Bumping the minor here is therefore a **coordinated** change: `"0.1"`
+never resolves to it, and a linked tree whose requirement still says `"0.1"`
+silently ignores the `[patch]` and builds against the registry's old version
+instead. That failure names a missing symbol, not a version.
 
 **For rapid iteration on the library**, `cargo xtask link` writes a fenced block
 into the root `Cargo.toml`:
@@ -66,17 +74,25 @@ kaas-ui/
     kaas-ui-core/       config, cluster registry, domain DTOs, capability projection
     kaas-ui-api/        axum routers, request/response DTOs, utoipa
     kaas-ui-server/     the binary: wiring, embedded frontend
-    kaas-ui-serde/      payload decoding                      — created in Phase 3
+    kaas-ui-serde/      payload decoding                      — not created; see below
     kaas-ui-auth/       OIDC, sessions, RBAC, access audit    — created in Phase 4
   web/                  vite + react
   docs/
   xtask/
 ```
 
-PLAN.md §3 lists all five crates. Only three exist after Phase 0 — kaas-lib's
-rule 3 forbids stubs, and an empty crate that compiles is a stub with a
-manifest. `kaas-ui-serde` and `kaas-ui-auth` are created by the phase that
-fills them.
+PLAN.md §3 lists all five crates. Three exist — kaas-lib's rule 3 forbids
+stubs, and an empty crate that compiles is a stub with a manifest.
+`kaas-ui-auth` is created by Phase 4, which has not run.
+
+**`kaas-ui-serde` is the exception, and it is a decision rather than an
+omission.** Phase 3 has run without it: payload rendering is `Payload::of` in
+`kaas-ui-core::dto` — UTF-8 where the bytes are text, hex where they are not,
+with the encoding named in the response so the reader can tell the producer's
+text from kaas-ui's guess. That is Phase 3's sniff order minus the JSON step
+and minus the per-topic override. The crate becomes worth its own boundary when
+Phase 6 adds Avro and Protobuf behind a trait; creating it early to hold two
+functions would have been the stub the rule forbids.
 
 Strictly layered, no cycles: `core` knows about kaas-lib and nothing about HTTP;
 `api` knows about `core` and axum and never opens a socket; `server` wires them.
@@ -101,7 +117,11 @@ Verified present on crates.io at the time of writing.
 | `utoipa` | 5.5 | schema derives from day one, so Orval has something to read |
 | `utoipa-axum` | 0.2 | router integration |
 
-Later phases add: `tokio-stream` 0.1 and `async-stream` 0.3 (Phase 3),
+Phase 3 added `async-stream` 0.3 and `bytes` 1.12 to `kaas-ui-api`, and the
+frontend gained `@tanstack/react-virtual`, `zod`, `react-day-picker`,
+`date-fns`/`date-fns-tz` and `react-resizable-panels`.
+
+Later phases add:
 `openidconnect` 4.0, `tower-sessions` 0.15, `sqlx` 0.9 (Phase 4),
 `apache-avro` 0.21, `prost-reflect` 0.16, `schema_registry_converter` 4.10,
 `jsonschema` 0.49 (Phase 6), `rquickjs` 0.12 (Phase 6, JS predicates),

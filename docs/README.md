@@ -67,14 +67,23 @@ rather than a patch — see [Phase 3](04-phase-3-messages.md).
 
 What each finished phase decided differently from its plan is recorded in that
 phase's own file, under "Decisions this phase changed". Nothing was quietly
-skipped: `kaas-ui-serde` and `kaas-ui-auth` do not exist because the phases that
-fill them have not run, which is the rule rather than an omission.
+skipped, and the two that look skipped are not:
+
+- **`kaas-ui-auth` does not exist** because Phase 4 has not run, which is the
+  rule rather than an omission.
+- **`kaas-ui-serde` does not exist although Phase 3 has run.** Payload
+  rendering lives in `kaas-ui-core::dto` and is deliberately smaller than the
+  plan: UTF-8 or hex with the encoding named, no JSON step, no per-topic
+  override. The crate earns its boundary when Phase 6 adds Avro and Protobuf
+  behind a trait — see [00](00-foundations.md) and
+  [04](04-phase-3-messages.md).
 
 Three things were established before writing this plan, by running code rather
 than by reading docs, and they shape everything below:
 
-1. **kaas-lib 0.1.0 is on crates.io** and connects read-only to both target
-   clusters from this workspace. No local path dependency is required to start.
+1. **kaas-lib is on crates.io** — 0.1.0 when this plan was written, 0.2.0 since
+   Phase 3 — and connects read-only to both target clusters from this
+   workspace. No local path dependency is required to start.
 2. **Development happens inside the Kubernetes cluster.** Both Kafka clusters
    are dialable by service DNS from here; Docker is *not* available. So the
    acceptance commands in each phase run against real brokers, not containers —

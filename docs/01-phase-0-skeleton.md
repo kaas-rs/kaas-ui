@@ -218,6 +218,7 @@ With the three clusters from
 
 - [x] `cargo xtask ci` green, including all four checks and the call-site test
 - [x] `cargo xtask live` green against `kaas` + `strimzi` + `dead` — 28 assertions
+      at the time; 50 today, as later phases added their own
 - [x] fleet page served from the embedded assets, not from Vite dev
 - [x] distroless image defined; size measured by the release job, RSS below
 - [x] config reload adds and removes a cluster without dropping connections to

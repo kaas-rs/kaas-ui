@@ -6,13 +6,23 @@
 Protobuf are Phase 6. This is the phase where kaas-ui stops being a metadata
 browser.
 
-It is also the phase that creates `crates/kaas-ui-serde`.
+> **Built, and it grew.** The plan below is what was designed; the routes are
+> four rather than two, the SSE events do not map 1:1 onto `ScanEvent`, and
+> `crates/kaas-ui-serde` was not created. Everything that changed and why is in
+> [Decisions this phase changed](#decisions-this-phase-changed) at the foot of
+> this file — read that alongside the reasoning here rather than instead of it.
 
 ## Two endpoints, not one
 
+*Four, as built. The two below are the design; `messages` and
+`messages/{partition}/{offset}` were added for reasons the plan did not
+anticipate, and the streaming one is `messages/stream`.*
+
 ```
-GET /api/clusters/{id}/topics/{t}/messages/tail?limit=500       → JSON array
-GET /api/clusters/{id}/topics/{t}/messages/scan?from=earliest…  → text/event-stream
+GET /api/clusters/{id}/topics/{t}/messages/tail?limit=500        → JSON array
+GET /api/clusters/{id}/topics/{t}/messages/stream?mode=live…     → text/event-stream
+GET /api/clusters/{id}/topics/{t}/messages?mode=newest&limit=…   → one bounded page
+GET /api/clusters/{id}/topics/{t}/messages/{partition}/{offset}  → one record, whole
 ```
 
 **Tail is the default topic view.** One shot, bounded, and kaas-lib's backward
@@ -40,8 +50,10 @@ look like an off-by-a-lot.
 
 ## SSE
 
-Events map 1:1 onto `ScanEvent`; the mapping table is in
-[reference/http-contract.md](reference/http-contract.md).
+*As built they do **not** map 1:1: records are batched on a 100 ms interval, and
+a malformed batch is a row inside `messages` rather than an event of its own.
+The table in [reference/http-contract.md](reference/http-contract.md) is the
+contract; the reasoning for both is below.*
 
 Three properties to build in, not bolt on:
 
@@ -65,6 +77,11 @@ the one thing in this phase most likely to be quietly broken by a refactor. The
 acceptance test measures it.
 
 ## `crates/kaas-ui-serde`
+
+*Not created. Payload rendering is `Payload::of` in `kaas-ui-core::dto`, which
+is this section minus the JSON step and minus the per-topic override — see the
+decisions below. The design here stands for Phase 6, which is where the crate
+earns its boundary.*
 
 kaas-lib hands over `Bytes`; everything above is ours.
 
@@ -120,37 +137,75 @@ optimisation.
 cargo xtask live --config config.dev.yaml
 ```
 
-Against `kperf-bench` on both clusters — 16 partitions, ~40M records on `kaas`,
-~45M on `strimzi`:
+50 assertions against `kaas`, `strimzi` and a deliberately dead third cluster.
+The message ones, and what each is actually guarding:
 
-- **tail of 500 fetches under 5% of the partition's bytes**, asserted on
-  kaas-lib's `ConnectionStats::since()` before and after, not estimated. The
-  measured baseline for `limit=20` is ~325 KB and 16 fetches;
-- the endpoint returns **exactly 500 records**, merged and truncated, with
-  `partitionsSampled: 16` in the response;
-- a scan from `earliest` on a 40M-record topic streams `progress` events with a
-  moving `fraction()` and does not grow the server's RSS beyond the bounded
-  channel;
-- **closing the tab mid-scan returns connection count and RSS to baseline**
-  within 5s — measured via `BrokerPool::live_connections()` and the process's
-  own RSS, both before and after;
-- a hand-corrupted batch renders as a malformed row **while the scan continues**
-  — injected in a unit test over `decode_records`, since neither live cluster
-  will corrupt a batch on request;
-- the same tail works on `kaas` (Fetch v12, name-based) and `strimzi` (Fetch
-  v18, topic-id-based) with no branch in kaas-ui;
-- a JSON payload renders as JSON with the codec chip reading `json`, and
-  overriding to `hex` re-renders without a refetch.
+- **`toOffset` includes its anchor and nothing above it**, and `fromOffset`
+  starts at the offset asked for rather than at the base of the batch
+  containing it. Both are off-by-one traps that leave a plausible-looking
+  window, which is why they are asserted on both ends;
+- **a single record is fetched by partition and offset**, and an offset past
+  the end is `404` rather than the last record — `scan` clamps a start position
+  into the log, so the wrong answer here is a payload from a different row;
+- **a time seek reports what it resolved to.** `kaas` resolves to nothing and
+  says so; Strimzi resolves precisely. Both are correct, and a window that is
+  empty for the first reason must not look like one that is empty for the
+  second;
+- **the stream is an uncompressed `text/event-stream`**, and a backward window
+  goes `seeking → streaming → done`;
+- **every `messages` event carries its last row's `{partition}-{offset}`** as
+  the SSE id;
+- **a sixth stream from one named caller is served and their oldest is
+  closed**, a different caller is untouched, and callers a proxy makes
+  indistinguishable are not rationed against each other;
+- **a shutdown with streams open drains in milliseconds**, not in the
+  termination grace period.
+
+Two from the original plan are not asserted here, and neither was quietly
+dropped:
+
+- **the byte-budget assertion on the tail** is kaas-lib's, and runs in its
+  `cargo xtask integration` against a container. kaas-ui has no Docker, and
+  re-measuring it here would test the library rather than this layer;
+- **a hand-corrupted batch** has no fixture: neither live cluster will corrupt
+  a batch on request, and kaas-lib already covers the decoder path in
+  `a_corrupt_batch_yields_malformed_and_the_scan_continues`. What kaas-ui
+  guards is that a malformed row *survives the layer* — the row type, its
+  rendering and the raw-hex detail exist and are unit-tested, but the
+  end-to-end path is unproven against real damage.
 
 ## Exit criteria
 
-- [x] tail under 5% of partition bytes, asserted on connection counters
-- [x] `limit` means what the API says it means
-- [x] scan streams, is bounded, and dies with its client
-- [ ] no `tokio::spawn` that outlives a response — **amended, see below**
-- [x] malformed batch and malformed payload are visibly different rows
-- [x] message view URL fully round-trips through search params
-- [ ] `kaas-ui-serde` has no axum dependency and no panic path — not yet built
+- [x] **`limit` means what the API says it means** — the tail merges across
+  partitions and truncates, and `cargo xtask live` shows 20 returned from 32
+  fetched on a 16-partition topic, which is the `div_ceil` spread made visible
+- [x] **the stream dies with its client** — asserted by abandoning streams and
+  watching the governor's slots come back
+- [x] **the stream is bounded** — `max_buffered_records` for the library's
+  buffer, a drop-oldest ring for the hand-off, and a dropped count that is
+  reported rather than swallowed
+- [x] **message view URL fully round-trips through search params** — zod-validated,
+  every control writes to the URL and nothing mirrors it in `useState`
+- [x] **a shutdown does not wait for streams that never end** — not in the
+  original list, and it should have been
+- [~] **tail under 5% of partition bytes** — true, and asserted in *kaas-lib's*
+  integration suite rather than here. kaas-ui has no Docker, and re-measuring it
+  would test the library rather than this layer
+- [~] **malformed batch and malformed payload are visibly different rows** —
+  both row types exist, render differently and are unit-tested; the end-to-end
+  path is unproven because neither live cluster will corrupt a batch on request
+- [ ] **no `tokio::spawn` that outlives a response** — amended rather than met;
+  see below
+- [ ] **`kaas-ui-serde` has no axum dependency and no panic path** — not built.
+  A decision, not an omission: see below
+
+Not covered by any of the above, and worth naming rather than leaving implied:
+**the frontend has never been verified in a browser under load.** The render
+budget in the spec — ten thousand records a second, React commits at roughly
+seven a second, none over 16 ms — needs the React Profiler and a real load
+generator. The design is built for it (`getSnapshot` returns a stable reference,
+the transport never touches React state, row height is fixed) and none of that
+is *measured*.
 
 ## Decisions this phase changed
 
