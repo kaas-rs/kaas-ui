@@ -102,6 +102,7 @@ export function useMessageStream(query: MessageStreamQuery): MessageStreamResult
         setReconnecting(false);
       },
       onDisconnect: () => setReconnecting(true),
+      onConnected: () => setReconnecting(false),
     });
 
     return () => {

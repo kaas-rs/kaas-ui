@@ -21,6 +21,14 @@ export interface StreamHandlers {
   onError(error: ResourceError): void;
   /** The connection itself failed, as opposed to the cluster answering badly. */
   onDisconnect(): void;
+  /**
+   * The server is talking, so whatever was wrong is not wrong now.
+   *
+   * Called from the phase events rather than from every batch: a reconnect
+   * always replays `seeking` and `streaming`, phases are rare, and the rule
+   * that record traffic never reaches React state stays intact.
+   */
+  onConnected(): void;
 }
 
 export interface StreamHandle {
@@ -35,6 +43,9 @@ export interface StreamHandle {
  * wider one — one id cannot restore a cursor per partition, and resuming some
  * partitions while restarting others would lose records silently. See
  * `resume_floor` in `stream.rs`.
+ *
+ * That reconnection is for a connection that *failed*. A stream the server
+ * ended on purpose says so with `phase: done`, and is closed below.
  */
 export function openMessageStream(
   url: string,
@@ -51,7 +62,22 @@ export function openMessageStream(
 
   source.addEventListener("phase", (event) => {
     const body = parse<{ phase: StreamPhase }>(event.data);
-    if (body) store.setPhase(body.phase);
+    if (!body) return;
+    handlers.onConnected();
+    store.setPhase(body.phase);
+
+    // `done` ends the stream, and ending it here is the whole point:
+    // `EventSource` reconnects whenever the response completes, and it cannot
+    // tell "the server finished" from "the network dropped". Left alone, a
+    // bounded window reconnects the instant it is read, runs again, and — on a
+    // topic anyone is producing to — comes back with records that were not in
+    // the first window. They arrive as a second batch, so they land at the end
+    // of the list rather than in their own order, the badge says
+    // "reconnecting", and a snapshot behaves like a bad live stream.
+    //
+    // The server only sends `done` deliberately: the window is read, or the
+    // process is shutting down. Neither is a case for retrying.
+    if (body.phase === "done") source.close();
   });
 
   source.addEventListener("dropped", (event) => {
