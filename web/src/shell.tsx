@@ -1,17 +1,6 @@
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
 import { useEffect, useState, type ReactNode } from "react";
-import {
-  ChevronRight,
-  Cog,
-  Layers,
-  LayoutGrid,
-  ListTree,
-  Monitor,
-  Moon,
-  ScrollText,
-  Sun,
-  Users,
-} from "lucide-react";
+import { ChevronRight, Cog, Layers, ListTree, Monitor, Moon, Sun, Users } from "lucide-react";
 
 import { useCapabilities, useClusters } from "@/api/client";
 import type { ClusterCard, Feature } from "@/api/types";
@@ -87,15 +76,19 @@ function useTheme(): [Theme, (theme: Theme) => void] {
 
 /* ----------------------------------------------------------------- the nav */
 
-/** A cluster section's items, and the capability each one needs to exist. */
+/**
+ * A cluster section's items, and the capability each one needs to exist.
+ *
+ * No overview item: the cluster's own name is the link to it. A section header
+ * that is also the section's landing page is one row rather than two saying
+ * nearly the same thing.
+ */
 const CLUSTER_NAV: {
   label: string;
   to: string;
-  icon: typeof LayoutGrid;
+  icon: typeof ListTree;
   feature?: Feature;
-  exact?: boolean;
 }[] = [
-  { label: "overview", to: "/clusters/$clusterId", icon: LayoutGrid, exact: true },
   { label: "topics", to: "/clusters/$clusterId/topics", icon: ListTree },
   {
     label: "groups",
@@ -124,6 +117,8 @@ function ClusterSection({ card, active }: { card: ClusterCard; active: boolean }
   const [open, setOpen] = useState(active);
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const tone = clusterTone(card.id, card.labels);
+  /** On the cluster's own page, which the name in the header is the link to. */
+  const onOverview = pathname === `/clusters/${card.id}`;
 
   useEffect(() => {
     if (active) setOpen(true);
@@ -140,63 +135,119 @@ function ClusterSection({ card, active }: { card: ClusterCard; active: boolean }
   });
 
   return (
-    <Collapsible open={open} onOpenChange={setOpen} className="group/cluster">
-      <SidebarGroup className="py-1">
-        <CollapsibleTrigger asChild>
+    <>
+      {/* The icon rail. Collapsed to icons the sidebar hides group labels and
+          submenus by its own rules, so without a row here a dozen clusters
+          collapse to an empty strip. One dot per cluster, its colour the same
+          identity the expanded header uses, and the tooltip carries the name
+          the rail has no room for. */}
+      <SidebarMenu className="hidden px-2 group-data-[collapsible=icon]:flex">
+        <SidebarMenuItem>
+          <SidebarMenuButton
+            asChild
+            isActive={active}
+            tooltip={`${card.id} — ${card.status}`}
+          >
+            <Link to="/clusters/$clusterId" params={{ clusterId: card.id }}>
+              <span
+                aria-hidden
+                className={cn(
+                  // The status ring, rather than a second dot: at sixteen
+                  // pixels there is room for one shape, and a cluster nobody
+                  // can reach must not look like one that is fine.
+                  "size-4 shrink-0 rounded-full ring-2 ring-offset-0",
+                  card.status === "ready" && "ring-transparent",
+                  card.status === "connecting" && "ring-warn",
+                  card.status === "unreachable" && "ring-danger",
+                )}
+                style={{ background: tone.bg }}
+              />
+              <span>{card.id}</span>
+            </Link>
+          </SidebarMenuButton>
+        </SidebarMenuItem>
+      </SidebarMenu>
+
+      <Collapsible
+        open={open}
+        onOpenChange={setOpen}
+        className="group/cluster group-data-[collapsible=icon]:hidden"
+      >
+        <SidebarGroup className="py-1">
+          {/* The name navigates, the chevron folds. Two targets in one row
+              because they are two different intentions: "show me this cluster"
+              and "get these items out of my way" — and a header that did both on
+              one click would do the wrong one half the time. */}
           <SidebarGroupLabel
             className={cn(
-              "h-8 cursor-pointer hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+              "h-8 gap-0 pr-1",
               active && "text-sidebar-accent-foreground",
+              onOverview && "bg-sidebar-accent text-sidebar-accent-foreground",
             )}
           >
-            <span
-              aria-hidden
-              className="mr-2 size-2 shrink-0 rounded-full"
-              style={{ background: tone.bg }}
-            />
-            <span className="truncate font-mono">{card.id}</span>
-            <span
-              aria-hidden
-              title={card.status}
-              className={cn(
-                "ml-1.5 size-1.5 shrink-0 rounded-full",
-                card.status === "ready" && "bg-ok",
-                card.status === "connecting" && "bg-warn",
-                card.status === "unreachable" && "bg-danger",
-              )}
-            />
-            <ChevronRight className="ml-auto size-3.5 transition-transform group-data-[state=open]/cluster:rotate-90" />
-          </SidebarGroupLabel>
-        </CollapsibleTrigger>
+            <Link
+              to="/clusters/$clusterId"
+              params={{ clusterId: card.id }}
+              // Following the name is also asking to see what is under it.
+              onClick={() => setOpen(true)}
+              className="flex min-w-0 flex-1 items-center rounded-sm hover:text-sidebar-accent-foreground"
+            >
+              <span
+                aria-hidden
+                className="mr-2 size-2 shrink-0 rounded-full"
+                style={{ background: tone.bg }}
+              />
+              <span className="truncate font-mono">{card.id}</span>
+              <span
+                aria-hidden
+                title={card.status}
+                className={cn(
+                  "ml-1.5 size-1.5 shrink-0 rounded-full",
+                  card.status === "ready" && "bg-ok",
+                  card.status === "connecting" && "bg-warn",
+                  card.status === "unreachable" && "bg-danger",
+                )}
+              />
+            </Link>
 
-        <CollapsibleContent>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              <SidebarMenuItem>
-                <SidebarMenuSub className="mx-0 border-sidebar-border px-0">
-                  {items.map((item) => {
-                    const href = item.to.replace("$clusterId", card.id);
-                    const isActive = item.exact
-                      ? pathname === href
-                      : pathname.startsWith(href);
-                    return (
-                      <SidebarMenuSubItem key={item.label}>
-                        <SidebarMenuSubButton asChild isActive={isActive}>
-                          <Link to={item.to} params={{ clusterId: card.id }}>
-                            <item.icon aria-hidden className="size-3.5" />
-                            <span>{item.label}</span>
-                          </Link>
-                        </SidebarMenuSubButton>
-                      </SidebarMenuSubItem>
-                    );
-                  })}
-                </SidebarMenuSub>
-              </SidebarMenuItem>
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </CollapsibleContent>
-      </SidebarGroup>
-    </Collapsible>
+            <CollapsibleTrigger
+              aria-label={`${open ? "Collapse" : "Expand"} ${card.id}`}
+              className="ml-1 shrink-0 cursor-pointer rounded-sm p-1 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+            >
+              <ChevronRight
+                aria-hidden
+                className="size-3.5 transition-transform group-data-[state=open]/cluster:rotate-90"
+              />
+            </CollapsibleTrigger>
+          </SidebarGroupLabel>
+
+          <CollapsibleContent>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                <SidebarMenuItem>
+                  <SidebarMenuSub className="mx-0 border-sidebar-border px-0">
+                    {items.map((item) => {
+                      const href = item.to.replace("$clusterId", card.id);
+                      const isActive = pathname.startsWith(href);
+                      return (
+                        <SidebarMenuSubItem key={item.label}>
+                          <SidebarMenuSubButton asChild isActive={isActive}>
+                            <Link to={item.to} params={{ clusterId: card.id }}>
+                              <item.icon aria-hidden className="size-3.5" />
+                              <span>{item.label}</span>
+                            </Link>
+                          </SidebarMenuSubButton>
+                        </SidebarMenuSubItem>
+                      );
+                    })}
+                  </SidebarMenuSub>
+                </SidebarMenuItem>
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </CollapsibleContent>
+        </SidebarGroup>
+      </Collapsible>
+    </>
   );
 }
 
@@ -239,21 +290,9 @@ export function Shell() {
         </SidebarHeader>
 
         <SidebarContent>
-          <SidebarGroup>
-            <SidebarMenu>
-              <SidebarMenuItem>
-                <SidebarMenuButton asChild isActive={pathname === "/"} tooltip="Fleet">
-                  <Link to="/">
-                    <ScrollText aria-hidden />
-                    <span>fleet</span>
-                  </Link>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            </SidebarMenu>
-          </SidebarGroup>
-
-          <Separator className="bg-sidebar-border" />
-
+          {/* No fleet item: the mark in the header is the way back to it, and
+              a nav whose first row is "everything" competes with the list of
+              everything directly beneath it. */}
           <SidebarGroup className="pb-0">
             <SidebarGroupLabel>clusters</SidebarGroupLabel>
           </SidebarGroup>
@@ -314,28 +353,50 @@ export function Shell() {
   );
 }
 
-/** Where you are, from the path. Cheap, and always right. */
+/**
+ * Where you are, from the path. Cheap, and always right.
+ *
+ * Every crumb but the last is a link to its own prefix, which is what makes
+ * this the way *up*: from a message on a topic to that topic, to the topic
+ * list, to the cluster. The href is built from the raw segments rather than
+ * the decoded ones, because a topic named `a/b` is `a%2Fb` in the path and
+ * only stays one segment while it is spelled that way.
+ */
 function Breadcrumb({ pathname }: { pathname: string }) {
   const parts = pathname.split("/").filter(Boolean);
   if (parts.length === 0) {
     return <span className="text-[13px] font-medium">Fleet</span>;
   }
-  const crumbs = parts[0] === "clusters" ? parts.slice(1) : parts;
+
+  // `/clusters` is a prefix, not a page — the cluster id is the first crumb.
+  const skip = parts[0] === "clusters" ? 1 : 0;
+  const crumbs = parts.slice(skip).map((part, index) => ({
+    part,
+    href: `/${parts.slice(0, skip + index + 1).join("/")}`,
+  }));
+
   return (
-    <nav className="flex min-w-0 items-center gap-1.5 text-[13px]">
-      {crumbs.map((part, index) => (
-        <span key={`${part}-${index}`} className="flex min-w-0 items-center gap-1.5">
-          {index > 0 ? <span className="text-ink-faint">/</span> : null}
-          <span
-            className={cn(
-              "truncate font-mono",
-              index === crumbs.length - 1 ? "text-ink" : "text-ink-muted",
+    <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-1.5 text-[13px]">
+      {crumbs.map(({ part, href }, index) => {
+        const last = index === crumbs.length - 1;
+        return (
+          <span key={href} className="flex min-w-0 items-center gap-1.5">
+            {index > 0 ? <span className="text-ink-faint">/</span> : null}
+            {last ? (
+              <span aria-current="page" className="truncate font-mono text-ink">
+                {decodeURIComponent(part)}
+              </span>
+            ) : (
+              <Link
+                to={href}
+                className="truncate font-mono text-ink-muted hover:text-ink hover:underline"
+              >
+                {decodeURIComponent(part)}
+              </Link>
             )}
-          >
-            {decodeURIComponent(part)}
           </span>
-        </span>
-      ))}
+        );
+      })}
     </nav>
   );
 }
