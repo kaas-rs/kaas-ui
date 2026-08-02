@@ -122,7 +122,9 @@ GET  /api/clusters/{id}/topics/{topic}/configs                  [2]
 GET  /api/clusters/{id}/topics/{topic}/offsets?spec=latest      [2]
 
 GET  /api/clusters/{id}/topics/{topic}/messages/tail?limit=500  [3] one shot, JSON
-GET  /api/clusters/{id}/topics/{topic}/messages/scan?from=…     [3] text/event-stream
+GET  /api/clusters/{id}/topics/{topic}/messages?mode=…          [3] one bounded page
+GET  /api/clusters/{id}/topics/{topic}/messages/stream?mode=…   [3] text/event-stream
+GET  /api/clusters/{id}/topics/{topic}/messages/{part}/{offset} [3] one record, whole
 
 POST /auth/login                                                [4]
 GET  /auth/callback                                             [4]
@@ -160,15 +162,61 @@ and no handler ever indexes the registry map directly.
 
 ## SSE
 
-The scan endpoint is the only streaming one. Events map 1:1 onto
-`kafka_read::ScanEvent`:
+`messages/stream` is the only streaming route. Events do **not** map 1:1 onto
+`kafka_read::ScanEvent`, and the two places they differ are deliberate:
 
 | SSE event | payload | frontend |
 |---|---|---|
-| `record` | decoded record | append to ring buffer |
-| `progress` | `ScanProgress` | progress bar; "approximately ordered" badge when `ordering_degraded` |
-| `malformed` | offset range + hex | render a row — **do not abort** |
-| `end` | — | stop the spinner |
+| `messages` | an array of rows, `id:` = `{partition}-{offset}` of the last | push to the ring buffer |
+| `progress` | fraction, counters, reorder window | progress bar; "approximately ordered" caveat |
+| `phase` | `seeking` \| `streaming` \| `done` | spinner, then the terminal row |
+| `resolved` | what a time seek landed on, per partition | the "resolved to nothing" notice |
+| `dropped` | a running count | a banner, never suppressed |
+| `error` | a `ResourceError` | rendered with both version ranges intact |
+
+**Records are batched, not one per event.** One event per record saturates the
+connection and the browser's parser long before the list is the bottleneck.
+Rows accumulate for 100 ms and leave together, so ten thousand records a second
+is ten events a second.
+
+**Malformed batches ride inside `messages`, not in `error`.** They are a *row
+type* — `{"kind":"malformed", …}` alongside `{"kind":"record", …}` — because
+the scan continued past them and the topic is fine either side. Folding them
+into `error` throws away the one thing the reader needs, which is where in the
+topic the damage is.
+
+`error` carries the ordinary `ResourceError`, so an `UnsupportedApi` arrives
+with both ranges and the three diagnoses above stay distinguishable.
+
+Backward modes (`newest`, `toOffset`, `toTime`) have **no partial results**:
+`kafka_read::tail` returns a `Vec`, so they emit `phase: seeking`, then the
+whole window at once. A progress bar there would be a lie.
+
+**Two headers exist for whatever is in front of the process**, and both are
+load-bearing rather than defensive:
+
+```
+Cache-Control:      no-cache, no-transform
+X-Accel-Buffering:  no
+```
+
+A proxy that buffers `text/event-stream` produces the worst failure mode
+available — every layer reports success, the request stays open, and nothing
+arrives. It was measured here: through code-server alone the stream delivered
+4.4 KB in five seconds; through the Cloudflare tunnel in front of it, the
+browser received nothing at all until these headers were set. `no-transform`
+covers the other route to the same place, an edge that recompresses the body;
+kaas-ui's own compression layer already declines SSE, but somebody else's does
+not.
+
+Backpressure is a bounded ring that **drops its oldest entry and counts it**
+rather than awaiting. Awaiting would push back through the writer into the
+fetch loop, so one slow browser would slow the scan for the cluster; and a live
+tail whose reader has fallen behind wants the newest records, not a stale
+prefix. On disconnect the response is dropped, the pump's `tx.closed()`
+resolves, and the scan goes with it — kaas-lib is cancel-safe by construction,
+so "user closed the tab mid-scan" is a non-event. Phase 3's acceptance asserts
+on it by abandoning five streams and watching the slots come back.
 
 SSE rather than WebSocket because the channel is permanently unidirectional —
 there is no write path to send anything back, now or ever — and because it

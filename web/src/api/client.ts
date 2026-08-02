@@ -10,9 +10,15 @@ import type {
   GroupSummary,
   LogDir,
   Message,
+  MessageDetail,
+  MessagePage,
+  PartitionOffsets,
   TopicDetail,
   TopicSummary,
 } from "./types";
+
+import { parseRowId } from "@/features/messages/rows";
+import { withBase } from "./base";
 
 /** A request that produced no answer at all. */
 export class ApiError extends Error {
@@ -27,7 +33,9 @@ export class ApiError extends Error {
 }
 
 async function get<T>(path: string): Promise<T> {
-  const response = await fetch(path, { headers: { accept: "application/json" } });
+  const response = await fetch(withBase(path), {
+    headers: { accept: "application/json" },
+  });
   if (!response.ok) {
     let message = `${response.status} ${response.statusText}`;
     let kind: string | undefined;
@@ -198,4 +206,83 @@ export function useTail(
     refetchOnWindowFocus: false,
     staleTime: Infinity,
   });
+}
+
+/**
+ * One record's full payload, fetched when a row is selected and never before.
+ *
+ * `staleTime: Infinity` is not a cache-tuning choice: a Kafka record at a
+ * given offset is immutable, so re-selecting a row must cost no request at
+ * all. The query key is the same `{partition}-{offset}` the list keys on.
+ */
+export function useMessageDetail(id: string, topic: string, rowId: string | undefined) {
+  const parsed = rowId ? parseRowId(rowId) : null;
+  return useQuery({
+    queryKey: ["message", id, topic, rowId],
+    queryFn: () =>
+      get<MessageDetail>(
+        `/api/clusters/${encode(id)}/topics/${encode(topic)}/messages/${parsed?.partition}/${parsed?.offset}`,
+      ),
+    enabled: !!parsed,
+    staleTime: Infinity,
+    retry: false,
+  });
+}
+
+/**
+ * One page of a window, for "load more".
+ *
+ * Deliberately not a stream: a bounded page is request/response, and opening
+ * an SSE connection to deliver 500 rows that are already known to exist would
+ * be heavier and no more correct.
+ */
+export async function fetchMessagePage(
+  id: string,
+  topic: string,
+  params: URLSearchParams,
+): Promise<MessagePage> {
+  return get<MessagePage>(
+    `/api/clusters/${encode(id)}/topics/${encode(topic)}/messages?${params}`,
+  );
+}
+
+/**
+ * Both ends of every partition.
+ *
+ * Feeds the offset input's bounds and the calendar's disabled days. Partitions
+ * that failed ride in `errors` rather than failing the request, so a partition
+ * mid-election leaves the control usable and unclamped instead of blocking it.
+ */
+export function usePartitionBounds(id: string, topic: string) {
+  return useQuery({
+    queryKey: ["offsets", id, topic],
+    queryFn: () =>
+      get<Envelope<PartitionOffsets>>(
+        `/api/clusters/${encode(id)}/topics/${encode(topic)}/offsets`,
+      ),
+    staleTime: SNAPSHOT_REFRESH,
+  });
+}
+
+/**
+ * The timestamp of the oldest record the topic still holds.
+ *
+ * What actually bounds the calendar. Derived from a record rather than from
+ * `retention.ms`: that setting says when a segment becomes *eligible* for
+ * deletion, not when it went, so a topic routinely holds data older than its
+ * retention claims and a calendar built on the setting greys out days with
+ * perfectly good records behind them.
+ */
+export function useOldestTimestamp(id: string, topic: string) {
+  const query = useQuery({
+    queryKey: ["oldest", id, topic],
+    queryFn: () =>
+      get<MessagePage>(
+        `/api/clusters/${encode(id)}/topics/${encode(topic)}/messages?mode=oldest&limit=1`,
+      ),
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+  const first = query.data?.items[0];
+  return first && first.kind === "record" ? first.timestamp : undefined;
 }

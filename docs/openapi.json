@@ -6,7 +6,7 @@
     "license": {
       "name": "Apache-2.0"
     },
-    "version": "0.1.2"
+    "version": "0.1.4"
   },
   "paths": {
     "/api/clusters": {
@@ -549,6 +549,221 @@
         }
       }
     },
+    "/api/clusters/{id}/topics/{topic}/messages": {
+      "get": {
+        "tags": [
+          "messages"
+        ],
+        "summary": "`GET /api/clusters/{id}/topics/{topic}/messages`",
+        "description": "One bounded page, as a plain JSON resource. The same seven modes as the\nstream and the same rows — a \"load more\" button must not produce rows that\ndiffer in shape from the ones already on screen.",
+        "operationId": "page",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Cluster id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "topic",
+            "in": "path",
+            "description": "Topic name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "description": "Which window",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/SeekMode"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "For fromOffset and toOffset",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "timestamp",
+            "in": "query",
+            "description": "Epoch millis, for sinceTime and toTime",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "partitions",
+            "in": "query",
+            "description": "Comma-separated partition list",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "visibility",
+            "in": "query",
+            "description": "all | committed",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "description": "Substring match on the value",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Records in this page",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of messages",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessagePage"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/clusters/{id}/topics/{topic}/messages/stream": {
+      "get": {
+        "tags": [
+          "messages"
+        ],
+        "summary": "`GET /api/clusters/{id}/topics/{topic}/messages/stream`",
+        "description": "The seven seek modes, over `text/event-stream`. Events are `messages`,\n`progress`, `phase`, `dropped` and `error`; the `id:` on a `messages` event\nis `{partition}-{offset}` of its last row.\n\nAn `error` event carries the same `ResourceError` shape the rest of the API\nuses, so an `UnsupportedApi` arrives with **both** version ranges intact and\nthe reader can tell \"this cluster does not implement it\" from \"this build\ncannot speak it\". That distinction is the entire reason the variant carries\ntwo ranges, and flattening it into a message string discards it.",
+        "operationId": "stream",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Cluster id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "topic",
+            "in": "path",
+            "description": "Topic name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "description": "Which window",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/SeekMode"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "For fromOffset and toOffset",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "timestamp",
+            "in": "query",
+            "description": "Epoch millis, for sinceTime and toTime",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "partitions",
+            "in": "query",
+            "description": "Comma-separated partition list",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "visibility",
+            "in": "query",
+            "description": "all | committed",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "description": "Substring match on the value",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Records, ignored by live",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An event stream of messages",
+            "content": {
+              "text/event-stream": {}
+            }
+          },
+          "429": {
+            "description": "Too many streams are open"
+          }
+        }
+      }
+    },
     "/api/clusters/{id}/topics/{topic}/messages/tail": {
       "get": {
         "tags": [
@@ -606,6 +821,71 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/api/clusters/{id}/topics/{topic}/messages/{partition}/{offset}": {
+      "get": {
+        "tags": [
+          "messages"
+        ],
+        "summary": "`GET /api/clusters/{id}/topics/{topic}/messages/{partition}/{offset}`",
+        "description": "The full payload of one record, fetched when a row is selected and never\nbefore. A record at a given offset never changes, so the frontend caches it\nwith `staleTime: Infinity` and re-selecting a row costs no request at all.\n\nImplemented with a one-record `scan` rather than the anchored tail the\nobvious reading suggests: both land on the right record, but only the scan\ncarries the **raw bytes of a batch that would not decode**, and a detail\npanel that cannot show those is useless for exactly the row that most needs\nexplaining.",
+        "operationId": "one",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Cluster id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "topic",
+            "in": "path",
+            "description": "Topic name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "partition",
+            "in": "path",
+            "description": "Partition",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "path",
+            "description": "Offset",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The record, or the batch that covered it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No record at that offset"
           }
         }
       }
@@ -1179,6 +1459,21 @@
           "resourceType": {
             "type": "string",
             "description": "Its type."
+          }
+        }
+      },
+      "Dropped": {
+        "type": "object",
+        "description": "How many records the server dropped rather than stall the scan.\n\nSilently losing records in a debugging tool is worse than showing a gap,\nso this is emitted whenever the count changes and never suppressed.",
+        "required": [
+          "count"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Records dropped since the stream opened.",
+            "minimum": 0
           }
         }
       },
@@ -3090,6 +3385,73 @@
           }
         }
       },
+      "MalformedDetail": {
+        "type": "object",
+        "description": "A batch that would not decode, with its bytes.",
+        "required": [
+          "partition",
+          "offset",
+          "lastOffset",
+          "reason",
+          "raw"
+        ],
+        "properties": {
+          "lastOffset": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The last offset it claimed."
+          },
+          "offset": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The first offset the batch claimed."
+          },
+          "partition": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Partition."
+          },
+          "raw": {
+            "$ref": "#/components/schemas/Payload",
+            "description": "The raw batch, as hex. The only way to see what is actually on disk."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why it did not decode."
+          }
+        }
+      },
+      "MalformedRow": {
+        "type": "object",
+        "description": "A batch that would not decode, as a row.",
+        "required": [
+          "partition",
+          "offset",
+          "lastOffset",
+          "reason"
+        ],
+        "properties": {
+          "lastOffset": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The last offset it claimed, or its own base where the header did not\nsay — so the row always names a range it can render."
+          },
+          "offset": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The first offset the batch claimed."
+          },
+          "partition": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Partition."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why it did not decode."
+          }
+        }
+      },
       "Message": {
         "type": "object",
         "description": "One record in the message browser.",
@@ -3157,6 +3519,105 @@
               {
                 "$ref": "#/components/schemas/Payload",
                 "description": "The value, rendered. `None` is a tombstone, which is not the same as\nan empty value."
+              }
+            ]
+          }
+        }
+      },
+      "MessageDetail": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Message",
+                "description": "The record, with its key, value and headers whole."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "kind"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "record"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "The record, with its key, value and headers whole."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MalformedDetail",
+                "description": "The batch that covered the offset, as hex."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "kind"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "malformed"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "The batch that covered the offset, as hex."
+          }
+        ],
+        "description": "The answer to \"show me this one record\".\n\nTagged the same way [`StreamRow`] is, and for the same reason: the row a\nreader selected might be a batch that would not decode, and the panel that\nopens has to be able to say so with the raw bytes rather than showing an\nempty record."
+      },
+      "MessagePage": {
+        "type": "object",
+        "description": "One page of a window, for \"load more\".",
+        "required": [
+          "items",
+          "errors",
+          "hasMore"
+        ],
+        "properties": {
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResourceError"
+            },
+            "description": "Whatever failed while reading them."
+          },
+          "hasMore": {
+            "type": "boolean",
+            "description": "Whether the page filled, which is the only honest signal that there is\nmore. A short page means the window ran out."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StreamRow"
+            },
+            "description": "The rows, in the mode's own order."
+          },
+          "nextOffset": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The anchor to ask for next, or `None` at the end of the window.\n\nOne number for every partition, because that is what the seek modes\ntake: partitions are at different offsets, so this is where to *start*\nthe next page and not a claim about any particular partition."
+          },
+          "resolved": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ResolvedSeek",
+                "description": "What a time-mode instant resolved to, and `None` for the other five\nmodes. See [`resolve`]."
               }
             ]
           }
@@ -3312,6 +3773,70 @@
           }
         }
       },
+      "ResolvedPartition": {
+        "type": "object",
+        "description": "One partition's answer to a timestamp lookup.",
+        "required": [
+          "partition"
+        ],
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the lookup failed, where it failed rather than answered."
+          },
+          "offset": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The offset the instant resolved to, or `None` where the broker\nreported none."
+          },
+          "partition": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Partition."
+          },
+          "timestamp": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The timestamp of the record at that offset, where the broker says."
+          }
+        }
+      },
+      "ResolvedSeek": {
+        "type": "object",
+        "description": "What an instant actually resolved to, per partition.\n\nEmitted for the two time modes and for no other reason than that a\ntimestamp seek can be answered correctly and still not land where the\nreader expected. `ListOffsets` reports \"the first offset at or after this\ninstant\", and a broker with no timestamp index answers **nothing at all** —\na legitimate response that is indistinguishable from \"nothing was written\nafter that time\". kaas-ui cannot tell those apart and must not guess; what\nit can do is show the answer it got, so an empty window reads as \"this\ncluster resolved 14:30 to nothing\" rather than as a broken seek.\n\nThe `kaas` broker in the development environment does exactly this, and\nStrimzi does not. See `docs/reference/environment.md`.",
+        "required": [
+          "timestamp",
+          "partitions",
+          "unresolved"
+        ],
+        "properties": {
+          "partitions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResolvedPartition"
+            },
+            "description": "What each partition answered."
+          },
+          "timestamp": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The instant that was asked about, in epoch milliseconds."
+          },
+          "unresolved": {
+            "type": "boolean",
+            "description": "Whether no partition resolved to an offset.\n\nPrecomputed because it is the case worth saying out loud, and a UI that\nhas to derive it will derive it in three places and differently."
+          }
+        }
+      },
       "ResourceError": {
         "type": "object",
         "description": "One resource's failure, named.",
@@ -3365,6 +3890,191 @@
             ]
           }
         }
+      },
+      "SeekMode": {
+        "type": "string",
+        "description": "How a window of a topic was asked for.",
+        "enum": [
+          "live",
+          "newest",
+          "oldest",
+          "fromOffset",
+          "toOffset",
+          "sinceTime",
+          "toTime"
+        ]
+      },
+      "StreamPhase": {
+        "type": "string",
+        "description": "Where a stream is in its life.\n\nA backward window emits `seeking` and nothing else until the whole walk\nfinishes, because [`kafka_read::tail`] returns a `Vec` — there are no\npartial results to show, and a spinner that never changes looks identical\nto a hang.",
+        "enum": [
+          "seeking",
+          "streaming",
+          "done"
+        ]
+      },
+      "StreamProgress": {
+        "type": "object",
+        "description": "How far a bounded scan has got.",
+        "required": [
+          "recordsEmitted",
+          "recordsScanned",
+          "malformedBatches",
+          "partitionsActive",
+          "orderingDegraded",
+          "reorderWindow"
+        ],
+        "properties": {
+          "fraction": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "`0.0`–`1.0`, or `None` before the total is known. A live tail has no\nend, so it never has a fraction."
+          },
+          "malformedBatches": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Batches that did not decode.",
+            "minimum": 0
+          },
+          "orderingDegraded": {
+            "type": "boolean",
+            "description": "Whether the merge is no longer producing a total order across\npartitions."
+          },
+          "partitionsActive": {
+            "type": "integer",
+            "description": "Partitions still producing.",
+            "minimum": 0
+          },
+          "recordsEmitted": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Records emitted so far.",
+            "minimum": 0
+          },
+          "recordsScanned": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Records read, including those a filter dropped.",
+            "minimum": 0
+          },
+          "reorderWindow": {
+            "type": "integer",
+            "description": "Roughly how many records apart two partitions may be reordered.\n\nDerived from the scan's buffer ceiling spread over the partitions still\nrunning: the merge picks the oldest buffered head, so the window it can\nsee is what bounds how far out of order the result can be. It is a\ncaveat to render next to the list, not a promise.",
+            "minimum": 0
+          }
+        }
+      },
+      "StreamRecord": {
+        "type": "object",
+        "description": "A decoded record, previewed rather than whole.",
+        "required": [
+          "partition",
+          "offset",
+          "timestamp",
+          "timestampType",
+          "transactional"
+        ],
+        "properties": {
+          "key": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Payload",
+                "description": "The key, cut to [`PREVIEW_CHARS`]. `None` is a keyless record."
+              }
+            ]
+          },
+          "offset": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Offset."
+          },
+          "partition": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Partition."
+          },
+          "timestamp": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Timestamp, in milliseconds."
+          },
+          "timestampType": {
+            "type": "string",
+            "description": "Whether the timestamp is the producer's or the broker's."
+          },
+          "transactional": {
+            "type": "boolean",
+            "description": "Whether the record was written transactionally."
+          },
+          "value": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Payload",
+                "description": "The value, cut to [`PREVIEW_CHARS`]. `None` is a **tombstone**, which\nis not the same as an empty value — compaction turns on the difference."
+              }
+            ]
+          }
+        }
+      },
+      "StreamRow": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/StreamRecord",
+                "description": "A record that decoded."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "kind"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "record"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "A record that decoded."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MalformedRow",
+                "description": "A batch that did not. The scan continued past it."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "kind"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "malformed"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "A batch that did not. The scan continued past it."
+          }
+        ],
+        "description": "One row of the message list, as it crosses an SSE connection.\n\nTwo variants, never conflated. A batch that would not decode at the\nprotocol level is a **row**: kaas-lib's decoder keeps going past it, and\nsurfacing it is the entire reason that design exists. Folding it into the\nstream's `error` event would throw away the one thing the reader needs,\nwhich is *where* in the topic the damage is."
       },
       "TopicDetail": {
         "type": "object",

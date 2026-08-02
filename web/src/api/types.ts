@@ -286,3 +286,103 @@ export interface PartitionOffsets {
   latestOffset: number | null;
   records: number | null;
 }
+
+// --- the message stream ---------------------------------------------------
+
+/** A decoded record, previewed rather than whole. */
+export interface StreamRecord {
+  kind: "record";
+  partition: number;
+  offset: number;
+  /** Epoch milliseconds. */
+  timestamp: number;
+  timestampType: string;
+  key: Payload | null;
+  /** `null` is a tombstone, which is not the same as an empty value. */
+  value: Payload | null;
+  transactional: boolean;
+}
+
+/**
+ * A batch that would not decode, as a row.
+ *
+ * A row and never an error: kaas-lib's decoder keeps going past it, and
+ * surfacing it is the entire reason that design exists.
+ */
+export interface MalformedRow {
+  kind: "malformed";
+  partition: number;
+  offset: number;
+  lastOffset: number;
+  reason: string;
+}
+
+export type StreamRowData = StreamRecord | MalformedRow;
+
+/**
+ * A row with the id everything keys on.
+ *
+ * `{partition}-{offset}`, attached once on arrival: the virtualizer's
+ * `getItemKey`, the React key, the selection state and the detail query key
+ * are all the same string, and computing it in four places is how they end up
+ * disagreeing.
+ */
+export type StreamRow = StreamRowData & { id: string };
+
+export type StreamPhase = "seeking" | "streaming" | "done";
+
+export interface StreamProgress {
+  /** `null` for a live tail, which has no end to be a fraction of. */
+  fraction: number | null;
+  recordsEmitted: number;
+  recordsScanned: number;
+  malformedBatches: number;
+  partitionsActive: number;
+  orderingDegraded: boolean;
+  /** Roughly how far apart two partitions may be reordered. `0` means exact. */
+  reorderWindow: number;
+}
+
+export interface ResolvedPartition {
+  partition: number;
+  /** `null` where the broker reported no offset at or after the instant. */
+  offset: number | null;
+  timestamp: number | null;
+  error: string | null;
+}
+
+/**
+ * What a timestamp seek actually landed on.
+ *
+ * A broker with no timestamp index answers a time seek with nothing, which is
+ * a valid response and indistinguishable from "nothing was written since". The
+ * `kaas` cluster does exactly this and Strimzi does not, so the answer is shown
+ * rather than interpreted.
+ */
+export interface ResolvedSeek {
+  timestamp: number;
+  partitions: ResolvedPartition[];
+  unresolved: boolean;
+}
+
+/** One page of a window, for "load more". */
+export interface MessagePage {
+  items: StreamRowData[];
+  errors: ResourceError[];
+  hasMore: boolean;
+  nextOffset: number | null;
+  resolved?: ResolvedSeek;
+}
+
+/** The full payload of one record. */
+export type MessageDetail =
+  | ({ kind: "record" } & Message)
+  | {
+      kind: "malformed";
+      partition: number;
+      offset: number;
+      lastOffset: number;
+      reason: string;
+      /** The batch as it is on disk. */
+      raw: Payload;
+    };

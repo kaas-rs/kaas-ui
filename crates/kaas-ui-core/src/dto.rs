@@ -866,29 +866,43 @@ pub struct Message {
     pub size_bytes: usize,
 }
 
-impl From<&Record> for Message {
-    fn from(record: &Record) -> Self {
+impl Message {
+    /// Render a record, choosing how much of each payload to include.
+    fn render(record: &Record, payload: fn(&[u8]) -> Payload) -> Self {
         Self {
             partition: record.partition,
             offset: record.offset,
             timestamp: record.timestamp,
-            timestamp_type: match record.timestamp_type {
-                TimestampType::Creation => "createTime".to_owned(),
-                TimestampType::LogAppend => "logAppendTime".to_owned(),
-            },
-            key: record.key.as_ref().map(|bytes| Payload::of(bytes)),
-            value: record.value.as_ref().map(|bytes| Payload::of(bytes)),
+            timestamp_type: render_timestamp_type(record.timestamp_type),
+            key: record.key.as_ref().map(|bytes| payload(bytes)),
+            value: record.value.as_ref().map(|bytes| payload(bytes)),
             headers: record
                 .headers
                 .iter()
                 .map(|(name, value)| Header {
                     name: name.clone(),
-                    value: value.as_ref().map(|bytes| Payload::of(bytes)),
+                    value: value.as_ref().map(|bytes| payload(bytes)),
                 })
                 .collect(),
             transactional: record.transactional,
             size_bytes: record.payload_len(),
         }
+    }
+
+    /// A record for the one-shot tail, where a list of them is returned.
+    pub fn of(record: &Record) -> Self {
+        Self::render(record, Payload::of)
+    }
+
+    /// A record for the detail panel, where exactly one was asked for.
+    pub fn full(record: &Record) -> Self {
+        Self::render(record, Payload::full)
+    }
+}
+
+impl From<&Record> for Message {
+    fn from(record: &Record) -> Self {
+        Self::of(record)
     }
 }
 
@@ -924,13 +938,44 @@ pub struct Payload {
 /// to blow up a browser tab that asked for five hundred of them.
 const MAX_PAYLOAD_CHARS: usize = 8192;
 
+/// The ceiling on a payload that rides in a *stream*.
+///
+/// Much smaller than [`MAX_PAYLOAD_CHARS`], and not a tuning knob. A topic
+/// carrying 1 KB values at ten thousand records a second is 10 MB/s the
+/// browser would parse, hold in a ring buffer and never draw — the list shows
+/// one truncated line per row whatever arrives. The rest is fetched for the
+/// one record someone actually selected.
+const PREVIEW_CHARS: usize = 256;
+
+/// The ceiling on the one payload someone actually opened.
+///
+/// A whole megabyte, because this is the answer to "show me this record" and
+/// cutting it at the list's budget would make the detail panel useless for the
+/// large records that are the reason anyone opens it. Still a ceiling: a
+/// response is not allowed to be as large as a producer felt like being.
+const DETAIL_PAYLOAD_CHARS: usize = 1024 * 1024;
+
 impl Payload {
     /// Render bytes as text where they are text, and as hex where they are not.
     pub fn of(bytes: &[u8]) -> Self {
+        Self::rendered(bytes, MAX_PAYLOAD_CHARS)
+    }
+
+    /// The same rendering, cut to what a single list row can show.
+    pub fn preview(bytes: &[u8]) -> Self {
+        Self::rendered(bytes, PREVIEW_CHARS)
+    }
+
+    /// The same rendering, for the one record that was selected.
+    pub fn full(bytes: &[u8]) -> Self {
+        Self::rendered(bytes, DETAIL_PAYLOAD_CHARS)
+    }
+
+    fn rendered(bytes: &[u8], ceiling: usize) -> Self {
         let len = bytes.len();
         match std::str::from_utf8(bytes) {
             Ok(text) => {
-                let (text, truncated) = truncate(text);
+                let (text, truncated) = truncate(text, ceiling);
                 Self {
                     encoding: "utf8".to_owned(),
                     text,
@@ -942,7 +987,7 @@ impl Payload {
                 let mut hex = String::new();
                 let mut truncated = false;
                 for byte in bytes {
-                    if hex.len() >= MAX_PAYLOAD_CHARS {
+                    if hex.len() >= ceiling {
                         truncated = true;
                         break;
                     }
@@ -960,17 +1005,254 @@ impl Payload {
     }
 }
 
-fn truncate(text: &str) -> (String, bool) {
-    if text.len() <= MAX_PAYLOAD_CHARS {
+fn truncate(text: &str, ceiling: usize) -> (String, bool) {
+    if text.len() <= ceiling {
         return (text.to_owned(), false);
     }
-    let mut end = MAX_PAYLOAD_CHARS;
+    let mut end = ceiling;
     while end > 0 && !text.is_char_boundary(end) {
         end -= 1;
     }
     match text.get(..end) {
         Some(head) => (head.to_owned(), true),
         None => (String::new(), true),
+    }
+}
+
+/// One row of the message list, as it crosses an SSE connection.
+///
+/// Two variants, never conflated. A batch that would not decode at the
+/// protocol level is a **row**: kaas-lib's decoder keeps going past it, and
+/// surfacing it is the entire reason that design exists. Folding it into the
+/// stream's `error` event would throw away the one thing the reader needs,
+/// which is *where* in the topic the damage is.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum StreamRow {
+    /// A record that decoded.
+    Record(StreamRecord),
+    /// A batch that did not. The scan continued past it.
+    Malformed(MalformedRow),
+}
+
+/// A decoded record, previewed rather than whole.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct StreamRecord {
+    /// Partition.
+    pub partition: i32,
+    /// Offset.
+    pub offset: i64,
+    /// Timestamp, in milliseconds.
+    pub timestamp: i64,
+    /// Whether the timestamp is the producer's or the broker's.
+    pub timestamp_type: String,
+    /// The key, cut to [`PREVIEW_CHARS`]. `None` is a keyless record.
+    pub key: Option<Payload>,
+    /// The value, cut to [`PREVIEW_CHARS`]. `None` is a **tombstone**, which
+    /// is not the same as an empty value — compaction turns on the difference.
+    pub value: Option<Payload>,
+    /// Whether the record was written transactionally.
+    pub transactional: bool,
+}
+
+/// A batch that would not decode, as a row.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MalformedRow {
+    /// Partition.
+    pub partition: i32,
+    /// The first offset the batch claimed.
+    pub offset: i64,
+    /// The last offset it claimed, or its own base where the header did not
+    /// say — so the row always names a range it can render.
+    pub last_offset: i64,
+    /// Why it did not decode.
+    pub reason: String,
+}
+
+impl StreamRow {
+    /// A row for a decoded record.
+    pub fn of(record: &Record) -> Self {
+        Self::Record(StreamRecord {
+            partition: record.partition,
+            offset: record.offset,
+            timestamp: record.timestamp,
+            timestamp_type: render_timestamp_type(record.timestamp_type),
+            key: record.key.as_ref().map(|bytes| Payload::preview(bytes)),
+            value: record.value.as_ref().map(|bytes| Payload::preview(bytes)),
+            transactional: record.transactional,
+        })
+    }
+
+    /// A row for a batch that did not decode.
+    pub fn malformed(
+        partition: i32,
+        offset: i64,
+        last_offset: Option<i64>,
+        reason: impl std::fmt::Display,
+    ) -> Self {
+        Self::Malformed(MalformedRow {
+            partition,
+            offset,
+            // A header that did not survive leaves no end; the batch still
+            // covers at least its own base offset, and a range of one is
+            // honest where a range of zero would render as a gap.
+            last_offset: last_offset.unwrap_or(offset).max(offset),
+            reason: reason.to_string(),
+        })
+    }
+
+    /// `{partition}-{offset}` — the id the whole feature keys on, in the row,
+    /// in React, in the query cache and in the SSE `id:` field alike.
+    pub fn id(&self) -> String {
+        match self {
+            Self::Record(record) => format!("{}-{}", record.partition, record.offset),
+            Self::Malformed(row) => format!("{}-{}", row.partition, row.offset),
+        }
+    }
+}
+
+/// How far a bounded scan has got.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct StreamProgress {
+    /// `0.0`–`1.0`, or `None` before the total is known. A live tail has no
+    /// end, so it never has a fraction.
+    pub fraction: Option<f64>,
+    /// Records emitted so far.
+    pub records_emitted: u64,
+    /// Records read, including those a filter dropped.
+    pub records_scanned: u64,
+    /// Batches that did not decode.
+    pub malformed_batches: u64,
+    /// Partitions still producing.
+    pub partitions_active: usize,
+    /// Whether the merge is no longer producing a total order across
+    /// partitions.
+    pub ordering_degraded: bool,
+    /// Roughly how many records apart two partitions may be reordered.
+    ///
+    /// Derived from the scan's buffer ceiling spread over the partitions still
+    /// running: the merge picks the oldest buffered head, so the window it can
+    /// see is what bounds how far out of order the result can be. It is a
+    /// caveat to render next to the list, not a promise.
+    pub reorder_window: usize,
+}
+
+/// Where a stream is in its life.
+///
+/// A backward window emits `seeking` and nothing else until the whole walk
+/// finishes, because [`kafka_read::tail`] returns a `Vec` — there are no
+/// partial results to show, and a spinner that never changes looks identical
+/// to a hang.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum StreamPhase {
+    /// Resolving offsets, or walking backwards. Nothing has been emitted.
+    Seeking,
+    /// Records are arriving.
+    Streaming,
+    /// The window is exhausted, or the stream hit its lifetime. The client
+    /// decides whether to reopen.
+    Done,
+}
+
+/// What an instant actually resolved to, per partition.
+///
+/// Emitted for the two time modes and for no other reason than that a
+/// timestamp seek can be answered correctly and still not land where the
+/// reader expected. `ListOffsets` reports "the first offset at or after this
+/// instant", and a broker with no timestamp index answers **nothing at all** —
+/// a legitimate response that is indistinguishable from "nothing was written
+/// after that time". kaas-ui cannot tell those apart and must not guess; what
+/// it can do is show the answer it got, so an empty window reads as "this
+/// cluster resolved 14:30 to nothing" rather than as a broken seek.
+///
+/// The `kaas` broker in the development environment does exactly this, and
+/// Strimzi does not. See `docs/reference/environment.md`.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedSeek {
+    /// The instant that was asked about, in epoch milliseconds.
+    pub timestamp: i64,
+    /// What each partition answered.
+    pub partitions: Vec<ResolvedPartition>,
+    /// Whether no partition resolved to an offset.
+    ///
+    /// Precomputed because it is the case worth saying out loud, and a UI that
+    /// has to derive it will derive it in three places and differently.
+    pub unresolved: bool,
+}
+
+/// One partition's answer to a timestamp lookup.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedPartition {
+    /// Partition.
+    pub partition: i32,
+    /// The offset the instant resolved to, or `None` where the broker
+    /// reported none.
+    pub offset: Option<i64>,
+    /// The timestamp of the record at that offset, where the broker says.
+    pub timestamp: Option<i64>,
+    /// Why the lookup failed, where it failed rather than answered.
+    pub error: Option<String>,
+}
+
+/// How many records the server dropped rather than stall the scan.
+///
+/// Silently losing records in a debugging tool is worse than showing a gap,
+/// so this is emitted whenever the count changes and never suppressed.
+#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Dropped {
+    /// Records dropped since the stream opened.
+    pub count: u64,
+}
+
+/// The answer to "show me this one record".
+///
+/// Tagged the same way [`StreamRow`] is, and for the same reason: the row a
+/// reader selected might be a batch that would not decode, and the panel that
+/// opens has to be able to say so with the raw bytes rather than showing an
+/// empty record.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum MessageDetail {
+    /// The record, with its key, value and headers whole.
+    Record(Box<Message>),
+    /// The batch that covered the offset, as hex.
+    Malformed(MalformedDetail),
+}
+
+/// A batch that would not decode, with its bytes.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MalformedDetail {
+    /// Partition.
+    pub partition: i32,
+    /// The first offset the batch claimed.
+    pub offset: i64,
+    /// The last offset it claimed.
+    pub last_offset: i64,
+    /// Why it did not decode.
+    pub reason: String,
+    /// The raw batch, as hex. The only way to see what is actually on disk.
+    pub raw: Payload,
+}
+
+impl MessageDetail {
+    /// A detail for a record.
+    pub fn of(record: &Record) -> Self {
+        Self::Record(Box::new(Message::full(record)))
+    }
+}
+
+fn render_timestamp_type(timestamp_type: TimestampType) -> String {
+    match timestamp_type {
+        TimestampType::Creation => "createTime".to_owned(),
+        TimestampType::LogAppend => "logAppendTime".to_owned(),
     }
 }
 

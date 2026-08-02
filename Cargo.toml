@@ -8,7 +8,7 @@ members = [
 ]
 
 [workspace.package]
-version      = "0.1.4"
+version      = "0.2.0"
 edition      = "2024"
 license      = "Apache-2.0"
 repository   = "https://github.com/kaas-rs/kaas-ui"
@@ -20,10 +20,10 @@ rust-version = "1.97"
 # `cargo xtask link` writes a fenced [patch.crates-io] block for local
 # iteration against ../kaas-lib; `cargo xtask ci` fails if that fence was
 # committed.
-kafka-admin = "0.1"
-kafka-conn  = "0.1"
-kafka-meta  = "0.1"
-kafka-read  = "0.1"
+kafka-admin = "0.2"
+kafka-conn  = "0.2"
+kafka-meta  = "0.2"
+kafka-read  = "0.2"
 
 # HTTP
 axum       = { version = "0.8", features = ["macros", "http2"] }
@@ -77,3 +77,4 @@ missing_debug_implementations = "warn"
 lto           = "thin"
 codegen-units = 1
 strip         = true
+

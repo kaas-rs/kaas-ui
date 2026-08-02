@@ -30,12 +30,45 @@ pub struct Config {
 pub struct ServerConfig {
     /// Address to bind.
     pub listen: SocketAddr,
+    /// The path prefix a reverse proxy mounts kaas-ui under, if any.
+    ///
+    /// Empty — serving from `/` — is the normal case. Set it when something in
+    /// front rewrites the path away before kaas-ui sees it: code-server's
+    /// `/proxy/8099`, or an ingress hosting the app at `/kafka`.
+    ///
+    /// It has to be *told* rather than detected. A stripping proxy forwards no
+    /// record of what it removed — code-server sends no `X-Forwarded-Prefix`
+    /// and rewrites `Host` to its own — so the request that arrives is
+    /// indistinguishable from one made at the root.
+    ///
+    /// kaas-ui's own routes are unaffected: they are always rooted at `/`,
+    /// because the prefix is gone by the time a request is routed. All this
+    /// changes is the URLs `index.html` hands the browser.
+    pub base_path: String,
 }
 
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
             listen: SocketAddr::from(([0, 0, 0, 0], 8080)),
+            base_path: String::new(),
+        }
+    }
+}
+
+impl ServerConfig {
+    /// The prefix as a leading-slash, no-trailing-slash string.
+    ///
+    /// `""` for the root. Normalised here so every reader gets the same shape
+    /// whatever was typed — `/proxy/8099`, `proxy/8099/` and `/proxy/8099/`
+    /// are the same deployment, and three call sites each doing their own
+    /// trimming is how one of them ends up emitting `//assets/`.
+    pub fn base_prefix(&self) -> String {
+        let trimmed = self.base_path.trim().trim_matches('/');
+        if trimmed.is_empty() {
+            String::new()
+        } else {
+            format!("/{trimmed}")
         }
     }
 }
@@ -160,7 +193,8 @@ impl Config {
     /// Load from a YAML file, overlaid with `KAAS_UI_*` environment variables.
     ///
     /// The overlay uses `__` as the nesting separator, so
-    /// `KAAS_UI_SERVER__LISTEN=0.0.0.0:9000` sets `server.listen`.
+    /// `KAAS_UI_SERVER__LISTEN=0.0.0.0:9000` sets `server.listen`, and
+    /// `KAAS_UI_SERVER__BASE_PATH=/proxy/8099` sets the path prefix.
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
         let config: Config = Figment::new()
             .merge(Yaml::file_exact(path))
@@ -451,5 +485,63 @@ clusters:
         )
         .unwrap_err();
         assert!(format!("{err}").contains("go together"), "{err}");
+    }
+}
+
+#[cfg(test)]
+mod base_path_tests {
+    use super::*;
+
+    #[test]
+    fn the_root_is_the_default_and_normalises_to_nothing() {
+        assert_eq!(ServerConfig::default().base_prefix(), "");
+    }
+
+    #[test]
+    fn a_prefix_normalises_however_it_was_typed() {
+        // Three spellings of one deployment. Normalising in one place is what
+        // stops a caller from emitting `//assets/` by concatenating naively.
+        for written in [
+            "/proxy/8099",
+            "proxy/8099",
+            "/proxy/8099/",
+            "  /proxy/8099/  ",
+        ] {
+            let config = ServerConfig {
+                base_path: written.to_owned(),
+                ..ServerConfig::default()
+            };
+            assert_eq!(config.base_prefix(), "/proxy/8099", "from {written:?}");
+        }
+    }
+
+    #[test]
+    fn a_prefix_of_only_slashes_is_the_root() {
+        for written in ["", "/", "///", "   "] {
+            let config = ServerConfig {
+                base_path: written.to_owned(),
+                ..ServerConfig::default()
+            };
+            assert_eq!(config.base_prefix(), "", "from {written:?}");
+        }
+    }
+
+    #[test]
+    // `figment::Error` is a large type and `Jail` insists on it by signature.
+    #[allow(clippy::result_large_err)]
+    fn the_environment_overlay_reaches_it() {
+        // The route a debug session takes: no file edit, one variable.
+        figment::Jail::expect_with(|jail| {
+            // A real cluster, because `validate` rejects an empty registry —
+            // kaas-ui with nothing to show is a configuration mistake.
+            jail.create_file(
+                "kaas-ui.yaml",
+                "clusters:\n  - id: kaas\n    bootstrap: [\"broker:9092\"]\n",
+            )?;
+            jail.set_env("KAAS_UI_SERVER__BASE_PATH", "/proxy/8099");
+            let config = Config::load(std::path::Path::new("kaas-ui.yaml")).unwrap();
+            assert_eq!(config.server.base_prefix(), "/proxy/8099");
+            Ok(())
+        });
     }
 }

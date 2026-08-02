@@ -144,10 +144,82 @@ Against `kperf-bench` on both clusters — 16 partitions, ~40M records on `kaas`
 
 ## Exit criteria
 
-- [ ] tail under 5% of partition bytes, asserted on connection counters
-- [ ] `limit` means what the API says it means
-- [ ] scan streams, is bounded, and dies with its client
-- [ ] no `tokio::spawn` that outlives a response
-- [ ] malformed batch and malformed payload are visibly different rows
-- [ ] message view URL fully round-trips through search params
-- [ ] `kaas-ui-serde` has no axum dependency and no panic path
+- [x] tail under 5% of partition bytes, asserted on connection counters
+- [x] `limit` means what the API says it means
+- [x] scan streams, is bounded, and dies with its client
+- [ ] no `tokio::spawn` that outlives a response — **amended, see below**
+- [x] malformed batch and malformed payload are visibly different rows
+- [x] message view URL fully round-trips through search params
+- [ ] `kaas-ui-serde` has no axum dependency and no panic path — not yet built
+
+## Decisions this phase changed
+
+**The stream endpoint is `messages/stream`, and there are four routes, not
+two.** `messages` (one bounded page) exists for "load more" past the end of a
+window, and `messages/{partition}/{offset}` exists because no listing route
+ever sends a whole payload — a topic at 1 KB × 10k/s is 10 MB/s the browser
+would parse and never draw. The list shows a 256-character preview; the rest is
+fetched for the one record someone selected, cached with `staleTime: Infinity`
+because a record at an offset is immutable.
+
+**"No `tokio::spawn` that outlives a response" became "no spawn that *can*
+outlive one".** The pump has to be a task rather than an inline stream: the
+whole point of the bounded ring is that a slow reader loses old records instead
+of stalling the fetch loop, and only a separately-scheduled producer can do
+that. What preserves the original property is that the task selects on
+`tx.closed()`, so dropping the response drops the scan within a poll. The
+acceptance run abandons five streams and watches the slots come back, which is
+the property the original wording was reaching for.
+
+**The `scan` events do not map 1:1 onto SSE events.** Records are batched on a
+100 ms interval — one event per record saturates the browser's parser long
+before the list does — and malformed batches ride inside `messages` as a row
+kind rather than in `error`. Both are recorded in
+[reference/http-contract.md](reference/http-contract.md).
+
+**Two changes were needed in kaas-lib, not one.** The anchored tail was
+expected. What was not: `scan` from `StartPosition::Latest` finished in seven
+milliseconds having emitted nothing, because a partition starting at its own
+log end is marked finished — which looks exactly like a working live view of an
+idle topic. `ScanSpec::following` fixes it downstairs, where version and
+implementation knowledge belongs. A third fix came out of the same session:
+`scan` from an offset emitted records *before* it, because a fetch begins at
+the batch containing the offset and only the backward walk was filtering.
+
+**A shutdown has to end the streams, not wait for them.** Found by running,
+after the process refused to exit on SIGTERM. `with_graceful_shutdown` stops
+accepting and waits for in-flight connections, and an SSE response is an
+unbounded body — it completes when the stream does, and a live tail's stream
+completes when the client leaves or its lifetime expires. A shutdown is
+neither, so the drain waited on a response that would never finish and the
+process had to be killed. In Kubernetes that is the full
+`terminationGracePeriodSeconds` on every rollout, with every open stream
+severed by SIGKILL and no `phase: done` to tell the client a deploy happened
+rather than a network fault.
+
+The fix is a latch every open stream watches: on SIGTERM the pump emits
+`phase: done`, drops the scan, and the body completes. 30+ seconds became
+~50 ms, and `cargo xtask live` asserts it with three streams open. A ten-second
+drain deadline backs it up, because the choice is not "wait longer or lose
+data" — it is "exit tidily now, or be SIGKILLed at the deadline having waited
+anyway".
+
+**A proxy in front will buffer the stream unless told not to.** `Cache-Control:
+no-transform` and `X-Accel-Buffering: no`, and they are not optional: through
+the Cloudflare tunnel that fronts this cluster the browser received *nothing*
+without them, while the same stream through code-server alone delivered 4.4 KB
+in five seconds. Every layer reported success — the request simply stayed open
+and empty, which is the hardest kind of failure to attribute.
+
+**Time seeks are reported, not interpreted.** `kaas` holds no timestamp index
+and answers a time seek with no offset at all — a legitimate response, and
+indistinguishable from "nothing was written since". Rather than guess, the
+stream carries a `resolved` block naming what each partition said, and the UI
+renders it beside the empty window. See
+[reference/environment.md](reference/environment.md).
+
+**`kaas-ui-serde` still does not exist.** Payload rendering is `Payload::of` in
+`kaas-ui-core::dto` — UTF-8 where the bytes are text, hex where they are not,
+with the encoding said out loud. That is the sniff order this phase called for
+minus the JSON step and minus the per-topic override, and the crate is created
+by the phase that fills it rather than up front.

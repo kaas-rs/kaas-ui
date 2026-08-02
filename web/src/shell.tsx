@@ -1,7 +1,6 @@
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
 import { useEffect, useState, type ReactNode } from "react";
 import {
-  BookOpen,
   ChevronRight,
   Cog,
   Layers,
@@ -247,18 +246,6 @@ export function Shell() {
                   <Link to="/">
                     <ScrollText aria-hidden />
                     <span>fleet</span>
-                  </Link>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  asChild
-                  isActive={pathname === "/api-docs"}
-                  tooltip="API"
-                >
-                  <Link to="/api-docs">
-                    <BookOpen aria-hidden />
-                    <span>api</span>
                   </Link>
                 </SidebarMenuButton>
               </SidebarMenuItem>

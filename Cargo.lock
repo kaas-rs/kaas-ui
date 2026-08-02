@@ -95,6 +95,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-stream"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b5a71a6f37880a80d1d7f19efd781e4b5de42c88f0722cc13bcb6cc2cfe8476"
+dependencies = [
+ "async-stream-impl",
+ "futures-core",
+ "pin-project-lite",
+]
+
+[[package]]
+name = "async-stream-impl"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7c24de15d275a1ecfd47a380fb4d5ec9bfe0933f309ed5e705b775596a3574d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "atomic"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -956,10 +978,12 @@ dependencies = [
 
 [[package]]
 name = "kaas-ui-api"
-version = "0.1.4"
+version = "0.2.0"
 dependencies = [
  "arc-swap",
+ "async-stream",
  "axum",
+ "bytes",
  "futures",
  "kaas-ui-core",
  "kafka-admin",
@@ -975,7 +999,7 @@ dependencies = [
 
 [[package]]
 name = "kaas-ui-core"
-version = "0.1.4"
+version = "0.2.0"
 dependencies = [
  "arc-swap",
  "figment",
@@ -994,7 +1018,7 @@ dependencies = [
 
 [[package]]
 name = "kaas-ui-server"
-version = "0.1.4"
+version = "0.2.0"
 dependencies = [
  "arc-swap",
  "axum",
@@ -1012,9 +1036,9 @@ dependencies = [
 
 [[package]]
 name = "kafka-admin"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ae03d1f1d163b274cfaeb7a28d9bb89df3f155f602908188b9323125b4de72d"
+checksum = "c1a96bee098e491a5ff29a86ad850088229f7e708210a429269fe701ddd6a1b6"
 dependencies = [
  "bytes",
  "futures",
@@ -1028,9 +1052,9 @@ dependencies = [
 
 [[package]]
 name = "kafka-conn"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "796f7a82ae1886d65a0f060d193d05b4f449cdbce42640560ff8fba479193cbe"
+checksum = "f9872a35d5445dfcd8da242fb3b2b9724bc7e36594b19ccf21eff66a5f28eeb5"
 dependencies = [
  "base64 0.23.0",
  "bytes",
@@ -1055,9 +1079,9 @@ dependencies = [
 
 [[package]]
 name = "kafka-meta"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "492f9607c12bfcab5c6741c0206b952ab7b74e19d047e5c890df0e7d0a1ef6cc"
+checksum = "5343b98fb3345810c507fb79c6089c7f2a6d26d5599e3569c97c226f7e5fb546"
 dependencies = [
  "arc-swap",
  "bytes",
@@ -1091,9 +1115,9 @@ dependencies = [
 
 [[package]]
 name = "kafka-read"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d92ea0a524bea425c8c5fc04b6689cb4fbdbf672b4fd377b1756ffe0a9338440"
+checksum = "843f54e382e7261633ca4c4c0855855310f9c40aa49beb0db40a30dc55c08b49"
 dependencies = [
  "anyhow",
  "bytes",
@@ -1687,7 +1711,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2039,10 +2063,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2629,7 +2653,7 @@ checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
 
 [[package]]
 name = "xtask"
-version = "0.1.4"
+version = "0.2.0"
 dependencies = [
  "kaas-ui-api",
  "reqwest",

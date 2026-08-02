@@ -48,6 +48,23 @@ fn suffix(detail: &str) -> String {
 /// A server started for the duration of the run, and stopped after it.
 struct Server(Child);
 
+impl Server {
+    fn pid(&self) -> u32 {
+        self.0.id()
+    }
+
+    /// Whether the process has actually gone.
+    ///
+    /// `try_wait` and not a `/proc/<pid>` check: this is a *child* process, so
+    /// between exiting and being reaped it is a zombie — and a zombie still
+    /// has a `/proc` entry. Polling the filesystem here reports a clean
+    /// shutdown as a hang, which is exactly how this assertion first failed
+    /// against a server that was shutting down correctly.
+    fn exited(&mut self) -> bool {
+        matches!(self.0.try_wait(), Ok(Some(_)))
+    }
+}
+
 impl Drop for Server {
     fn drop(&mut self) {
         let _ = self.0.kill();
@@ -82,10 +99,16 @@ pub fn run(args: &[String]) -> Task {
         .stderr(Stdio::inherit())
         .spawn()
         .map_err(|error| format!("could not start kaas-ui: {error}"))?;
-    let _server = Server(child);
+    let mut server = Server(child);
 
     let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
-    let outcome = runtime.block_on(assertions());
+    let mut outcome = runtime.block_on(assertions());
+
+    // Last, because it stops the server. Kept out of `assertions()` for that
+    // reason: everything above needs it running.
+    if let Ok(acceptance) = &mut outcome {
+        runtime.block_on(drains_with_streams_open(acceptance, &mut server));
+    }
 
     match outcome {
         Ok(acceptance) if acceptance.failures.is_empty() => {
@@ -100,6 +123,86 @@ pub fn run(args: &[String]) -> Task {
         )),
         Err(error) => Err(error),
     }
+}
+
+/// A shutdown with message streams open must not wait for them.
+///
+/// The regression this guards is silent and expensive: an SSE response is an
+/// unbounded body, so a draining server waits on one that never completes.
+/// Before the shutdown latch this hung until SIGKILL — in Kubernetes, the full
+/// `terminationGracePeriodSeconds` on every rollout, with every open stream
+/// severed and no `phase: done` to tell the client a deploy happened rather
+/// than a network fault.
+async fn drains_with_streams_open(acceptance: &mut Acceptance, server: &mut Server) {
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(60))
+        .build()
+    {
+        Ok(client) => client,
+        Err(error) => {
+            acceptance.check("a shutdown drains open streams", Err(error.to_string()));
+            return;
+        }
+    };
+
+    // Held open for the duration: the responses are alive, so the connections
+    // are, which is exactly a browser sitting on the message view.
+    let mut held = Vec::new();
+    for partition in 0..3 {
+        let opened = client
+            .get(url(&format!(
+                "/api/clusters/kaas/topics/kperf-bench/messages/stream?mode=live&partitions={partition}"
+            )))
+            .send()
+            .await;
+        if let Ok(response) = opened {
+            held.push(response);
+        }
+    }
+    if held.is_empty() {
+        acceptance.check(
+            "a shutdown drains open streams",
+            Err("no stream could be opened to test with".to_owned()),
+        );
+        return;
+    }
+
+    let pid = server.pid();
+    let started = Instant::now();
+    let signalled = Command::new("kill")
+        .args(["-TERM", &pid.to_string()])
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false);
+    if !signalled {
+        acceptance.check(
+            "a shutdown drains open streams",
+            Err(format!("could not signal pid {pid}")),
+        );
+        return;
+    }
+
+    let exited = loop {
+        if server.exited() {
+            break true;
+        }
+        if started.elapsed() > Duration::from_secs(10) {
+            break false;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    let took = started.elapsed();
+
+    acceptance.check(
+        &format!("a shutdown drains {} open streams", held.len()),
+        if exited && took < Duration::from_secs(5) {
+            Ok(format!("{took:?}"))
+        } else if exited {
+            Err(format!("took {took:?}"))
+        } else {
+            Err("never exited; SIGKILL would be required".to_owned())
+        },
+    );
 }
 
 fn url(path: &str) -> String {
@@ -408,6 +511,295 @@ async fn assertions() -> Result<Acceptance, String> {
                 },
             );
         }
+    }
+
+    // --- messages: the seven seek modes -------------------------------------
+    for id in &ids {
+        let topics = get(&client, &format!("/api/clusters/{id}/topics")).await?;
+        let has_bench = topics["items"]
+            .as_array()
+            .is_some_and(|list| list.iter().any(|topic| topic["name"] == "kperf-bench"));
+        if !has_bench {
+            continue;
+        }
+        let base = format!("/api/clusters/{id}/topics/kperf-bench");
+
+        // `toOffset` is the assertion the kaas-lib anchor change exists for,
+        // and the one an off-by-one hides in: a window that stops one short
+        // still looks entirely plausible.
+        let anchored = get(
+            &client,
+            &format!("{base}/messages?mode=toOffset&offset=1000000&limit=5&partitions=0"),
+        )
+        .await?;
+        let offsets: Vec<i64> = anchored["items"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|row| row["offset"].as_i64())
+            .collect();
+        acceptance.check(
+            &format!("{id}: toOffset includes the anchor and nothing above it"),
+            if offsets.first() == Some(&1_000_000)
+                && offsets.iter().all(|offset| *offset <= 1_000_000)
+            {
+                Ok(format!("{offsets:?}"))
+            } else {
+                Err(format!("got {offsets:?}"))
+            },
+        );
+
+        // The other half of the same property: a forward read must begin at
+        // the offset asked for, not at the base of the batch containing it.
+        let forward = get(
+            &client,
+            &format!("{base}/messages?mode=fromOffset&offset=1000037&limit=5&partitions=0"),
+        )
+        .await?;
+        let first = forward["items"][0]["offset"].as_i64();
+        acceptance.check(
+            &format!("{id}: fromOffset starts at the offset, not its batch"),
+            if first == Some(1_000_037) {
+                Ok(format!("{first:?}"))
+            } else {
+                Err(format!("started at {first:?}, expected 1000037"))
+            },
+        );
+
+        // One record, fetched the way the detail panel fetches it.
+        let one = get(&client, &format!("{base}/messages/0/1000037")).await?;
+        acceptance.check(
+            &format!("{id}: a single message is fetched by partition and offset"),
+            if one["offset"].as_i64() == Some(1_000_037) && one["kind"] == "record" {
+                Ok(format!("{} bytes", one["value"]["bytes"]))
+            } else {
+                Err(format!("got {one}"))
+            },
+        );
+
+        let missing = client
+            .get(url(&format!("{base}/messages/0/99999999999")))
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        acceptance.check(
+            &format!("{id}: an offset past the end is 404, not the last record"),
+            if missing.status() == reqwest::StatusCode::NOT_FOUND {
+                Ok(String::new())
+            } else {
+                Err(format!("got {}", missing.status()))
+            },
+        );
+
+        // A time seek is answered or it is not, and either way the answer is
+        // reported rather than interpreted. `kaas` holds no timestamp index
+        // and resolves to nothing; Strimzi resolves precisely. Both are
+        // acceptable — silently showing the wrong window is not.
+        let timestamp = forward["items"][0]["timestamp"].as_i64().unwrap_or(0);
+        let seeked = get(
+            &client,
+            &format!("{base}/messages?mode=sinceTime&timestamp={timestamp}&limit=3&partitions=0"),
+        )
+        .await?;
+        let unresolved = seeked["resolved"]["unresolved"].as_bool();
+        let rows = seeked["items"].as_array().map_or(0, Vec::len);
+        acceptance.check(
+            &format!("{id}: a time seek reports what it resolved to"),
+            match unresolved {
+                Some(true) if rows == 0 => Ok("resolved to nothing, and says so".to_owned()),
+                Some(false) if rows > 0 => Ok(format!("{rows} rows")),
+                Some(true) => Err(format!("{rows} rows from an unresolved seek")),
+                Some(false) => Err("resolved, but returned nothing".to_owned()),
+                None => Err("no resolved block on a time mode".to_owned()),
+            },
+        );
+
+        // The stream, over SSE. A backward window has no partial results, so
+        // it must announce `seeking` before it announces anything else.
+        let stream = client
+            .get(url(&format!(
+                "{base}/messages/stream?mode=newest&limit=4&partitions=0"
+            )))
+            .timeout(Duration::from_secs(30))
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        let content_type = stream
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_owned();
+        let compressed = stream.headers().contains_key("content-encoding");
+        let body = stream.text().await.map_err(|e| e.to_string())?;
+
+        acceptance.check(
+            &format!("{id}: the stream is an uncompressed event stream"),
+            if content_type.starts_with("text/event-stream") && !compressed {
+                Ok(content_type.clone())
+            } else {
+                // Compressing SSE holds every event in a buffer until it
+                // fills, which reads as a stream that works but lags by
+                // minutes.
+                Err(format!("{content_type}, compressed={compressed}"))
+            },
+        );
+
+        let phases: Vec<&str> = body
+            .lines()
+            .filter_map(|line| line.strip_prefix("data: {\"phase\":\""))
+            .filter_map(|rest| rest.split('"').next())
+            .collect();
+        acceptance.check(
+            &format!("{id}: a backward window seeks, streams, then ends"),
+            if phases == ["seeking", "streaming", "done"] {
+                Ok(phases.join(" → "))
+            } else {
+                Err(format!("{phases:?}"))
+            },
+        );
+
+        acceptance.check(
+            &format!("{id}: every messages event carries its last row's id"),
+            if body
+                .lines()
+                .filter(|line| line.starts_with("id: "))
+                .all(|line| line.trim_start_matches("id: ").contains('-'))
+                && body.contains("id: 0-")
+            {
+                Ok(String::new())
+            } else {
+                Err("no {partition}-{offset} id on the batch".to_owned())
+            },
+        );
+    }
+
+    // --- streams are bounded, and the bound releases -------------------------
+    {
+        let target = ids.first().cloned().unwrap_or_default();
+        let stream_url = url(&format!(
+            "/api/clusters/{target}/topics/kperf-bench/messages/stream?mode=live"
+        ));
+
+        // Five is the per-caller ceiling, and it applies only to a caller a
+        // forwarded header actually names. This request arrives straight at
+        // the binary, so without the header every stream here would share the
+        // peer address — the case that must *not* be rationed, because behind
+        // a proxy that key is the proxy rather than a person.
+        let mut held = Vec::new();
+        for _ in 0..5 {
+            if let Ok(response) = client
+                .get(&stream_url)
+                .header("x-forwarded-for", "203.0.113.7")
+                .timeout(Duration::from_secs(60))
+                .send()
+                .await
+            {
+                held.push(response);
+            }
+        }
+
+        // A sixth now *evicts* rather than refuses. Refusing only frees a
+        // slot when the server notices a reader has gone, and behind this
+        // deployment's two proxies — a Cloudflare tunnel into code-server —
+        // it never does: the upstream connection outlives the browser, so an
+        // abandoned stream held its slot for the full lifetime cap and five
+        // reloads locked a person out of their own tool.
+        let sixth = client
+            .get(&stream_url)
+            .header("x-forwarded-for", "203.0.113.7")
+            .timeout(Duration::from_secs(10))
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        acceptance.check(
+            "a sixth stream from one named caller is served, not refused",
+            if sixth.status().is_success() {
+                Ok(String::new())
+            } else {
+                Err(format!("got {}", sixth.status()))
+            },
+        );
+
+        // And the caller is still bounded: the oldest was closed to make room.
+        let oldest = held.remove(0);
+        let ended = tokio::time::timeout(Duration::from_secs(5), oldest.text()).await;
+        acceptance.check(
+            "and their oldest is closed to make room",
+            match ended {
+                Ok(Ok(body)) if body.contains("\"phase\":\"done\"") => {
+                    Ok("evicted with phase: done".to_owned())
+                }
+                Ok(Ok(_)) => Err("ended without telling the client why".to_owned()),
+                Ok(Err(error)) => Err(error.to_string()),
+                Err(_) => Err("the evicted stream never ended".to_owned()),
+            },
+        );
+
+        // A different caller is untouched, which is the point of counting per
+        // caller rather than only in total.
+        let other = client
+            .get(&stream_url)
+            .header("x-forwarded-for", "203.0.113.8")
+            .timeout(Duration::from_secs(10))
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        acceptance.check(
+            "a different named caller is unaffected",
+            if other.status().is_success() {
+                Ok(String::new())
+            } else {
+                Err(format!("got {}", other.status()))
+            },
+        );
+
+        // And a caller nothing identifies — every browser behind code-server's
+        // proxy — must be neither capped nor evicted.
+        let mut anonymous = Vec::new();
+        for _ in 0..8 {
+            if let Ok(response) = client
+                .get(&stream_url)
+                .timeout(Duration::from_secs(30))
+                .send()
+                .await
+            {
+                anonymous.push(response.status());
+            }
+        }
+        acceptance.check(
+            "callers a proxy makes indistinguishable are not capped at 5",
+            if anonymous.len() == 8 && anonymous.iter().all(reqwest::StatusCode::is_success) {
+                Ok(format!("{} opened", anonymous.len()))
+            } else {
+                Err(format!("statuses {anonymous:?}"))
+            },
+        );
+        drop(anonymous);
+        drop(other);
+        drop(sixth);
+
+        // Dropping the responses is exactly what a closed browser tab does.
+        // The permit releases on drop and nowhere else, so this also proves
+        // the scan behind each one was dropped with it.
+        drop(held);
+        tokio::time::sleep(Duration::from_secs(2)).await;
+
+        let after = client
+            .get(&stream_url)
+            .timeout(Duration::from_secs(10))
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        acceptance.check(
+            "abandoning a stream releases its slot within 5s",
+            if after.status().is_success() {
+                Ok(String::new())
+            } else {
+                Err(format!("still refused: {}", after.status()))
+            },
+        );
     }
 
     // --- groups -------------------------------------------------------------

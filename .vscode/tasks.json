@@ -1,0 +1,45 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      // Vite on :5173, proxying /api and /health to the binary on :8099 —
+      // so the debugger keeps the Rust side and the browser gets hot reload,
+      // without rebuilding the binary for a CSS change.
+      "label": "web: vite dev server",
+      "type": "shell",
+      "command": "npm run dev",
+      "options": { "cwd": "${workspaceFolder}/web" },
+      "isBackground": true,
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      // Only needed when running the *binary's* embedded copy rather than the
+      // dev server. rust-embed reads web/dist at compile time, so this has to
+      // run before `cargo build` for a frontend change to appear.
+      "label": "web: build into the binary",
+      "type": "shell",
+      "command": "npm run build",
+      "options": { "cwd": "${workspaceFolder}/web" },
+      "problemMatcher": [],
+      "group": "build"
+    },
+    {
+      "label": "cargo xtask ci",
+      "type": "shell",
+      "command": "cargo xtask ci",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": ["$rustc"],
+      "group": "test"
+    },
+    {
+      // Talks to the real clusters. Starts its own server on 18099.
+      "label": "cargo xtask live",
+      "type": "shell",
+      "command": "cargo xtask live --config config.dev.yaml",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": [],
+      "group": "test"
+    }
+  ]
+}

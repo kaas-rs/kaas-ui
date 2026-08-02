@@ -168,3 +168,8 @@ active nav, focus ring, selected edge. For accent text on light use
   `Unrecognized` is a *successful* description of an undescribable group.
 - **Lag has four states** — no commit, empty partition, caught up, lagging —
   and they must not all render as `0`.
+- **An `Unknown` api key is expected output, not a gap to close here.** Keys 88
+  and 89 on Strimzi are the live case. Naming them in kaas-ui means a version
+  table in kaas-ui, which is rule 2 with extra steps — the fix is a
+  `kafka-protocol` bump in kaas-lib. Same for `brokerAhead` rows. See
+  `docs/reference/environment.md`.

@@ -102,6 +102,49 @@ name at all: **88 and 89**, `StreamsGroupHeartbeat` and `StreamsGroupDescribe`.
 
 Against `kaas` both counts are zero. Running the pair exercises both branches.
 
+**On the capabilities page this is expected output, not a defect.** 88 and 89
+render as `Unknown` with `ours: null` and `negotiated: null`; the 8 render with
+`brokerAhead: true` and negotiate down to our max. Nothing degrades — none of
+the 8 backs a feature kaas-ui uses, and `strimzi` reports every feature
+`available`.
+
+Three things mislead if you go looking, all of them kaas-lib's business rather
+than ours:
+
+- **88/89 are a hole, not a truncation.** `kafka-protocol` 0.17's `ApiKey` enum
+  runs `ReadShareGroupStateSummary = 87` straight to
+  `DescribeShareGroupOffsets = 90`. It knows three keys *above* the two it is
+  missing, so "the codec stops at key N" does not explain it, and a bump that
+  raises the ceiling elsewhere need not fill this.
+- **`InitProducerId` reports `ours: [0,6]` against a broker's `[0,5]`** — our
+  ceiling *above* the broker's, which reads like a bug and is not. `ours` is
+  `ApiKey::valid_versions()`, which takes the wider of the request's and the
+  response's range; the request stops at v5. It negotiates 5 and sends 5,
+  because kaas-lib's wire path uses `negotiate_with` and the typed ranges.
+- **`ours` is never a kaas-ui or kaas-lib decision.** It is
+  `ApiKey::valid_versions()` verbatim — a fact about the codec crate. The
+  remedy for every row above is one `kafka-protocol` bump upstream, and
+  **0.17.0 is the latest published**, so there is nothing to bump to yet.
+
+Documented upstream in
+[Version negotiation](https://kaas-rs.github.io/kaas-lib/architecture/version-negotiation.html)
+and [The upstream schema gap](https://kaas-rs.github.io/kaas-lib/compat/upstream-gap.html).
+
+#### Known issue: both unnameable keys render as bare `Unknown`
+
+This one *is* ours. `ApiKeyEntry.name` in `kaas-ui-core/src/capabilities.rs`
+documents itself as *"the key's name, or `Unknown(n)` where this build has
+none"*, but assigns `entry.api_key.name()`, which returns the bare string
+`"Unknown"`. So 88 and 89 arrive as two identical `Unknown` rows,
+distinguishable only by the `key` column, and the field does not do what its
+own comment says.
+
+kaas-lib's `Display` impl already writes `Unknown(89)` and falls through to
+`name()` for every named key, so `entry.api_key.to_string()` is the whole fix
+and changes none of the other 73 rows. Not urgent — no information is lost,
+`key` carries the number — but it is a doc-versus-behaviour mismatch on a
+surface whose entire job is to be legible.
+
 ### The read path, on real data
 
 `kperf-bench` is 16 partitions and ~40M records on `kaas`, ~45M on Strimzi. It
@@ -121,6 +164,36 @@ Two things to carry forward:
 - **~325 KB to reach the tail of a 40M-record topic** is the backward walk
   working. Phase 3's acceptance asserts on this via `ConnectionStats`, and the
   numbers above are the baseline.
+
+### `kaas` answers a timestamp seek with nothing
+
+Found by running the two time modes side by side, and the sharpest degradation
+fixture in the environment so far because **both clusters are behaving
+correctly**.
+
+`ListOffsets` answers "the first offset at or after this instant". Asked about
+an instant well inside retention:
+
+```
+strimzi  sinceTime(t) -> p0 = 999993 @ t, p1 = 1123840 @ t+1     (resolved)
+kaas     sinceTime(t) -> p0 = none,       p1 = none              (unresolved)
+```
+
+`kaas` advertises `ListOffsets` v1–7, so it speaks the request — v1 is where
+timestamp lookup arrives. It simply has no timestamp index to answer from, and
+"no offset at or after" is a legitimate response. It is also **the same
+response as "nothing has been written since then"**, and nothing in the
+protocol distinguishes them.
+
+Neither kaas-lib nor kaas-ui can tell those apart, and neither should try:
+inferring that a broker "must" have an index is precisely the version knowledge
+that CLAUDE.md rule 2 keeps out of the UI. So the answer is *reported* rather
+than interpreted — the stream and the page both carry a `resolved` block naming
+what each partition said, and the UI renders "this cluster resolved 14:30 to no
+offset on any of its 16 partitions" beside the empty window.
+
+The consequence for anyone reading `kaas`: **seek by offset, not by time.** The
+offset modes are exact on both clusters.
 
 ## Reusing kaas-lib's `livetest`
 

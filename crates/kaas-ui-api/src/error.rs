@@ -87,6 +87,48 @@ impl ApiError {
         }
     }
 
+    /// `404`. There is no record at that offset.
+    ///
+    /// Distinct from a missing topic: the topic is there, and the offset is
+    /// either past its end, below what it still retains, or — on a compacted
+    /// topic — a gap where a record used to be. All three are "that row is not
+    /// there", which is what a detail panel needs to say.
+    pub fn offset_out_of_range(topic: &str, partition: i32, offset: i64) -> Self {
+        Self {
+            status: StatusCode::NOT_FOUND,
+            body: ApiErrorBody {
+                message: format!(
+                    "{topic}-{partition} holds no record at offset {offset}: it is outside the \
+                     retained range, or was compacted away"
+                ),
+                kind: Some(ErrorKind::Broker),
+                code: Some("OFFSET_OUT_OF_RANGE".to_owned()),
+                code_number: None,
+                unsupported_api: None,
+                retriable: false,
+            },
+        }
+    }
+
+    /// `429`. Too many streams are open to start another.
+    ///
+    /// A ceiling rather than a queue: a caller who is told to wait sits on a
+    /// connection doing nothing, and a message stream is exactly the kind of
+    /// request someone opens five of and forgets.
+    pub fn too_many_requests(what: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            body: ApiErrorBody {
+                message: what.into(),
+                kind: Some(ErrorKind::Invalid),
+                code: None,
+                code_number: None,
+                unsupported_api: None,
+                retriable: true,
+            },
+        }
+    }
+
     /// `504`. A cluster call ran past the request ceiling.
     pub fn timed_out(what: &str, after: std::time::Duration) -> Self {
         Self {

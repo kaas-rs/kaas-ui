@@ -31,6 +31,7 @@ use kafka_admin::Admin;
 pub mod error;
 pub mod openapi;
 pub mod routes;
+pub mod streaming;
 
 pub use error::{ApiError, ApiResult};
 
@@ -49,17 +50,49 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(20);
 #[derive(Debug, Clone)]
 pub struct AppState {
     registry: Arc<ArcSwap<Registry>>,
+    streams: Arc<streaming::StreamGovernor>,
+    stopping: Arc<streaming::ShutdownSignal>,
+    shutdown: streaming::Shutdown,
 }
 
 impl AppState {
     /// Wrap a registry.
     pub fn new(registry: Arc<ArcSwap<Registry>>) -> Self {
-        Self { registry }
+        let (stopping, shutdown) = streaming::shutdown_latch();
+        Self {
+            registry,
+            streams: Arc::new(streaming::StreamGovernor::default()),
+            stopping: Arc::new(stopping),
+            shutdown,
+        }
     }
 
     /// The current registry.
     pub fn registry(&self) -> arc_swap::Guard<Arc<Registry>> {
         self.registry.load()
+    }
+
+    /// How many message streams are open.
+    ///
+    /// Held here rather than per-router so a configuration reload — which
+    /// replaces the registry wholesale — cannot reset the count and let the
+    /// ceilings be walked through by editing a file.
+    pub fn streams(&self) -> &Arc<streaming::StreamGovernor> {
+        &self.streams
+    }
+
+    /// The latch every open stream watches.
+    pub fn shutdown(&self) -> streaming::Shutdown {
+        self.shutdown.clone()
+    }
+
+    /// Tell every open stream to finish, and stay told.
+    ///
+    /// Called once, from the signal handler. Without it a draining server
+    /// waits on SSE responses that never complete — see
+    /// [`streaming::Shutdown`].
+    pub fn stop_streams(&self) {
+        self.stopping.stop();
     }
 
     /// **The only cluster lookup.**
@@ -155,8 +188,23 @@ fn api_router() -> Router<AppState> {
             get(topics::offsets),
         )
         .route(
+            "/clusters/{id}/topics/{topic}/messages",
+            get(messages::page),
+        )
+        .route(
             "/clusters/{id}/topics/{topic}/messages/tail",
             get(messages::tail),
+        )
+        .route(
+            "/clusters/{id}/topics/{topic}/messages/stream",
+            get(messages::stream),
+        )
+        // Two path parameters rather than a query, because a record's identity
+        // *is* `{partition}-{offset}` — the same string the list keys on, the
+        // SSE `id:` carries and the query cache is keyed by.
+        .route(
+            "/clusters/{id}/topics/{topic}/messages/{partition}/{offset}",
+            get(messages::one),
         )
         .route("/clusters/{id}/groups", get(groups::list))
         .route("/clusters/{id}/groups/{group}", get(groups::detail))

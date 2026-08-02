@@ -20,6 +20,7 @@ sequenced entirely on its own merits.
 | 8 | `ListConfigResources` (70) | Phase 1 | low |
 | 9 | upstream `kafka-protocol` contributions | Phase 5 | low, long lead |
 | 10 | `topic_offset_range` will not compile in an axum handler | Phase 2 | **worked around** |
+| 11 | streaming reads share a connection with everything else | Phase 3 | **high — a live view degrades the whole cluster's UI** |
 
 ---
 
@@ -198,6 +199,52 @@ refreshes metadata first, which a list view must not do per row.
 **The fix upstream** is to collect the partition list into an owned `Vec`
 before the await rather than mapping lazily across it. One line, and it makes
 the helper usable from the only kind of caller a UI has.
+
+## 11. Streaming reads need a connection they do not share
+
+**Found by running, and it is the sharpest performance problem in the project
+so far.** A live message view makes every other view of that cluster slow.
+
+`BrokerPool` keeps **one connection per broker**, shared by every caller, and
+Kafka answers a connection's requests **in order**. A live tail long-polls with
+`ScanSpec::max_wait_ms`, so its `Fetch` sits at the head of that queue and
+delays every `ListOffsets`, `Metadata` and `DescribeTopics` behind it. The
+delays add up per open stream.
+
+Measured against the Strimzi cluster, on a call that is otherwise 2 ms:
+
+```
+no streams open                     2 ms
+6 live streams, max_wait_ms = 500   3000-4000 ms
+6 live streams, max_wait_ms = 100    940-1200 ms
+a process with ~18 abandoned polls  7500-9000 ms
+```
+
+`max_in_flight` does not help — its own documentation says so: *"the broker
+processes a connection's requests in order either way, so this is about
+pipelining, not parallelism."*
+
+kaas-ui has mitigated what it can by lowering `max_wait_ms` for live scans,
+which divides the constant and does not remove it. The ceiling makes that
+plain: the stream governor allows 50 concurrent streams, and at 100 ms each
+that is still five seconds of queueing for an unrelated request.
+
+**The fix belongs downstairs**, because it is about how the pool is shaped:
+
+```rust
+// on BrokerPool — a caller that intends to hold a request open for a long
+// time should be able to say so and get a connection nobody else waits behind.
+pub async fn get_dedicated(&self, node_id: i32) -> Result<Connection>;
+```
+
+Or, equivalently, `scan` opening its own connections when following. Either
+way the property wanted is that **a long poll never shares a socket with a
+request that expects to be fast**.
+
+This also interacts with the UI's own ceilings: until it lands, "how many live
+views may be open at once" is a question about someone else's latency rather
+than about memory, which is not a trade-off the stream governor can reason
+about.
 
 ---
 

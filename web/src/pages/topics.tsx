@@ -7,6 +7,7 @@ import {
   ChevronRight,
   Clock,
   FileText,
+  Radio,
   RefreshCw,
   Search,
 } from "lucide-react";
@@ -503,6 +504,20 @@ function Messages({ clusterId, topic }: { clusterId: string; topic: string }) {
             <ArrowDown aria-hidden className="size-3" />
             newest first
           </Badge>
+          {/* The tail is a snapshot: bounded, cacheable, and the view most
+              people want. Following the topic as it moves — and the six other
+              ways to seek into it — is a page of its own, because the split
+              pane needs the height and the URL needs to own the whole view. */}
+          <Button asChild size="sm" variant="outline">
+            <Link
+              to="/clusters/$clusterId/topics/$topic/messages"
+              params={{ clusterId, topic }}
+              search={{ mode: "live", visibility: "all" }}
+            >
+              <Radio aria-hidden className="size-3.5" />
+              live stream
+            </Link>
+          </Button>
         </div>
 
         <div className="flex items-end gap-3">

@@ -35,11 +35,13 @@ clusters:
 
 `--check` loads the configuration and reports what it says without serving.
 `--openapi` prints the OpenAPI document and exits; the running server serves
-the same document at `GET /api/openapi.json` and renders it at `/api-docs`.
+the same document at `GET /api/openapi.json`.
 
-There is no Swagger UI: it would have cost 2–3 MB on a 5 MB image for a
-try-it console that, on an API with one verb and no request bodies, is a link.
-The document is the same document either way.
+The document is not rendered in the app. There is no Swagger UI either — it
+would have cost 2–3 MB on a 5 MB image for a try-it console that, on an API
+with one verb and no request bodies, is a link. Point whatever reads OpenAPI
+at `/api/openapi.json`; `cargo xtask docs` writes the same document to
+`docs/openapi.json`.
 
 The file is re-read every five seconds. A change **swaps the registry**,
 reusing the handle of every cluster that did not change — adding a cluster does
@@ -55,6 +57,42 @@ cd web && npm run build             # what the release binary embeds
 `rust-embed` pulls `web/dist` in at **compile** time, which is why the
 frontend stage of the container build runs first.
 
+### Behind a path prefix
+
+kaas-ui serves from `/` and that is the normal case. To host it somewhere else
+— a reverse proxy mounting it at `/kafka`, or code-server's `/proxy/8099` —
+tell the server, and change nothing else:
+
+```yaml
+server:
+  base_path: "/kafka"
+```
+
+or `KAAS_UI_SERVER__BASE_PATH=/kafka`. **The frontend is not rebuilt for this.**
+One `npm run build` works at every prefix: the binary rewrites `index.html` as
+it serves it, pointing the asset URLs at the prefix and adding a `<base>`
+element that the router's `basepath` and every URL built in JavaScript read
+back. A bundle compiled for one deployment would 404 its own assets in any
+other, which is a trap worth not setting.
+
+The prefix has to be *told* because it cannot be detected: a stripping proxy
+forwards no record of what it removed — code-server sends no
+`X-Forwarded-Prefix` and rewrites `Host` to its own — so the arriving request
+is indistinguishable from one made at the root.
+
+**The proxy must strip the prefix**, which code-server and a rewriting ingress
+both do: the browser asks for `/kafka/api/clusters` and the server is handed
+`/api/clusters`. kaas-ui's own routes are always rooted at `/`.
+
+The dev server has no binary in front of it to do the rewriting, so there it is
+still a build-time flag — `npm run dev:proxy`, or `VITE_BASE=… npm run dev`.
+
+One caveat that bites this deployment specifically: **a path proxy that buffers
+`text/event-stream` will break the live message view** — the stream appears to
+work while arriving in stale bursts. kaas-ui's own compression layer declines
+SSE, but nothing here can make somebody else's proxy behave. Port-forwarding to
+`localhost` avoids the question entirely, and is the better dev loop.
+
 ## Verification
 
 ```sh
@@ -65,8 +103,10 @@ cargo xtask docs    # write docs/openapi.json
 
 `cargo xtask ci` runs anywhere: unit tests are cluster-free and Docker-free.
 Anything that needs a broker lives in `live`, which starts the real binary
-against the real clusters and asserts over HTTP — 28 assertions, including that
-an unreachable cluster costs the fleet request nothing measurable.
+against the real clusters and asserts over HTTP — 50 assertions, including that
+an unreachable cluster costs the fleet request nothing measurable, that
+abandoning a message stream releases it, and that a shutdown with streams open
+drains in milliseconds rather than waiting for bodies that never end.
 
 There is no `cargo xtask integration` and no `testcontainers`: Docker is not
 available in the environment this is developed in, and two real three-node
@@ -80,14 +120,18 @@ clusters are a better target than one container anyway.
 | **cluster** | brokers, controller, log dirs per broker, `DescribeCluster` where it exists |
 | **capabilities** | the feature projection and the whole api-version table, naming the broker that answered |
 | **topics** | server-side filtered/sorted/paged list, partitions, replica placement grid, configs, offsets |
-| **messages** | the tail of a topic, merged across partitions, keys and values rendered with the encoding said out loud |
+| **messages** | the tail of a topic, and a live viewer: seven seek modes over SSE, a virtualized list, a detail panel, and the whole view in the URL |
 | **groups** | the four group kinds, members, committed offsets and lag in its four states |
-| **api** | `/api-docs` renders the OpenAPI document the binary serves at `/api/openapi.json` — endpoints by tag, parameters, response schemas |
 
-Not built yet: the SSE scan half of the message browser, OIDC/Dex and roles,
-schema registry, the read-only admin views (ACLs, quotas, SCRAM,
-reassignments, transactions) and the cross-cluster views. See
-[`docs/README.md`](docs/README.md) for what each phase covers.
+Not built yet: OIDC/Dex and roles, schema registry, the read-only admin views
+(ACLs, quotas, SCRAM, reassignments, transactions) and the cross-cluster views.
+See [`docs/README.md`](docs/README.md) for what each phase covers.
+
+The message viewer runs on **kaas-lib 0.2.0**. Three things it needed went in
+there rather than here, because version and implementation knowledge belongs in
+the library: the anchored backward walk, `ScanSpec::following`, and a fix for
+`scan` emitting records before its start offset. See
+[Phase 3](docs/04-phase-3-messages.md).
 
 ## Measurements
 

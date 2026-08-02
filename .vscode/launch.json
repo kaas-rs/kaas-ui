@@ -1,0 +1,96 @@
+{
+  // Debugging kaas-ui. Needs `vadimcn.vscode-lldb` (CodeLLDB), which ships its
+  // own lldb — there is no system one in this container.
+  //
+  // Only the Rust half is debugged here. The frontend is embedded into the
+  // binary at compile time by rust-embed, so a breakpoint in a .tsx file means
+  // nothing to this process: run `npm run dev` (the "web: vite dev server"
+  // task) and use the browser's own devtools against port 5173, which proxies
+  // /api and /health back to the binary on 8099.
+  "version": "0.2.0",
+  "configurations": [
+    {
+      // The usual one. Builds the binary and starts it against the three
+      // development clusters, one of which is deliberately unreachable.
+      "type": "lldb",
+      "request": "launch",
+      "name": "kaas-ui (config.dev.yaml)",
+      "cargo": {
+        "args": ["build", "--bin=kaas-ui", "--package=kaas-ui-server"],
+        "filter": { "name": "kaas-ui", "kind": "bin" }
+      },
+      "args": ["--config", "config.dev.yaml"],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        // `debug` is where the message stream announces itself — one line per
+        // stream open, with the cluster, topic, mode and caller.
+        "RUST_LOG": "info,kaas_ui=debug,kaas_ui_api=debug"
+      },
+      "sourceLanguages": ["rust"]
+    },
+    {
+      // The same session, reachable through code-server's port proxy at
+      // https://<host>/proxy/8099/ — which strips that prefix before kaas-ui
+      // sees the request, so the server has to be *told* it is mounted there.
+      // Nothing is rebuilt for this: the binary rewrites index.html as it
+      // serves it, so the same build works here and at the root.
+      "type": "lldb",
+      "request": "launch",
+      "name": "kaas-ui (behind the code-server proxy)",
+      "cargo": {
+        "args": ["build", "--bin=kaas-ui", "--package=kaas-ui-server"],
+        "filter": { "name": "kaas-ui", "kind": "bin" }
+      },
+      "args": ["--config", "config.dev.yaml"],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "RUST_LOG": "info,kaas_ui=debug,kaas_ui_api=debug",
+        // Must match the port in config.dev.yaml, which is what the proxy
+        // path names. Change one and change the other.
+        "KAAS_UI_SERVER__BASE_PATH": "/proxy/8099"
+      },
+      "sourceLanguages": ["rust"]
+    },
+    {
+      // The same, with kafka-read's own tracing on. Loud: this is the crate
+      // doing a fetch per partition per round.
+      "type": "lldb",
+      "request": "launch",
+      "name": "kaas-ui (verbose, incl. kafka-read)",
+      "cargo": {
+        "args": ["build", "--bin=kaas-ui", "--package=kaas-ui-server"],
+        "filter": { "name": "kaas-ui", "kind": "bin" }
+      },
+      "args": ["--config", "config.dev.yaml"],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "RUST_LOG": "debug,kafka_read=trace,kafka_conn=debug"
+      },
+      "sourceLanguages": ["rust"]
+    },
+    {
+      // Unit tests only — they are cluster-free by design, so this needs no
+      // broker and runs anywhere. Put the test name in `args` to narrow it,
+      // e.g. ["a_resume_is_honoured_only_for_the_partition_it_names"].
+      "type": "lldb",
+      "request": "launch",
+      "name": "Unit tests (workspace)",
+      "cargo": {
+        "args": ["test", "--no-run", "--workspace", "--lib"],
+        "filter": { "kind": "lib" }
+      },
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "sourceLanguages": ["rust"]
+    },
+    {
+      // For a process someone else started — `cargo xtask live` spawns its own
+      // server on port 18099, and this is how to get inside that one.
+      "type": "lldb",
+      "request": "attach",
+      "name": "Attach to a running kaas-ui",
+      "program": "${workspaceFolder}/target/debug/kaas-ui",
+      "sourceLanguages": ["rust"]
+    }
+  ]
+}

@@ -42,17 +42,23 @@ Running alongside all of them:
 
 ## Status
 
-**Phases 0, 1 and 2 are built, plus the group views from Phase 5 and the tail
-half of Phase 3.** The workspace is three crates, a frontend and an xtask;
-`cargo xtask ci` is green and `cargo xtask live` passes 28 assertions against
-`kaas`, `strimzi` and a deliberately dead third cluster.
+**Phases 0, 1, 2 and 3 are built, plus the group views from Phase 5.** The
+workspace is three crates, a frontend and an xtask; `cargo xtask ci` is green
+and `cargo xtask live` passes 50 assertions against `kaas`, `strimzi` and a
+deliberately dead third cluster.
+
+Phase 3 needed three changes to kaas-lib, released as **0.2.0**: the anchored
+backward walk, `ScanSpec::following`, and a fix for `scan` emitting records
+before its start offset. The first two add public fields to structs that are
+not `#[non_exhaustive]`, which is why a set of additive features is a minor
+rather than a patch — see [Phase 3](04-phase-3-messages.md).
 
 | phase | state |
 |---|---|
 | 0 — skeleton | **done.** Config, registry, lazy connect, `/health`, fleet view, embedded frontend, image, CI |
 | 1 — capabilities | **done.** Projection, `source` naming the broker, degradation components, brokers, log dirs, configs |
 | 2 — topics | **done.** Server-side filter/sort/page, detail, partitions, placement grid, configs, offsets |
-| 3 — messages | **partial.** The tail is built; the SSE scan is not |
+| 3 — messages | **done.** Seven seek modes over SSE, virtualized list, detail panel, URL state. No `kaas-ui-serde` — see the phase file |
 | 4 — auth | not started. There is no Dex in the cluster yet, which is a prerequisite rather than a step |
 | 5 — groups | **mostly done.** Four kinds, members, committed offsets, four-state lag. No offset-reset view (it would be mutating anyway) |
 | 6 — schema registry | not started |

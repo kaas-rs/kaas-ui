@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
+  Link,
   Outlet,
   RouterProvider,
   createRootRoute,
@@ -11,13 +12,16 @@ import {
 } from "@tanstack/react-router";
 
 import "./styles.css";
-import { Shell } from "@/shell";
+import { PageTitle, Shell } from "@/shell";
+import { Empty } from "@/components/domain";
+import { BASE_PATH } from "@/api/base";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Fleet } from "@/pages/fleet";
 import { CapabilitiesPage, ClusterConfigs, ClusterOverview } from "@/pages/cluster";
 import { TopicDetail, Topics } from "@/pages/topics";
 import { GroupDetail, Groups } from "@/pages/groups";
-import { ApiDocs } from "@/pages/apidocs";
+import { Messages } from "@/pages/messages";
+import { messageSearchSchema } from "@/features/messages/search";
 
 const rootRoute = createRootRoute({ component: Shell });
 
@@ -25,12 +29,6 @@ const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
   component: Fleet,
-});
-
-const apiDocsRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/api-docs",
-  component: ApiDocs,
 });
 
 /** Everything under a cluster. Navigation lives in the sidebar, not in tabs. */
@@ -66,6 +64,26 @@ const topicRoute = createRoute({
       from: "/clusters/$clusterId/topics/$topic",
     });
     return <TopicDetail clusterId={clusterId} topic={topic} />;
+  },
+});
+
+/**
+ * The message browser.
+ *
+ * Its own route rather than a tab inside the topic detail: the split pane
+ * needs the full viewport height, and the search params below own the whole
+ * page. That is what makes a seeked, filtered view with a message selected a
+ * link someone can send.
+ */
+const messagesRoute = createRoute({
+  getParentRoute: () => clusterRoute,
+  path: "topics/$topic/messages",
+  validateSearch: messageSearchSchema,
+  component: function MessagesPage() {
+    const { clusterId, topic } = useParams({
+      from: "/clusters/$clusterId/topics/$topic/messages",
+    });
+    return <Messages clusterId={clusterId} topic={topic} />;
   },
 });
 
@@ -109,11 +127,11 @@ const capabilitiesRoute = createRoute({
 
 const routeTree = rootRoute.addChildren([
   indexRoute,
-  apiDocsRoute,
   clusterRoute.addChildren([
     overviewRoute,
     topicsRoute,
     topicRoute,
+    messagesRoute,
     groupsRoute,
     groupRoute,
     configsRoute,
@@ -121,7 +139,41 @@ const routeTree = rootRoute.addChildren([
   ]),
 ]);
 
-const router = createRouter({ routeTree, defaultPreload: "intent" });
+/**
+ * What an unknown path renders.
+ *
+ * Needed because the server serves `index.html` for anything that is not a
+ * file — that fallback is what makes a hard refresh on a deep link work, and
+ * the cost is that a genuinely wrong URL reaches the router rather than a 404
+ * page. Without this it reaches the router's bare default, outside the app
+ * chrome, which reads as a broken build rather than a mistyped link.
+ */
+function NotFound() {
+  return (
+    <div className="p-6">
+      <PageTitle
+        title="No such page"
+        subtitle="The address does not match anything in this application."
+      />
+      <Empty>
+        <Link to="/" className="underline">
+          Back to the fleet
+        </Link>
+      </Empty>
+    </div>
+  );
+}
+
+const router = createRouter({
+  routeTree,
+  defaultPreload: "intent",
+  defaultNotFoundComponent: NotFound,
+  // Where the server said this page is mounted, read from the `<base>` it
+  // injected. Without it the first client-side navigation leaves the prefix
+  // and lands on the domain root — which looks like the app working until you
+  // click something, and is the confusing half of a base-path problem.
+  basepath: BASE_PATH || "/",
+});
 
 declare module "@tanstack/react-router" {
   interface Register {

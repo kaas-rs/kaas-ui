@@ -21,6 +21,7 @@ mod reload;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
+use std::time::Duration;
 
 use arc_swap::ArcSwap;
 use axum::Router;
@@ -123,24 +124,83 @@ async fn serve(config_path: PathBuf, config: Config) -> Result<(), Box<dyn std::
 
     reload::watch(config_path, Arc::clone(&registry));
 
+    // Empty unless a proxy mounts kaas-ui under a path. Resolved once here so
+    // the routes below stay rooted at `/` — the prefix is already gone by the
+    // time a request arrives, and only `index.html` needs to know about it.
+    let base = config.server.base_prefix();
+    if !base.is_empty() {
+        tracing::info!(%base, "serving under a path prefix");
+    }
+
+    let state = AppState::new(Arc::clone(&registry));
+
     let app = Router::new()
-        .merge(kaas_ui_api::router(AppState::new(Arc::clone(&registry))))
+        .merge(kaas_ui_api::router(state.clone()))
         // Everything that is not an API route is the frontend, including the
         // client-side routes that have no file behind them.
-        .fallback(assets::serve)
+        .fallback(move |uri| assets::serve(uri, base.clone()))
+        // Safe over the message stream: `DefaultPredicate` already declines
+        // `text/event-stream`, so events are not held back waiting for a
+        // compression buffer to fill. Replacing this predicate with a
+        // hand-written one would silently reintroduce that — a live view whose
+        // records arrive in bursts of a hundred, seconds late.
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http());
 
     let listener = tokio::net::TcpListener::bind(listen).await?;
     tracing::info!(%listen, "serving");
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown())
-        .await?;
+    // `ConnectInfo` so the message stream can charge its per-caller ceiling to
+    // somebody. Behind the cluster's tunnel every request arrives from the
+    // same socket, which is why the peer address is the *fallback* there and
+    // the forwarded hop is preferred — see `kaas_ui_api::streaming::Principal`.
+    // Signalled the moment shutdown begins, so the deadline below measures the
+    // drain rather than the whole uptime.
+    let (draining, drained) = tokio::sync::oneshot::channel();
+
+    let server = axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(async move {
+        shutdown().await;
+        // Before axum starts draining, not after. A message stream is an
+        // unbounded response body: it completes when the stream does, and a
+        // live tail's stream completes when the client leaves or its lifetime
+        // expires. A shutdown is neither, so without this the drain waits on a
+        // response that will never finish and the process has to be killed —
+        // severing every open stream with no `phase: done` to explain it.
+        state.stop_streams();
+        let _ = draining.send(());
+    });
+
+    tokio::select! {
+        result = server => result?,
+        () = async move {
+            let _ = drained.await;
+            tokio::time::sleep(DRAIN_DEADLINE).await;
+        } => {
+            // The backstop. Streams end by themselves now, so reaching this
+            // means something else is holding a connection open, and taking
+            // longer than the orchestrator will wait only converts a tidy exit
+            // into a SIGKILL.
+            tracing::warn!(
+                deadline = ?DRAIN_DEADLINE,
+                "connections did not drain in time; exiting anyway"
+            );
+        }
+    }
 
     tracing::info!("shut down cleanly");
     Ok(())
 }
+
+/// How long to wait for connections to drain before exiting regardless.
+///
+/// Comfortably inside Kubernetes' default `terminationGracePeriodSeconds` of
+/// 30, because the choice is not "wait longer or lose data" — it is "exit
+/// tidily now, or be SIGKILLed at the deadline having waited anyway".
+const DRAIN_DEADLINE: Duration = Duration::from_secs(10);
 
 /// Wait for the signals Kubernetes and a terminal actually send.
 async fn shutdown() {
