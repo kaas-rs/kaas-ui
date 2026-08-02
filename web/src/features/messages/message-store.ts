@@ -63,8 +63,18 @@ const EMPTY: MessageStoreState = {
 };
 
 export function createMessageStore(
-  /** Which end rows arrive at. `desc` prepends, `asc` appends. */
-  sort: "asc" | "desc",
+  /**
+   * Whether arriving rows go on top of the ones already here — `insertsAtTop`,
+   * which is true for the live stream and nothing else.
+   *
+   * Not the mode's sort order, which is a different question with the same
+   * shape. A backward window is *sorted* newest-first, and the server hands it
+   * over already in that order: reversing it and pushing it onto the front
+   * lays it back out oldest-first, which is the whole window upside down.
+   * Only the live stream arrives oldest-first — records in the order they were
+   * produced — and only the live stream is turned around here.
+   */
+  insertAtTop: boolean,
   cap: number = DEFAULT_CAP,
 ): MessageStore {
   let rows: StreamRow[] = [];
@@ -100,15 +110,19 @@ export function createMessageStore(
     const batch = pending;
     pending = [];
 
-    if (sort === "desc") {
-      // Newest first: the batch arrives oldest-first within itself, so it is
-      // reversed before going on the front.
+    if (insertAtTop) {
+      // The live stream, which arrives oldest-first within a batch and is
+      // rendered newest-first — so the batch is turned around before going on
+      // the front.
       rows = [...batch.reverse(), ...rows];
       if (rows.length > cap) {
         for (const row of rows.slice(cap)) seen.delete(row.id);
         rows = rows.slice(0, cap);
       }
     } else {
+      // Everything else, in the order the server sent it: ascending for a
+      // forward scan, descending for a backward window, and either way already
+      // the order it is meant to be read in.
       rows = [...rows, ...batch];
       if (rows.length > cap) {
         for (const row of rows.slice(0, rows.length - cap)) seen.delete(row.id);

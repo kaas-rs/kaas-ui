@@ -10,7 +10,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 
 import type { ResolvedSeek, ResourceError, StreamProgress } from "@/api/types";
 import { withBase } from "@/api/base";
-import { SEEK_MODES, type SeekMode } from "./seek-modes";
+import { SEEK_MODES, insertsAtTop, type SeekMode } from "./seek-modes";
 import { createMessageStore, type MessageStoreState } from "./message-store";
 import { openMessageStream } from "./transport";
 
@@ -61,7 +61,9 @@ export function streamUrl(query: MessageStreamQuery): string {
 
 export function useMessageStream(query: MessageStreamQuery): MessageStreamResult {
   const url = streamUrl(query);
-  const sort = SEEK_MODES[query.mode].sort;
+  // The same fact the list's scroll compensation reads, from the same place.
+  // When these two disagree the symptom is a window rendered upside down.
+  const prepends = insertsAtTop(query.mode);
 
   // Bumped to force a teardown and a fresh connection without changing the
   // URL, which is what the toolbar's restart does.
@@ -79,8 +81,8 @@ export function useMessageStream(query: MessageStreamQuery): MessageStreamResult
   // point: sort order and semantics differ between modes, so merging two
   // windows is meaningless, and the spec makes clearing mandatory.
   const store = useMemo(
-    () => createMessageStore(sort),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- url and generation identify the stream; sort is derived from it
+    () => createMessageStore(prepends),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- url and generation identify the stream; prepends is derived from it
     [url, generation],
   );
   const storeRef = useRef(store);
