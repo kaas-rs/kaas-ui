@@ -22,7 +22,20 @@ import { insertsAtTop, type SeekMode } from "./seek-modes";
 /** Declared once, shared by the CSS and the virtualizer. */
 export const ROW_HEIGHT = 36;
 
-const COLUMNS = "96px 72px 200px minmax(110px, 1fr) minmax(200px, 2.2fr)";
+/**
+ * The five columns, shared by the header and every row.
+ *
+ * The last two are `minmax(0, …)` rather than `minmax(110px, …)`: a grid
+ * column will not shrink below its floor, so a floor is also a *minimum width
+ * for the whole table*. The header row is in normal flow and carries that
+ * minimum up to the panel, which is how a floor here becomes a horizontal
+ * scrollbar there. Zero lets the two text columns shrink, and `truncate` is
+ * what they do about it — which is what they were always meant to do.
+ *
+ * The three fixed ones are what their content actually needs: thirteen digits
+ * of offset, three of partition, and `14:35:12.553`.
+ */
+const COLUMNS = "96px 56px 150px minmax(0, 1fr) minmax(0, 2.2fr)";
 
 export interface MessageListProps {
   rows: StreamRow[];
@@ -70,7 +83,9 @@ export function MessageList({
       role="grid"
       aria-rowcount={rows.length + 1}
       aria-label="Messages"
-      className="flex min-h-0 flex-1 flex-col"
+      // `min-w-0`, or the header row's intrinsic width becomes the floor for
+      // everything above it.
+      className="flex min-h-0 min-w-0 flex-1 flex-col"
       style={{ ["--message-columns" as string]: COLUMNS }}
     >
       <div

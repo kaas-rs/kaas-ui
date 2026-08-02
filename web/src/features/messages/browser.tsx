@@ -183,6 +183,12 @@ export function MessageBrowser({
           defaultSize="62"
           minSize="30"
           className="relative flex min-h-0 flex-col"
+          // `react-resizable-panels` puts `overflow: auto` on this element as
+          // an inline style, so a class cannot reach it. Everything inside
+          // owns its own scrolling — the row list scrolls vertically and
+          // clips horizontally — and a second scroller wrapped around that
+          // only ever appears as a stray horizontal bar under the table.
+          style={{ overflow: "hidden" }}
         >
           <MessageList
             rows={stream.rows}
