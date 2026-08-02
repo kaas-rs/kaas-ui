@@ -9,7 +9,6 @@ import type {
   GroupOffset,
   GroupSummary,
   LogDir,
-  Message,
   MessageDetail,
   MessagePage,
   PartitionOffsets,
@@ -181,30 +180,6 @@ export function useGroupOffsets(id: string, group: string) {
         `/api/clusters/${encode(id)}/groups/${encode(group)}/offsets`,
       ),
     refetchInterval: SNAPSHOT_REFRESH,
-  });
-}
-
-export function useTail(
-  id: string,
-  topic: string,
-  limit: number,
-  partitions: string,
-  enabled: boolean,
-) {
-  const params = new URLSearchParams({ limit: String(limit) });
-  if (partitions.trim()) params.set("partitions", partitions.trim());
-
-  return useQuery({
-    queryKey: ["tail", id, topic, params.toString()],
-    queryFn: () =>
-      get<Envelope<Message>>(
-        `/api/clusters/${encode(id)}/topics/${encode(topic)}/messages/tail?${params}`,
-      ),
-    enabled,
-    // A tail is a point-in-time read, not a subscription. Refetching it behind
-    // the reader's back would shuffle rows they are trying to read.
-    refetchOnWindowFocus: false,
-    staleTime: Infinity,
   });
 }
 

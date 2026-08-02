@@ -30,6 +30,20 @@ walk guarantees it reads a fraction of the partition — measured at ~325 KB to
 reach the tail of a 40M-record topic. It is a plain JSON response and it goes in
 the TanStack Query cache like everything else.
 
+*No longer, in the browser. The topic page's messages tab used to hold a second,
+poorer viewer that called this route; it now holds the message browser itself,
+whose `mode=live` is the same view with six other ways to seek behind it. The
+route stays — it is the only bounded, cacheable read of a topic's end, and
+`cargo xtask live` still asserts the `div_ceil` spread through it — but nothing
+in the frontend calls it.*
+
+*And the browser is a **tab**, not a page. It had its own route for one release,
+on the reasoning that a split pane wants the whole viewport; what that actually
+bought was a second place to look for messages and a back button between them.
+`…/topics/{t}/messages` still resolves, as a redirect that carries its search
+params into `…/topics/{t}?tab=messages`, so links shared before the move open on
+the view they named.*
+
 **Scan is for browsing and searching**, and it streams.
 
 Building tail first is deliberate: it is the view people actually use, it needs

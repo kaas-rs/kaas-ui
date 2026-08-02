@@ -1,7 +1,7 @@
 // The toolbar. Driven entirely by SEEK_MODES — no component below here asks
 // which mode is selected.
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { RotateCw } from "lucide-react";
 
 import type { PartitionOffsets } from "@/api/types";
@@ -37,6 +37,14 @@ export interface ToolbarProps {
   onPartitionsChange(partitions: string | undefined): void;
   onVisibilityChange(visibility: "all" | "committed"): void;
   onRestart(): void;
+  /**
+   * What the stream is doing, rendered at the end of the row.
+   *
+   * Here rather than in a bar of its own because the browser is a panel on a
+   * page now, and a second full-width strip to hold two words costs height the
+   * list needs more.
+   */
+  status?: ReactNode;
 }
 
 export function Toolbar({
@@ -54,6 +62,7 @@ export function Toolbar({
   onPartitionsChange,
   onVisibilityChange,
   onRestart,
+  status,
 }: ToolbarProps) {
   const config = SEEK_MODES[mode];
 
@@ -204,6 +213,8 @@ export function Toolbar({
           <RotateCw className="size-3.5" aria-hidden />
         </Button>
       ) : null}
+
+      {status}
     </div>
   );
 }

@@ -8,6 +8,7 @@ import {
   createRootRoute,
   createRoute,
   createRouter,
+  redirect,
   useParams,
 } from "@tanstack/react-router";
 
@@ -20,8 +21,7 @@ import { Fleet } from "@/pages/fleet";
 import { CapabilitiesPage, ClusterConfigs, ClusterOverview } from "@/pages/cluster";
 import { TopicDetail, Topics } from "@/pages/topics";
 import { GroupDetail, Groups } from "@/pages/groups";
-import { Messages } from "@/pages/messages";
-import { messageSearchSchema } from "@/features/messages/search";
+import { messageSearchSchema, topicSearchSchema } from "@/features/messages/search";
 
 const rootRoute = createRootRoute({ component: Shell });
 
@@ -56,9 +56,18 @@ const topicsRoute = createRoute({
   },
 });
 
+/**
+ * The topic, and the message browser in a tab on it.
+ *
+ * The seek parameters are validated *here* because they are this page's state:
+ * which tab, seeked where, filtered how, with which row selected. One URL
+ * holds all of it, which is what makes a view someone is looking at a link
+ * they can send.
+ */
 const topicRoute = createRoute({
   getParentRoute: () => clusterRoute,
   path: "topics/$topic",
+  validateSearch: topicSearchSchema,
   component: function TopicPage() {
     const { clusterId, topic } = useParams({
       from: "/clusters/$clusterId/topics/$topic",
@@ -68,22 +77,23 @@ const topicRoute = createRoute({
 });
 
 /**
- * The message browser.
+ * Where the message browser used to live.
  *
- * Its own route rather than a tab inside the topic detail: the split pane
- * needs the full viewport height, and the search params below own the whole
- * page. That is what makes a seeked, filtered view with a message selected a
- * link someone can send.
+ * It is a tab now, and this route stays only to keep the links people have
+ * already sent each other working — validated and forwarded whole, so a URL
+ * seeked to a timestamp with a row selected arrives on that exact view.
  */
 const messagesRoute = createRoute({
   getParentRoute: () => clusterRoute,
   path: "topics/$topic/messages",
   validateSearch: messageSearchSchema,
-  component: function MessagesPage() {
-    const { clusterId, topic } = useParams({
-      from: "/clusters/$clusterId/topics/$topic/messages",
+  beforeLoad: ({ params, search }) => {
+    throw redirect({
+      to: "/clusters/$clusterId/topics/$topic",
+      params,
+      search: { ...search, tab: "messages" as const },
+      replace: true,
     });
-    return <Messages clusterId={clusterId} topic={topic} />;
   },
 });
 

@@ -1,24 +1,22 @@
-// The message browser page.
+// The message browser.
 //
-// Assembles the three layers and owns the things that are genuinely page
-// state: which row is selected, and the retained copy of that row so the
-// detail panel survives the row ageing out of a live buffer.
+// Assembles the three layers and owns the one thing that is genuinely local:
+// the retained copy of the selected row, so the detail panel survives that row
+// ageing out of a live buffer.
 //
-// Everything else lives in the URL. A view seeked to a timestamp, filtered,
-// with a message selected is the artifact people send each other from a Kafka
-// UI, and it has to reproduce exactly on load.
+// Everything else is in the URL and arrives as props. The component does not
+// know which route it is mounted under — it is a tab on the topic page, and
+// the seek parameters belong to that page's URL, not to this file.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useSearch } from "@tanstack/react-router";
-import { AlertTriangle, ChevronLeft, Loader2 } from "lucide-react";
+import { AlertTriangle, Loader2 } from "lucide-react";
+import { useDefaultLayout } from "react-resizable-panels";
 
 import { fetchMessagePage, useOldestTimestamp, usePartitionBounds } from "@/api/client";
 import type { ResolvedSeek, StreamProgress, StreamRow } from "@/api/types";
-import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import { useDefaultLayout } from "react-resizable-panels";
-
 import {
   ResizableHandle,
   ResizablePanel,
@@ -27,12 +25,14 @@ import {
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { count } from "@/components/domain";
-import { MessageDetailPanel } from "@/features/messages/message-detail";
-import { MessageList, ROW_HEIGHT } from "@/features/messages/message-list";
-import { withIds } from "@/features/messages/rows";
-import { SEEK_MODES, type SeekMode } from "@/features/messages/seek-modes";
-import { Toolbar } from "@/features/messages/toolbar";
-import { useMessageStream } from "@/features/messages/use-message-stream";
+import { cn } from "@/lib/utils";
+import { MessageDetailPanel } from "./message-detail";
+import { MessageList, ROW_HEIGHT } from "./message-list";
+import { withIds } from "./rows";
+import { SEEK_MODES, type SeekMode } from "./seek-modes";
+import type { MessageSearch } from "./search";
+import { Toolbar } from "./toolbar";
+import { useMessageStream } from "./use-message-stream";
 
 /**
  * The zone times are shown in.
@@ -46,9 +46,28 @@ function displayTimeZone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone;
 }
 
-export function Messages({ clusterId, topic }: { clusterId: string; topic: string }) {
-  const search = useSearch({ from: "/clusters/$clusterId/topics/$topic/messages" });
-  const navigate = useNavigate();
+export interface MessageBrowserProps {
+  clusterId: string;
+  topic: string;
+  /** The validated seek parameters, straight from the route. */
+  search: MessageSearch;
+  /** Write a change back to the URL. Merging is the host's business. */
+  onSearch(next: Partial<MessageSearch>): void;
+  /**
+   * The panel's height, from whatever is hosting it. Given rather than
+   * measured: the split pane and the virtualizer both need a definite height,
+   * and `h-full` inside a page that scrolls is not one.
+   */
+  className?: string;
+}
+
+export function MessageBrowser({
+  clusterId,
+  topic,
+  search,
+  onSearch,
+  className,
+}: MessageBrowserProps) {
   const isMobile = useIsMobile();
 
   const mode = search.mode;
@@ -102,28 +121,7 @@ export function Messages({ clusterId, topic }: { clusterId: string; topic: strin
     if (present) setRetained(present);
   }, [selectedId, rowsById]);
 
-  const setSearch = useCallback(
-    (next: Partial<typeof search>) => {
-      void navigate({
-        to: "/clusters/$clusterId/topics/$topic/messages",
-        params: { clusterId, topic },
-        // The router types `previous` as the *pre-validation* shape, where
-        // `mode` is optional; at runtime the schema has already defaulted it.
-        // Falling back to the mode on screen keeps the reducer total without
-        // inventing a different window.
-        search: (previous) => ({
-          ...previous,
-          ...next,
-          mode: next.mode ?? previous.mode ?? mode,
-          visibility: next.visibility ?? previous.visibility ?? "all",
-        }),
-        replace: true,
-      });
-    },
-    [navigate, clusterId, topic, mode],
-  );
-
-  const onSelect = useCallback((id: string) => setSearch({ selected: id }), [setSearch]);
+  const onSelect = useCallback((id: string) => onSearch({ selected: id }), [onSearch]);
 
   const onApply = useCallback(
     (next: { mode: SeekMode; offset?: number; timestamp?: number }) => {
@@ -131,29 +129,18 @@ export function Messages({ clusterId, topic }: { clusterId: string; topic: strin
       // on the URL, so a new mode builds a new store; the selection has to be
       // dropped explicitly because a row id from one window means nothing in
       // another.
-      setSearch({ ...next, selected: undefined });
+      onSearch({ ...next, selected: undefined });
     },
-    [setSearch],
+    [onSearch],
   );
 
   return (
-    <div className="flex h-[calc(100vh-var(--header-height,3rem))] min-h-0 flex-col">
-      <header className="flex shrink-0 items-center gap-2 border-b border-line px-4 py-2">
-        <Button asChild variant="ghost" size="sm" className="-ml-2">
-          <Link to="/clusters/$clusterId/topics/$topic" params={{ clusterId, topic }}>
-            <ChevronLeft className="size-4" aria-hidden />
-            {topic}
-          </Link>
-        </Button>
-        <h1 className="text-sm font-medium">Messages</h1>
-        <StreamStatus
-          phase={stream.phase}
-          live={config.live}
-          reconnecting={stream.reconnecting}
-          rows={stream.rows.length}
-        />
-      </header>
-
+    <div
+      className={cn(
+        "flex min-h-0 flex-col overflow-hidden rounded-md border border-line",
+        className,
+      )}
+    >
       <Toolbar
         mode={mode}
         offset={search.offset}
@@ -165,10 +152,18 @@ export function Messages({ clusterId, topic }: { clusterId: string; topic: strin
         retentionStart={retentionStart}
         timeZone={displayTimeZone()}
         onApply={onApply}
-        onFilterChange={(filter) => setSearch({ filter, selected: undefined })}
-        onPartitionsChange={(partitions) => setSearch({ partitions, selected: undefined })}
-        onVisibilityChange={(visibility) => setSearch({ visibility, selected: undefined })}
+        onFilterChange={(filter) => onSearch({ filter, selected: undefined })}
+        onPartitionsChange={(partitions) => onSearch({ partitions, selected: undefined })}
+        onVisibilityChange={(visibility) => onSearch({ visibility, selected: undefined })}
         onRestart={stream.restart}
+        status={
+          <StreamStatus
+            phase={stream.phase}
+            live={config.live}
+            reconnecting={stream.reconnecting}
+            rows={stream.rows.length}
+          />
+        }
       />
 
       <Notices
@@ -214,7 +209,12 @@ export function Messages({ clusterId, topic }: { clusterId: string; topic: strin
         {isMobile ? null : (
           <>
             <ResizableHandle withHandle />
-            <ResizablePanel id="messages-detail" defaultSize="38" minSize="22" className="min-h-0">
+            <ResizablePanel
+              id="messages-detail"
+              defaultSize="38"
+              minSize="22"
+              className="min-h-0"
+            >
               <MessageDetailPanel
                 clusterId={clusterId}
                 topic={topic}
@@ -228,7 +228,10 @@ export function Messages({ clusterId, topic }: { clusterId: string; topic: strin
       </ResizablePanelGroup>
 
       {isMobile ? (
-        <Sheet open={!!selectedId} onOpenChange={(open) => !open && setSearch({ selected: undefined })}>
+        <Sheet
+          open={!!selectedId}
+          onOpenChange={(open) => !open && onSearch({ selected: undefined })}
+        >
           <SheetContent side="bottom" className="h-[70vh] p-0">
             <SheetTitle className="sr-only">Message detail</SheetTitle>
             <MessageDetailPanel
@@ -257,7 +260,7 @@ function StreamStatus({
   rows: number;
 }) {
   return (
-    <div className="ml-auto flex items-center gap-2 text-[11px] text-ink-muted">
+    <div className="flex items-center gap-2 text-[11px] text-ink-muted">
       <span className="tabular-nums">{count(rows)} buffered</span>
       {reconnecting ? (
         <Badge variant="outline" className="gap-1 text-warn-ink">
@@ -301,7 +304,10 @@ function Notices({
   return (
     <div className="shrink-0 border-b border-line">
       {showBar ? (
-        <Progress value={(progress?.fraction ?? 0) * 100} className="h-0.5 rounded-none" />
+        <Progress
+          value={(progress?.fraction ?? 0) * 100}
+          className="h-0.5 rounded-none"
+        />
       ) : null}
       <div className="space-y-1 px-4 py-1.5 empty:hidden">
         {error ? (
@@ -314,17 +320,18 @@ function Notices({
           // Never suppressed. Silently losing records in a debugging tool is
           // worse than showing a gap.
           <p className="text-[11px] text-warn-ink">
-            {count(dropped)} message(s) were dropped to keep the stream ahead of this browser.
+            {count(dropped)} message(s) were dropped to keep the stream ahead of this
+            browser.
           </p>
         ) : null}
         {resolved?.unresolved ? (
           <p className="flex items-start gap-2 text-[11px] text-warn-ink">
             <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
             <span>
-              This cluster resolved {new Date(resolved.timestamp).toISOString()} to no offset on
-              any of its {resolved.partitions.length} partitions, so the window is empty. Brokers
-              that keep no timestamp index answer a time seek this way; seeking by offset still
-              works.
+              This cluster resolved {new Date(resolved.timestamp).toISOString()} to no
+              offset on any of its {resolved.partitions.length} partitions, so the window
+              is empty. Brokers that keep no timestamp index answer a time seek this way;
+              seeking by offset still works.
             </span>
           </p>
         ) : null}
@@ -357,7 +364,13 @@ function Terminal({
   topic: string;
   rows: StreamRow[];
   mode: SeekMode;
-  search: { offset?: number; timestamp?: number; partitions?: string; filter?: string; limit?: number };
+  search: {
+    offset?: number;
+    timestamp?: number;
+    partitions?: string;
+    filter?: string;
+    limit?: number;
+  };
   onAppend(rows: StreamRow[]): void;
 }) {
   const [loading, setLoading] = useState(false);
@@ -415,7 +428,13 @@ function Terminal({
       {exhausted ? (
         <span>nothing further in this direction</span>
       ) : (
-        <Button size="sm" variant="outline" className="h-6 text-[11px]" onClick={() => void loadMore()} disabled={loading}>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-6 text-[11px]"
+          onClick={() => void loadMore()}
+          disabled={loading}
+        >
           {loading ? "loading…" : "Load more"}
         </Button>
       )}
