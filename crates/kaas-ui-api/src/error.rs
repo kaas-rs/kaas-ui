@@ -56,6 +56,28 @@ impl ApiError {
         }
     }
 
+    /// `403`. The caller can see this cluster but not do this to it.
+    ///
+    /// The narrow companion to [`ApiError::not_found`], and the distinction is
+    /// the whole design: a cluster nobody may see does not exist (404), while
+    /// a cluster somebody may browse but not read payloads from says so out
+    /// loud (403). Confirming a topic's *existence* to a caller who already
+    /// holds `metadata` on that cluster gives nothing away; confirming a
+    /// cluster id to someone with no role at all does.
+    pub fn forbidden(what: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::FORBIDDEN,
+            body: ApiErrorBody {
+                message: what.into(),
+                kind: None,
+                code: None,
+                code_number: None,
+                unsupported_api: None,
+                retriable: false,
+            },
+        }
+    }
+
     /// `503`. The cluster is configured but has not connected yet, or its last
     /// attempt failed. Distinct from `502`: nothing was asked of a broker.
     pub fn not_connected(cluster: &str, detail: &str) -> Self {

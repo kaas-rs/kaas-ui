@@ -32,7 +32,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::routes::split_list;
-use crate::{ApiError, ApiResult, AppState};
+use crate::{ApiError, ApiResult, AppState, Caller};
 
 pub use seek::{Plan, SeekMode, SeekQuery};
 pub use stream::stream;
@@ -76,10 +76,16 @@ pub struct TailQuery {
 )]
 pub async fn tail(
     State(state): State<AppState>,
+    caller: Caller,
     Path((id, topic)): Path<(String, String)>,
     Query(query): Query<TailQuery>,
 ) -> ApiResult<Json<Envelope<Message>>> {
-    let (_, admin) = state.connected(&id)?;
+    let (handle, admin) = state.connected(&id, &caller)?;
+    // Payloads are the sensitive surface, so this is where the `messages`
+    // grant is spent — after the lookup, which already decided the cluster is
+    // visible at all, and against the topic name because a role may grant
+    // payload access to `public-*` and nothing else.
+    caller.require_topic(&id, &handle.labels, &topic)?;
 
     let limit = query.limit.unwrap_or(100);
     if limit == 0 || limit > MAX_LIMIT {
@@ -190,10 +196,16 @@ pub struct MessagePage {
 )]
 pub async fn page(
     State(state): State<AppState>,
+    caller: Caller,
     Path((id, topic)): Path<(String, String)>,
     Query(query): Query<SeekQuery>,
 ) -> ApiResult<Json<MessagePage>> {
-    let (_, admin) = state.connected(&id)?;
+    let (handle, admin) = state.connected(&id, &caller)?;
+    // Payloads are the sensitive surface, so this is where the `messages`
+    // grant is spent — after the lookup, which already decided the cluster is
+    // visible at all, and against the topic name because a role may grant
+    // payload access to `public-*` and nothing else.
+    caller.require_topic(&id, &handle.labels, &topic)?;
     let (mode, plan) = Plan::build(&topic, &query)?;
 
     if mode.is_live() {
@@ -345,9 +357,15 @@ fn next_anchor(mode: SeekMode, rows: &[StreamRow]) -> Option<i64> {
 )]
 pub async fn one(
     State(state): State<AppState>,
+    caller: Caller,
     Path((id, topic, partition, offset)): Path<(String, String, i32, i64)>,
 ) -> ApiResult<Json<MessageDetail>> {
-    let (_, admin) = state.connected(&id)?;
+    let (handle, admin) = state.connected(&id, &caller)?;
+    // Payloads are the sensitive surface, so this is where the `messages`
+    // grant is spent — after the lookup, which already decided the cluster is
+    // visible at all, and against the topic name because a role may grant
+    // payload access to `public-*` and nothing else.
+    caller.require_topic(&id, &handle.labels, &topic)?;
     if offset < 0 {
         return Err(ApiError::bad_request("offset must not be negative"));
     }

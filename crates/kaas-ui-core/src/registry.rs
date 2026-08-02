@@ -22,6 +22,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime};
 
 use arc_swap::{ArcSwap, ArcSwapOption};
+use kaas_ui_auth::Access;
 use kafka_admin::{Admin, ClusterConfig};
 use kafka_conn::{ConnectionConfig, Error, SaslConfig, SaslMechanism, TlsConfig};
 use tokio::sync::Notify;
@@ -300,16 +301,37 @@ impl Registry {
         Self { clusters }
     }
 
-    /// Look up a cluster.
+    /// Look up a cluster **as somebody**.
     ///
     /// **The only way to reach a handle.** A caller that cannot see a cluster
     /// gets `None` and the router turns that into `404`, not `403`, so cluster
     /// ids are not enumerable by probing. No handler indexes the map.
-    pub fn get(&self, id: &str) -> Option<&Arc<ClusterHandle>> {
-        self.clusters.get(id)
+    ///
+    /// The visibility test lives here rather than in the router for that
+    /// reason: one lookup means one place to get it right, and a handler that
+    /// forgot to ask would be a handler that leaks a cluster's existence.
+    pub fn get(&self, id: &str, who: &Access) -> Option<&Arc<ClusterHandle>> {
+        self.clusters
+            .get(id)
+            .filter(|handle| who.sees(&handle.labels))
     }
 
-    /// Every cluster, in id order.
+    /// Every cluster this caller can see, in id order.
+    ///
+    /// The fleet view is this list. A caller in no matching role gets an empty
+    /// one, which is a true answer about their fleet rather than an error
+    /// about their account.
+    pub fn visible<'a>(&'a self, who: &'a Access) -> impl Iterator<Item = &'a Arc<ClusterHandle>> {
+        self.clusters
+            .values()
+            .filter(|handle| who.sees(&handle.labels))
+    }
+
+    /// Every cluster, whoever is asking.
+    ///
+    /// For the process's own business — connectors, health, shutdown — never
+    /// for answering a request. Anything reachable from a handler wants
+    /// [`Registry::visible`].
     pub fn all(&self) -> impl Iterator<Item = &Arc<ClusterHandle>> {
         self.clusters.values()
     }
@@ -377,6 +399,14 @@ mod tests {
     use super::*;
     use crate::config::Config;
 
+    /// The caller these tests are about: an open deployment's anonymous one,
+    /// who can see every configured cluster. Visibility itself is tested in
+    /// `kaas-ui-auth`, and against the registry in
+    /// [`a_cluster_no_role_selects_does_not_exist`].
+    fn anyone() -> Access {
+        Access::unrestricted()
+    }
+
     fn config() -> Config {
         Config::from_yaml(
             r#"
@@ -406,14 +436,14 @@ clusters:
     #[test]
     fn an_unconfigured_cluster_is_absent_rather_than_forbidden() {
         let registry = Registry::from_config(&config());
-        assert!(registry.get("nope").is_none());
-        assert!(registry.get("kaas").is_some());
+        assert!(registry.get("nope", &anyone()).is_none());
+        assert!(registry.get("kaas", &anyone()).is_some());
     }
 
     #[tokio::test]
     async fn reload_keeps_the_handles_it_did_not_change() {
         let registry = Registry::from_config(&config());
-        let before = Arc::clone(registry.get("kaas").unwrap());
+        let before = Arc::clone(registry.get("kaas", &anyone()).unwrap());
 
         let grown = Config::from_yaml(
             r#"
@@ -431,14 +461,17 @@ clusters:
         let reloaded = registry.reloaded(&grown);
         assert_eq!(reloaded.len(), 3);
         // Same allocation: the connection is not disturbed.
-        assert!(Arc::ptr_eq(&before, reloaded.get("kaas").unwrap()));
+        assert!(Arc::ptr_eq(
+            &before,
+            reloaded.get("kaas", &anyone()).unwrap()
+        ));
         assert!(!before.is_retired());
     }
 
     #[tokio::test]
     async fn reload_retires_a_dropped_cluster() {
         let registry = Registry::from_config(&config());
-        let dropped = Arc::clone(registry.get("strimzi").unwrap());
+        let dropped = Arc::clone(registry.get("strimzi", &anyone()).unwrap());
 
         let shrunk = Config::from_yaml(
             r#"
@@ -452,13 +485,13 @@ clusters:
         let reloaded = registry.reloaded(&shrunk);
         assert_eq!(reloaded.len(), 1);
         assert!(dropped.is_retired());
-        assert!(!registry.get("kaas").unwrap().is_retired());
+        assert!(!registry.get("kaas", &anyone()).unwrap().is_retired());
     }
 
     #[tokio::test]
     async fn a_changed_entry_is_rebuilt() {
         let registry = Registry::from_config(&config());
-        let before = Arc::clone(registry.get("kaas").unwrap());
+        let before = Arc::clone(registry.get("kaas", &anyone()).unwrap());
 
         let moved = Config::from_yaml(
             r#"
@@ -472,7 +505,10 @@ clusters:
         .unwrap();
 
         let reloaded = registry.reloaded(&moved);
-        assert!(!Arc::ptr_eq(&before, reloaded.get("kaas").unwrap()));
+        assert!(!Arc::ptr_eq(
+            &before,
+            reloaded.get("kaas", &anyone()).unwrap()
+        ));
         assert!(before.is_retired());
     }
 

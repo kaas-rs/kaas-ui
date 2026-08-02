@@ -6,7 +6,7 @@ use kaas_ui_core::dto::{Broker, ClusterCard, ClusterDescriptionDto, ClusterDetai
 use kaas_ui_core::envelope::Envelope;
 use kaas_ui_core::health::ClusterStatus;
 
-use crate::{ApiResult, AppState, call};
+use crate::{ApiResult, AppState, Caller, call};
 
 /// `GET /api/clusters`
 ///
@@ -23,12 +23,15 @@ use crate::{ApiResult, AppState, call};
     responses((status = 200, description = "Every configured cluster", body = Envelope<ClusterCard>)),
     tag = "clusters",
 )]
-pub async fn list(State(state): State<AppState>) -> Json<Envelope<ClusterCard>> {
+pub async fn list(State(state): State<AppState>, caller: Caller) -> Json<Envelope<ClusterCard>> {
     let registry = state.registry();
+    // `visible`, not `all`. The fleet is the caller's fleet: someone in no
+    // matching role gets an empty list, which is a true answer about what they
+    // may see rather than an error about who they are.
     let cards: Vec<ClusterCard> = registry
-        .all()
+        .visible(caller.access())
         .map(|handle| {
-            let card = ClusterCard::of(handle);
+            let card = ClusterCard::of(handle, caller.access());
             if card.status != ClusterStatus::Ready {
                 // Someone is looking at this cluster, so try again now rather
                 // than at the end of the backoff. A side effect of a GET, not
@@ -61,9 +64,10 @@ pub async fn list(State(state): State<AppState>) -> Json<Envelope<ClusterCard>> 
 )]
 pub async fn detail(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Envelope<ClusterDetail>>> {
-    let (handle, admin) = state.connected(&id)?;
+    let (handle, admin) = state.connected(&id, &caller)?;
     let snapshot = admin.cluster().snapshot();
 
     let mut brokers = Broker::list(&snapshot);
@@ -79,7 +83,7 @@ pub async fn detail(
     }
 
     let detail = ClusterDetail {
-        cluster: ClusterCard::of(&handle),
+        cluster: ClusterCard::of(&handle, caller.access()),
         brokers,
         description,
     };
@@ -101,9 +105,10 @@ pub async fn detail(
 )]
 pub async fn brokers(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Envelope<Broker>>> {
-    let (_, admin) = state.connected(&id)?;
+    let (_, admin) = state.connected(&id, &caller)?;
     let snapshot = admin.cluster().snapshot();
     let mut brokers = Broker::list(&snapshot);
 
@@ -137,9 +142,10 @@ pub async fn brokers(
 )]
 pub async fn log_dirs(
     State(state): State<AppState>,
+    caller: Caller,
     Path((id, node)): Path<(String, i32)>,
 ) -> ApiResult<Json<Envelope<LogDirDto>>> {
-    let (_, admin) = state.connected(&id)?;
+    let (_, admin) = state.connected(&id, &caller)?;
     let dirs = call("describe_log_dirs", admin.describe_log_dirs(node)).await?;
     Ok(Json(Envelope::new(
         dirs.iter().map(LogDirDto::from).collect(),

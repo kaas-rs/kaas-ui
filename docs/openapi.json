@@ -6,7 +6,7 @@
     "license": {
       "name": "Apache-2.0"
     },
-    "version": "0.1.4"
+    "version": "0.3.0"
   },
   "paths": {
     "/api/clusters": {
@@ -931,6 +931,28 @@
         }
       }
     },
+    "/api/me": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "`GET /api/me`",
+        "description": "The identity behind this request and the roles it resolved to.\n\nDeliberately not the place to ask *what may I do here* — that is per\ncluster, and it rides on each cluster's card as `grants`. Splitting them\nwould give the frontend two sources for one answer, and the one it did not\nre-fetch would be the stale one.\n\nAnswers for anonymous callers too. A deployment with no identity provider\nconfigured has exactly one caller, and saying so plainly is what lets the\nfrontend render \"not signed in\" rather than an error.",
+        "operationId": "me",
+        "responses": {
+          "200": {
+            "description": "The caller",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Identity"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/openapi.json": {
       "get": {
         "tags": [
@@ -1222,7 +1244,8 @@
           "partitionCount",
           "offlinePartitionCount",
           "underReplicatedPartitionCount",
-          "maxStalenessMs"
+          "maxStalenessMs",
+          "grants"
         ],
         "properties": {
           "attempts": {
@@ -1257,6 +1280,13 @@
               "null"
             ],
             "description": "The failure, when unreachable."
+          },
+          "grants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Grant"
+            },
+            "description": "What the caller may do here.\n\nProjected per cluster rather than per session because that is what a\nrole grants: `metadata` on prod and `messages` on dev is one caller\nwith two answers. The frontend hides what it must not offer — a\nmessages tab that 403s on click is worse than no tab — which is the\nsame mechanism the capability projection uses for what a *broker*\ncannot do.\n\n`value_type` because the alias is a `BTreeSet`, which utoipa cannot\nname — left alone it emits a `$ref` to a `BTreeSet` schema that does\nnot exist, and the generated client is then broken in a way nothing in\nRust notices."
           },
           "id": {
             "type": "string",
@@ -1603,7 +1633,8 @@
                 "partitionCount",
                 "offlinePartitionCount",
                 "underReplicatedPartitionCount",
-                "maxStalenessMs"
+                "maxStalenessMs",
+                "grants"
               ],
               "properties": {
                 "attempts": {
@@ -1638,6 +1669,13 @@
                     "null"
                   ],
                   "description": "The failure, when unreachable."
+                },
+                "grants": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Grant"
+                  },
+                  "description": "What the caller may do here.\n\nProjected per cluster rather than per session because that is what a\nrole grants: `metadata` on prod and `messages` on dev is one caller\nwith two answers. The frontend hides what it must not offer — a\nmessages tab that 403s on click is worse than no tab — which is the\nsame mechanism the capability projection uses for what a *broker*\ncannot do.\n\n`value_type` because the alias is a `BTreeSet`, which utoipa cannot\nname — left alone it emits a `$ref` to a `BTreeSet` schema that does\nnot exist, and the generated client is then broken in a way nothing in\nRust notices."
                 },
                 "id": {
                   "type": "string",
@@ -2858,6 +2896,14 @@
         ],
         "description": "Whether a feature can be shown, and if not, why not."
       },
+      "Grant": {
+        "type": "string",
+        "description": "What a role permits. Two, because reading is the only verb.",
+        "enum": [
+          "metadata",
+          "messages"
+        ]
+      },
       "GroupDetail": {
         "oneOf": [
           {
@@ -3206,9 +3252,14 @@
         "description": "The liveness answer.",
         "required": [
           "status",
-          "version"
+          "version",
+          "auth"
         ],
         "properties": {
+          "auth": {
+            "type": "string",
+            "description": "`\"open\"` when no roles are configured, `\"enforcing\"` when they are.\n\nHere for the same reason the version is: a deployment's security\nposture should be answerable from outside the pod. It says nothing a\nvisitor cannot already tell by loading the page and not being asked to\nsign in."
+          },
           "status": {
             "type": "string",
             "description": "Always `\"ok\"` — reaching the handler is the whole check."
@@ -3216,6 +3267,42 @@
           "version": {
             "type": "string",
             "description": "The running version, so a deployment can be identified without exec'ing\ninto the pod."
+          }
+        }
+      },
+      "Identity": {
+        "type": "object",
+        "description": "The caller, for the header and for deciding what to offer them.\n\nNot \"what may I do\" — that is per cluster and rides on [`ClusterCard`] as\n`grants`. This is who the request is from, which the UI needs to render a\n\"signed in as\" line and to know whether signing in is even a thing this\ndeployment does.",
+        "required": [
+          "authenticated",
+          "subject",
+          "displayName",
+          "roles",
+          "enforcing"
+        ],
+        "properties": {
+          "authenticated": {
+            "type": "boolean",
+            "description": "Whether an identity provider vouched for this caller."
+          },
+          "displayName": {
+            "type": "string",
+            "description": "What to render."
+          },
+          "enforcing": {
+            "type": "boolean",
+            "description": "Whether this deployment applies roles at all.\n\n`false` is the open deployment: no identity provider, one anonymous\ncaller, everything visible. The frontend uses it to decide whether to\noffer signing in, and it is worth being explicit about rather than\ninferring from an empty role list — which is also what a misconfigured\npolicy looks like."
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The roles that covered this caller, in policy order."
+          },
+          "subject": {
+            "type": "string",
+            "description": "The stable id. `\"anonymous\"` when nobody signed in."
           }
         }
       },

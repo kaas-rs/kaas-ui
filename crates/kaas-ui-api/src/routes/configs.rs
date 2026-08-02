@@ -9,7 +9,7 @@ use kafka_admin::ConfigResource;
 use serde::Deserialize;
 
 use crate::routes::split_list;
-use crate::{ApiError, ApiResult, AppState, call};
+use crate::{ApiError, ApiResult, AppState, Caller, call};
 
 /// Which resources to describe.
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -34,10 +34,11 @@ pub struct ConfigQuery {
 )]
 pub async fn cluster_configs(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<String>,
     Query(query): Query<ConfigQuery>,
 ) -> ApiResult<Json<Envelope<ConfigResourceEntry>>> {
-    let (_, admin) = state.connected(&id)?;
+    let (_, admin) = state.connected(&id, &caller)?;
 
     let resources: Vec<ConfigResource> = match query.resource.as_deref() {
         Some(raw) => split_list(raw)
@@ -78,9 +79,10 @@ pub async fn cluster_configs(
 )]
 pub async fn topic_configs(
     State(state): State<AppState>,
+    caller: Caller,
     Path((id, topic)): Path<(String, String)>,
 ) -> ApiResult<Json<Envelope<ConfigResourceEntry>>> {
-    let (_, admin) = state.connected(&id)?;
+    let (_, admin) = state.connected(&id, &caller)?;
     describe(&admin, vec![ConfigResource::topic(topic)]).await
 }
 

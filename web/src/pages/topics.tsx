@@ -2,7 +2,7 @@ import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useCallback, useState } from "react";
 import { ArrowLeft } from "lucide-react";
 
-import { useTopic, useTopicConfigs, useTopics } from "@/api/client";
+import { useClusters, useTopic, useTopicConfigs, useTopics } from "@/api/client";
 import type { Partition } from "@/api/types";
 import { MessageBrowser } from "@/features/messages/browser";
 import type { TopicSearch, TopicTab } from "@/features/messages/search";
@@ -236,6 +236,14 @@ export function TopicDetail({
 }) {
   const detail = useTopic(clusterId, topic);
   const search = useSearch({ from: "/clusters/$clusterId/topics/$topic" });
+  // What this caller may do here, from the cluster's own card. A messages tab
+  // that 403s on click is worse than no messages tab — the same reasoning the
+  // sidebar applies to a capability the *broker* does not have. Until the
+  // answer arrives, show it: a tab that appears under the cursor is worse than
+  // one that errors once, and an open deployment always grants both.
+  const clusters = useClusters();
+  const grants = clusters.data?.items.find((card) => card.id === clusterId)?.grants;
+  const mayReadMessages = grants === undefined || grants.includes("messages");
   const navigate = useNavigate();
 
   /**
@@ -309,7 +317,9 @@ export function TopicDetail({
           <TabsTrigger value="partitions">partitions</TabsTrigger>
           <TabsTrigger value="placement">placement</TabsTrigger>
           <TabsTrigger value="configs">configs</TabsTrigger>
-          <TabsTrigger value="messages">messages</TabsTrigger>
+          {mayReadMessages ? (
+            <TabsTrigger value="messages">messages</TabsTrigger>
+          ) : null}
         </TabsList>
 
         <TabsContent value="partitions" className="mt-4">

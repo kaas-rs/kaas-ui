@@ -75,15 +75,18 @@ kaas-ui/
     kaas-ui-api/        axum routers, request/response DTOs, utoipa
     kaas-ui-server/     the binary: wiring, embedded frontend
     kaas-ui-serde/      payload decoding                      — not created; see below
-    kaas-ui-auth/       OIDC, sessions, RBAC, access audit    — created in Phase 4
+    kaas-ui-auth/       identity and RBAC; OIDC and audit pending
   web/                  vite + react
   docs/
   xtask/
 ```
 
-PLAN.md §3 lists all five crates. Three exist — kaas-lib's rule 3 forbids
-stubs, and an empty crate that compiles is a stub with a manifest.
-`kaas-ui-auth` is created by Phase 4, which has not run.
+PLAN.md §3 lists all five crates. Four exist — kaas-lib's rule 3 forbids stubs,
+and an empty crate that compiles is a stub with a manifest. `kaas-ui-auth` was
+created by Phase 4's first slice and holds what that slice filled it with:
+`Principal`, `Role`, `Policy` and `Access`. The OIDC exchange, sessions and the
+access audit are the slices after it, and each arrives with its module rather
+than ahead of it.
 
 **`kaas-ui-serde` is the exception, and it is a decision rather than an
 omission.** Phase 3 has run without it: payload rendering is `Payload::of` in

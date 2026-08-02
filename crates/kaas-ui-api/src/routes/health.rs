@@ -1,8 +1,11 @@
 //! Liveness.
 
 use axum::Json;
+use axum::extract::State;
 use serde::Serialize;
 use utoipa::ToSchema;
+
+use crate::AppState;
 
 /// The liveness answer.
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -13,6 +16,13 @@ pub struct Health {
     /// The running version, so a deployment can be identified without exec'ing
     /// into the pod.
     pub version: &'static str,
+    /// `"open"` when no roles are configured, `"enforcing"` when they are.
+    ///
+    /// Here for the same reason the version is: a deployment's security
+    /// posture should be answerable from outside the pod. It says nothing a
+    /// visitor cannot already tell by loading the page and not being asked to
+    /// sign in.
+    pub auth: &'static str,
 }
 
 /// `GET /health`
@@ -27,9 +37,15 @@ pub struct Health {
     responses((status = 200, description = "The process is alive", body = Health)),
     tag = "health",
 )]
-pub async fn health() -> Json<Health> {
+pub async fn health(State(state): State<AppState>) -> Json<Health> {
     Json(Health {
         status: "ok",
         version: env!("CARGO_PKG_VERSION"),
+        // The policy, which is in memory. Still no cluster.
+        auth: if state.policy().is_enforcing() {
+            "enforcing"
+        } else {
+            "open"
+        },
     })
 }

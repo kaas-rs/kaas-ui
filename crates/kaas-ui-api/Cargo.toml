@@ -8,6 +8,7 @@ repository.workspace   = true
 rust-version.workspace = true
 
 [dependencies]
+kaas-ui-auth = { workspace = true }
 kaas-ui-core = { workspace = true }
 
 kafka-admin = { workspace = true }

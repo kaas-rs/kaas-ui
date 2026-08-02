@@ -12,6 +12,7 @@ use std::time::Duration;
 
 use figment::Figment;
 use figment::providers::{Env, Format, Yaml};
+use kaas_ui_auth::{Grant, Role};
 use serde::{Deserialize, Serialize};
 
 /// Everything kaas-ui reads at startup.
@@ -22,6 +23,19 @@ pub struct Config {
     pub server: ServerConfig,
     /// The cluster registry.
     pub clusters: Vec<ClusterEntry>,
+    /// Who may see which clusters, and whether they may read payloads.
+    ///
+    /// Empty is the open deployment: no authentication, one anonymous caller,
+    /// every cluster visible with both grants. That is what kaas-ui did before
+    /// this block existed and it stays the default, so adding the auth code
+    /// changed nothing for anyone who had not asked for it.
+    ///
+    /// A non-empty list is **enforced**, and until the OIDC exchange lands
+    /// there is nobody for a role to cover: every caller is anonymous, so
+    /// every cluster is invisible and the fleet is empty. That is the safe
+    /// direction for the gap to fail, and [`Config::role_warning`] says so at
+    /// startup rather than leaving it to be discovered.
+    pub roles: Vec<Role>,
 }
 
 /// HTTP server settings.
@@ -219,6 +233,27 @@ impl Config {
         Ok(config)
     }
 
+    /// What to say at startup about roles nobody can yet match.
+    ///
+    /// `None` once there is nothing to warn about. Roles are enforced the
+    /// moment they are configured — that is the safe direction — but nothing
+    /// can authenticate yet, so every caller is anonymous and every role
+    /// declines to cover them. The result is a deployment that shows an empty
+    /// fleet to everyone, which is correct, deliberate, and utterly baffling
+    /// if it is not said out loud.
+    #[must_use]
+    pub fn role_warning(&self) -> Option<String> {
+        if self.roles.is_empty() {
+            return None;
+        }
+        Some(format!(
+            "{} role(s) are configured but no identity provider is, so every request is \
+             anonymous and no role covers it: the fleet will be empty for everyone until `auth` \
+             is configured. Remove the roles to go back to an open deployment.",
+            self.roles.len()
+        ))
+    }
+
     /// Reject configurations that parse but cannot work.
     fn validate(&self) -> Result<(), ConfigError> {
         if self.clusters.is_empty() {
@@ -274,6 +309,35 @@ impl Config {
                 )));
             }
         }
+
+        for role in &self.roles {
+            if role.name.is_empty() {
+                return Err(ConfigError::Invalid(
+                    "a role has an empty name: it is what `/api/me` and the audit log report"
+                        .into(),
+                ));
+            }
+            if role.subjects.is_empty() {
+                return Err(ConfigError::Invalid(format!(
+                    "role {:?} lists no subjects, so it can never apply to anyone",
+                    role.name
+                )));
+            }
+            if role.grants.is_empty() {
+                return Err(ConfigError::Invalid(format!(
+                    "role {:?} grants nothing: say what it permits, or remove it",
+                    role.name
+                )));
+            }
+            if !role.topics.is_empty() && !role.grants.contains(&Grant::Messages) {
+                return Err(ConfigError::Invalid(format!(
+                    "role {:?} scopes topics but does not grant `messages`: the patterns would \
+                     have no effect, which reads like access nobody has",
+                    role.name
+                )));
+            }
+        }
+
         Ok(())
     }
 }

@@ -65,6 +65,29 @@ export interface ClusterCard {
   underReplicatedPartitionCount: number;
   snapshotAgeMs: number | null;
   maxStalenessMs: number;
+  /**
+   * What this caller may do on this cluster.
+   *
+   * Per cluster, not per session: `metadata` on prod and `messages` on dev is
+   * one person with two answers. The UI hides what it must not offer — a
+   * messages tab that 403s on click is worse than no messages tab — which is
+   * the same rule the capability projection follows for what a *broker*
+   * cannot answer.
+   */
+  grants: Grant[];
+}
+
+/** The two things a role can permit. Reading is the only verb. */
+export type Grant = "metadata" | "messages";
+
+/** `GET /api/me` — who the request is from. */
+export interface Identity {
+  authenticated: boolean;
+  subject: string;
+  displayName: string;
+  roles: string[];
+  /** Whether this deployment applies roles at all. */
+  enforcing: boolean;
 }
 
 export interface Broker {

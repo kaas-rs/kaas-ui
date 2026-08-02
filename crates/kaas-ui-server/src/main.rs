@@ -27,6 +27,7 @@ use arc_swap::ArcSwap;
 use axum::Router;
 use clap::Parser;
 use kaas_ui_api::AppState;
+use kaas_ui_auth::Policy;
 use kaas_ui_core::{Config, Registry};
 use tower_http::compression::CompressionLayer;
 use tower_http::trace::TraceLayer;
@@ -132,7 +133,24 @@ async fn serve(config_path: PathBuf, config: Config) -> Result<(), Box<dyn std::
         tracing::info!(%base, "serving under a path prefix");
     }
 
-    let state = AppState::new(Arc::clone(&registry));
+    // Who may see what. No roles configured is the open deployment — one
+    // anonymous caller who sees every cluster, which is what kaas-ui did
+    // before any of this existed. Said out loud at startup either way: an
+    // operator who believes a cluster is restricted when it is not is the
+    // failure this line exists to prevent.
+    let policy = if config.roles.is_empty() {
+        tracing::info!(
+            "authentication is not configured: every request is anonymous and sees every cluster"
+        );
+        Policy::open()
+    } else {
+        Policy::enforcing(config.roles.clone())
+    };
+    if let Some(warning) = config.role_warning() {
+        tracing::warn!("{warning}");
+    }
+
+    let state = AppState::new(Arc::clone(&registry), policy);
 
     let app = Router::new()
         .merge(kaas_ui_api::router(state.clone()))

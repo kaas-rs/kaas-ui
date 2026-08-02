@@ -11,7 +11,7 @@ use kafka_admin::types::oks;
 use serde::Deserialize;
 
 use crate::routes::split_list;
-use crate::{ApiError, ApiResult, AppState, call};
+use crate::{ApiError, ApiResult, AppState, Caller, call};
 
 /// The list query. Filtering, sorting and paging all happen here rather than
 /// in the browser: a five-thousand-topic cluster is a real number, and sending
@@ -66,10 +66,11 @@ pub struct TopicQuery {
 )]
 pub async fn list(
     State(state): State<AppState>,
+    caller: Caller,
     Path(id): Path<String>,
     Query(query): Query<TopicQuery>,
 ) -> ApiResult<Json<Envelope<TopicSummary>>> {
-    let (_, admin) = state.connected(&id)?;
+    let (_, admin) = state.connected(&id, &caller)?;
 
     if let Some(names) = query.name.as_deref() {
         let names = split_list(names);
@@ -167,10 +168,11 @@ pub async fn list(
 )]
 pub async fn detail(
     State(state): State<AppState>,
+    caller: Caller,
     Path((id, topic)): Path<(String, String)>,
     Query(query): Query<DetailQuery>,
 ) -> ApiResult<Json<Envelope<TopicDetail>>> {
-    let (_, admin) = state.connected(&id)?;
+    let (_, admin) = state.connected(&id, &caller)?;
 
     let described = call("describe_topics", admin.describe_topics([topic.clone()])).await?;
     let mut envelope =
@@ -226,9 +228,10 @@ pub struct DetailQuery {
 )]
 pub async fn offsets(
     State(state): State<AppState>,
+    caller: Caller,
     Path((id, topic)): Path<(String, String)>,
 ) -> ApiResult<Json<Envelope<PartitionOffsets>>> {
-    let (_, admin) = state.connected(&id)?;
+    let (_, admin) = state.connected(&id, &caller)?;
 
     let snapshot = admin.cluster().snapshot();
     let info = snapshot

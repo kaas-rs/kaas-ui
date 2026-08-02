@@ -18,8 +18,50 @@ use kafka_read::{Record, TimestampType};
 use serde::Serialize;
 use utoipa::ToSchema;
 
+use kaas_ui_auth::{Access, Grant, Grants, Principal};
+
 use crate::health::{ClusterHealth, ClusterStatus};
 use crate::registry::ClusterHandle;
+
+/// The caller, for the header and for deciding what to offer them.
+///
+/// Not "what may I do" — that is per cluster and rides on [`ClusterCard`] as
+/// `grants`. This is who the request is from, which the UI needs to render a
+/// "signed in as" line and to know whether signing in is even a thing this
+/// deployment does.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Identity {
+    /// Whether an identity provider vouched for this caller.
+    pub authenticated: bool,
+    /// The stable id. `"anonymous"` when nobody signed in.
+    pub subject: String,
+    /// What to render.
+    pub display_name: String,
+    /// The roles that covered this caller, in policy order.
+    pub roles: Vec<String>,
+    /// Whether this deployment applies roles at all.
+    ///
+    /// `false` is the open deployment: no identity provider, one anonymous
+    /// caller, everything visible. The frontend uses it to decide whether to
+    /// offer signing in, and it is worth being explicit about rather than
+    /// inferring from an empty role list — which is also what a misconfigured
+    /// policy looks like.
+    pub enforcing: bool,
+}
+
+impl Identity {
+    /// Project a resolved caller.
+    pub fn of(who: &Principal, access: &Access, enforcing: bool) -> Self {
+        Self {
+            authenticated: who.is_authenticated(),
+            subject: who.subject().to_owned(),
+            display_name: who.display_name().to_owned(),
+            roles: access.role_names().map(str::to_owned).collect(),
+            enforcing,
+        }
+    }
+}
 
 /// One cluster on the fleet dashboard.
 ///
@@ -64,11 +106,30 @@ pub struct ClusterCard {
     /// The staleness ceiling this cluster was configured with, so the UI can
     /// colour the age rather than guessing a threshold.
     pub max_staleness_ms: u64,
+    /// What the caller may do here.
+    ///
+    /// Projected per cluster rather than per session because that is what a
+    /// role grants: `metadata` on prod and `messages` on dev is one caller
+    /// with two answers. The frontend hides what it must not offer — a
+    /// messages tab that 403s on click is worse than no tab — which is the
+    /// same mechanism the capability projection uses for what a *broker*
+    /// cannot do.
+    ///
+    /// `value_type` because the alias is a `BTreeSet`, which utoipa cannot
+    /// name — left alone it emits a `$ref` to a `BTreeSet` schema that does
+    /// not exist, and the generated client is then broken in a way nothing in
+    /// Rust notices.
+    #[schema(value_type = Vec<Grant>)]
+    pub grants: Grants,
 }
 
 impl ClusterCard {
     /// Build a card from a handle, reading the snapshot if there is one.
-    pub fn of(handle: &ClusterHandle) -> Self {
+    ///
+    /// Takes the caller's [`Access`] because the card carries what they may do
+    /// here, and computing that anywhere but next to the labels it is derived
+    /// from is how a card ends up advertising a grant nobody holds.
+    pub fn of(handle: &ClusterHandle, who: &Access) -> Self {
         let health = handle.health();
         let (error, attempts) = match health.as_ref() {
             ClusterHealth::Unreachable {
@@ -94,6 +155,7 @@ impl ClusterCard {
             under_replicated_partition_count: 0,
             snapshot_age_ms: None,
             max_staleness_ms: millis(handle.max_staleness()),
+            grants: who.grants(&handle.labels),
         };
 
         if let Some(admin) = handle.admin() {

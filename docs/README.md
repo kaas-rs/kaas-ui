@@ -42,8 +42,9 @@ Running alongside all of them:
 
 ## Status
 
-**Phases 0, 1, 2 and 3 are built, plus the group views from Phase 5.** The
-workspace is three crates, a frontend and an xtask; `cargo xtask ci` is green
+**Phases 0, 1, 2 and 3 are built, plus the group views from Phase 5 and the
+authorization half of Phase 4.** The workspace is four crates, a frontend and
+an xtask; `cargo xtask ci` is green
 and `cargo xtask live` passes 50 assertions against `kaas`, `strimzi` and a
 deliberately dead third cluster.
 
@@ -59,7 +60,7 @@ rather than a patch — see [Phase 3](04-phase-3-messages.md).
 | 1 — capabilities | **done.** Projection, `source` naming the broker, degradation components, brokers, log dirs, configs |
 | 2 — topics | **done.** Server-side filter/sort/page, detail, partitions, placement grid, configs, offsets |
 | 3 — messages | **done.** Seven seek modes over SSE, virtualized list, detail panel, URL state. No `kaas-ui-serde` — see the phase file |
-| 4 — auth | not started. There is no Dex in the cluster yet, which is a prerequisite rather than a step |
+| 4 — auth | **started.** The authorization half: `kaas-ui-auth`, roles from config, per-cluster grants, visibility inside the registry lookup. No identity provider — there is still no Dex in the cluster, and until there is, every caller is anonymous |
 | 5 — groups | **mostly done.** Four kinds, members, committed offsets, four-state lag. No offset-reset view (it would be mutating anyway) |
 | 6 — schema registry | not started |
 | 7 — read-only admin | not started. ACLs, quotas, SCRAM, reassignments, transactions |
@@ -69,8 +70,11 @@ What each finished phase decided differently from its plan is recorded in that
 phase's own file, under "Decisions this phase changed". Nothing was quietly
 skipped, and the two that look skipped are not:
 
-- **`kaas-ui-auth` does not exist** because Phase 4 has not run, which is the
-  rule rather than an omission.
+- **`kaas-ui-auth` exists but holds no OIDC yet.** Phase 4 is being built in
+  slices and this is the first: identity as a type, roles, grants, and the
+  visibility test inside the one registry lookup. Nothing in it is a
+  placeholder — what is not there is the exchange that produces a
+  non-anonymous `Principal`, and that arrives with its own module.
 - **`kaas-ui-serde` does not exist although Phase 3 has run.** Payload
   rendering lives in `kaas-ui-core::dto` and is deliberately smaller than the
   plan: UTF-8 or hex with the encoding named, no JSON step, no per-topic

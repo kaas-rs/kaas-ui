@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "xtask",
+    "crates/kaas-ui-auth",
     "crates/kaas-ui-core",
     "crates/kaas-ui-api",
     "crates/kaas-ui-server",
@@ -54,6 +55,7 @@ mime_guess = "2"
 bytes      = "1.12"
 
 # internal
+kaas-ui-auth = { path = "crates/kaas-ui-auth" }
 kaas-ui-core = { path = "crates/kaas-ui-core" }
 kaas-ui-api  = { path = "crates/kaas-ui-api" }
 

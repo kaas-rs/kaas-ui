@@ -8,6 +8,7 @@ import type {
   GroupDetail,
   GroupOffset,
   GroupSummary,
+  Identity,
   LogDir,
   MessageDetail,
   MessagePage,
@@ -60,6 +61,22 @@ export function useClusters() {
     queryKey: ["clusters"],
     queryFn: () => get<Envelope<ClusterCard>>("/api/clusters"),
     refetchInterval: 5_000,
+  });
+}
+
+/**
+ * Who the caller is.
+ *
+ * Not what they may do — that rides on each cluster's card as `grants`, so
+ * there is one source for it and no second copy to go stale. This is the
+ * header's business: who am I, and does this deployment even have a notion of
+ * signing in.
+ */
+export function useIdentity() {
+  return useQuery({
+    queryKey: ["me"],
+    queryFn: () => get<Identity>("/api/me"),
+    staleTime: 5 * 60_000,
   });
 }
 

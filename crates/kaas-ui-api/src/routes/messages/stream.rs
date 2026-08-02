@@ -41,7 +41,7 @@ use serde::Serialize;
 
 use super::seek::{Plan, SeekMode, SeekQuery};
 use crate::streaming::{self, Principal, Refusal};
-use crate::{ApiError, ApiResult, AppState};
+use crate::{ApiError, ApiResult, AppState, Caller};
 
 /// How long records accumulate before they leave as one event.
 const FLUSH_INTERVAL: Duration = Duration::from_millis(100);
@@ -110,12 +110,18 @@ enum Frame {
 )]
 pub async fn stream(
     State(state): State<AppState>,
+    caller: Caller,
     Path((id, topic)): Path<(String, String)>,
     Query(query): Query<SeekQuery>,
     principal: Principal,
     headers: HeaderMap,
 ) -> ApiResult<impl IntoResponse> {
-    let (_, admin) = state.connected(&id)?;
+    let (handle, admin) = state.connected(&id, &caller)?;
+    // Payloads are the sensitive surface, so this is where the `messages`
+    // grant is spent — after the lookup, which already decided the cluster is
+    // visible at all, and against the topic name because a role may grant
+    // payload access to `public-*` and nothing else.
+    caller.require_topic(&id, &handle.labels, &topic)?;
     let (mode, plan) = Plan::build(&topic, &query)?;
 
     // Taken before anything expensive happens, and released by dropping the

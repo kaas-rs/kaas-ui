@@ -7,6 +7,24 @@
 
 Creates `crates/kaas-ui-auth`.
 
+> **Slice 1 is built: authorization, without authentication.** `kaas-ui-auth`
+> holds `Principal`, `Role`, `Policy` and `Access`; `roles:` is a config block;
+> `Registry::get` takes the caller and answers `404` for a cluster no role
+> selects; the `messages` grant gates all four payload routes and rides on each
+> cluster's card so the tab disappears with it; `/api/me` and `/health` say who
+> the caller is and whether roles are being enforced at all.
+>
+> **Every caller is still anonymous**, because nothing signs anyone in yet. Two
+> consequences worth stating plainly: with no `roles:` configured the
+> deployment is exactly as open as it was before — one anonymous caller,
+> everything visible, which is why 0.3.0's behaviour did not change — and with
+> `roles:` configured the fleet is empty for *everyone*, because no role covers
+> an anonymous caller. That is the safe direction for the gap to fail, and the
+> server warns about it at startup rather than leaving it to be found.
+>
+> Next: the OIDC exchange and sessions, then the access audit, then Dex in the
+> cluster repo.
+
 ## Prerequisite: there is no Dex in this cluster
 
 Checked. The only Dex running is `argocd-dex-server`, which is ArgoCD's embedded
@@ -161,9 +179,19 @@ cargo xtask live --config config.dev.yaml
 ## Exit criteria
 
 - [ ] Dex deployed via GitOps, kaas-ui pointed at it
-- [ ] no provider-specific code anywhere in the workspace
+- [~] **no provider-specific code anywhere in the workspace** — true of what
+  exists, and `kaas-ui-auth` has no dependency that could make it false; it
+  cannot be *met* until there is a provider to have been blind to
 - [ ] `id_token` signature verified, not decoded
-- [ ] one registry lookup, taking the caller, returning 404 for invisible clusters
-- [ ] `metadata` / `messages` gates both endpoint and tab
+- [x] **one registry lookup, taking the caller, returning 404 for invisible
+  clusters** — `Registry::get(id, &Access)`, with the visibility test inside it
+  rather than in the router, and asserted both in unit tests and by running a
+  server with an enforcing policy: a configured cluster answers `404`, and the
+  fleet is empty rather than an error
+- [~] **`metadata` / `messages` gates both endpoint and tab** — both are wired:
+  all four payload routes spend the grant against the topic name, and the tab
+  is hidden when the cluster's card does not carry it. Unit-tested, and not yet
+  provable end to end, because proving it needs a caller who holds one grant
+  and not the other — which needs sessions
 - [ ] audit log written before the response, failure is fatal to the request
 - [ ] client secret from Vault via ExternalSecret, never in a ConfigMap

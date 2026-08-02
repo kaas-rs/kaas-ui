@@ -25,14 +25,17 @@ use std::time::Duration;
 use arc_swap::ArcSwap;
 use axum::Router;
 use axum::routing::get;
+use kaas_ui_auth::Policy;
 use kaas_ui_core::registry::{ClusterHandle, Registry};
 use kafka_admin::Admin;
 
+pub mod auth;
 pub mod error;
 pub mod openapi;
 pub mod routes;
 pub mod streaming;
 
+pub use auth::Caller;
 pub use error::{ApiError, ApiResult};
 
 /// How long any one cluster call may take before the request gives up.
@@ -50,17 +53,20 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(20);
 #[derive(Debug, Clone)]
 pub struct AppState {
     registry: Arc<ArcSwap<Registry>>,
+    /// Who may see what. [`Policy::open`] when nothing was configured.
+    policy: Arc<Policy>,
     streams: Arc<streaming::StreamGovernor>,
     stopping: Arc<streaming::ShutdownSignal>,
     shutdown: streaming::Shutdown,
 }
 
 impl AppState {
-    /// Wrap a registry.
-    pub fn new(registry: Arc<ArcSwap<Registry>>) -> Self {
+    /// Wrap a registry and the policy that decides who sees it.
+    pub fn new(registry: Arc<ArcSwap<Registry>>, policy: Policy) -> Self {
         let (stopping, shutdown) = streaming::shutdown_latch();
         Self {
             registry,
+            policy: Arc::new(policy),
             streams: Arc::new(streaming::StreamGovernor::default()),
             stopping: Arc::new(stopping),
             shutdown,
@@ -70,6 +76,16 @@ impl AppState {
     /// The current registry.
     pub fn registry(&self) -> arc_swap::Guard<Arc<Registry>> {
         self.registry.load()
+    }
+
+    /// The authorization policy.
+    ///
+    /// Not behind the `ArcSwap` the registry uses: a config reload replaces
+    /// clusters, and changing who may see them under a live session is a
+    /// different question with different failure modes. It waits for the slice
+    /// that has sessions to change.
+    pub fn policy(&self) -> &Policy {
+        &self.policy
     }
 
     /// How many message streams are open.
@@ -100,9 +116,9 @@ impl AppState {
     /// A cluster that is not configured — or, from the auth phase onward, one
     /// the caller may not see — is `404`. Not `403`: a 403 confirms the id
     /// exists, and confirming ids is how a registry becomes enumerable.
-    pub fn cluster(&self, id: &str) -> ApiResult<Arc<ClusterHandle>> {
+    pub fn cluster(&self, id: &str, who: &Caller) -> ApiResult<Arc<ClusterHandle>> {
         self.registry()
-            .get(id)
+            .get(id, who.access())
             .map(Arc::clone)
             .ok_or_else(|| ApiError::not_found(format!("no cluster {id:?}")))
     }
@@ -113,8 +129,8 @@ impl AppState {
     /// that failed, answers immediately — and gets nudged to retry now rather
     /// than at the end of its backoff, which is what the card's retry button
     /// is wired to.
-    pub fn connected(&self, id: &str) -> ApiResult<(Arc<ClusterHandle>, Arc<Admin>)> {
-        let handle = self.cluster(id)?;
+    pub fn connected(&self, id: &str, who: &Caller) -> ApiResult<(Arc<ClusterHandle>, Arc<Admin>)> {
+        let handle = self.cluster(id, who)?;
         match handle.admin() {
             Some(admin) => Ok((handle, admin)),
             None => {
@@ -160,11 +176,14 @@ pub fn router(state: AppState) -> Router {
 }
 
 fn api_router() -> Router<AppState> {
-    use routes::{capabilities, clusters, configs, groups, messages, spec, topics};
+    use routes::{capabilities, clusters, configs, groups, me, messages, spec, topics};
 
     Router::new()
         // The document that describes everything below it, including itself.
         .route("/openapi.json", get(spec::spec))
+        // Who is asking. Above the clusters because it is the answer that
+        // decides which of them exist for this caller.
+        .route("/me", get(me::me))
         .route("/clusters", get(clusters::list))
         .route("/clusters/{id}", get(clusters::detail))
         .route(
@@ -217,33 +236,68 @@ fn api_router() -> Router<AppState> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kaas_ui_auth::{Access, Grant, Principal, Role};
     use kaas_ui_core::Config;
 
-    fn state() -> AppState {
+    fn state(policy: Policy) -> AppState {
         let config = Config::from_yaml(
             r#"
 clusters:
   - id: kaas
     bootstrap: ["kaas.kaas.svc.cluster.local:9092"]
+    labels: { env: dev }
 "#,
         )
         .unwrap();
-        AppState::new(Arc::new(ArcSwap::from_pointee(Registry::from_config(
-            &config,
-        ))))
+        AppState::new(
+            Arc::new(ArcSwap::from_pointee(Registry::from_config(&config))),
+            policy,
+        )
+    }
+
+    /// The caller an open deployment resolves for every request.
+    fn anyone() -> Caller {
+        Caller::new(Principal::anonymous(), Access::unrestricted())
     }
 
     #[test]
-    fn an_invisible_cluster_is_not_found_rather_than_forbidden() {
-        let error = state().cluster("secret").unwrap_err();
+    fn a_cluster_that_is_not_configured_is_not_found() {
+        let error = state(Policy::open())
+            .cluster("secret", &anyone())
+            .unwrap_err();
         assert_eq!(error.status(), axum::http::StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn a_cluster_no_role_selects_is_not_found_rather_than_forbidden() {
+        // The point of doing visibility inside the lookup: `kaas` *is*
+        // configured, and this caller still gets a 404. A 403 would confirm
+        // the id, and confirming ids is how a registry becomes enumerable.
+        let policy = Policy::enforcing(vec![Role {
+            name: "prod-only".to_owned(),
+            subjects: vec!["someone".to_owned()],
+            clusters: [("env".to_owned(), "prod".to_owned())]
+                .into_iter()
+                .collect(),
+            grants: [Grant::Metadata].into_iter().collect(),
+            ..Role::default()
+        }]);
+        let state = state(policy);
+        let nobody = Caller::new(Principal::new("stranger", None, []), Access::none());
+
+        let error = state.cluster("kaas", &nobody).unwrap_err();
+        assert_eq!(error.status(), axum::http::StatusCode::NOT_FOUND);
+        // And it is there for someone who can see it.
+        assert!(state.cluster("kaas", &anyone()).is_ok());
     }
 
     #[test]
     fn an_unconnected_cluster_is_unavailable_not_a_bad_gateway() {
         // Nothing was asked of a broker, so this is not 502: the process
         // simply has not finished connecting, and the card says so.
-        let error = state().connected("kaas").unwrap_err();
+        let error = state(Policy::open())
+            .connected("kaas", &anyone())
+            .unwrap_err();
         assert_eq!(error.status(), axum::http::StatusCode::SERVICE_UNAVAILABLE);
     }
 }

@@ -985,6 +985,7 @@ dependencies = [
  "axum",
  "bytes",
  "futures",
+ "kaas-ui-auth",
  "kaas-ui-core",
  "kafka-admin",
  "kafka-conn",
@@ -998,12 +999,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "kaas-ui-auth"
+version = "0.3.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "utoipa",
+]
+
+[[package]]
 name = "kaas-ui-core"
 version = "0.3.0"
 dependencies = [
  "arc-swap",
  "figment",
  "humantime-serde",
+ "kaas-ui-auth",
  "kafka-admin",
  "kafka-conn",
  "kafka-meta",
@@ -1024,6 +1035,7 @@ dependencies = [
  "axum",
  "clap",
  "kaas-ui-api",
+ "kaas-ui-auth",
  "kaas-ui-core",
  "mime_guess",
  "rust-embed",

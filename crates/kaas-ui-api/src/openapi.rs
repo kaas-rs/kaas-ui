@@ -21,6 +21,7 @@ use utoipa::OpenApi;
     ),
     paths(
         crate::routes::health::health,
+        crate::routes::me::me,
         crate::routes::clusters::list,
         crate::routes::clusters::detail,
         crate::routes::clusters::brokers,
@@ -46,6 +47,7 @@ use utoipa::OpenApi;
         crate::routes::messages::MessagePage,
         crate::routes::messages::SeekMode,
         crate::routes::topics::PartitionOffsets,
+        kaas_ui_auth::Grant,
         kaas_ui_core::capabilities::ApiKeyEntry,
         kaas_ui_core::capabilities::Capabilities,
         kaas_ui_core::capabilities::CapabilitySource,
@@ -62,6 +64,7 @@ use utoipa::OpenApi;
         kaas_ui_core::dto::GroupMember,
         kaas_ui_core::dto::GroupOffset,
         kaas_ui_core::dto::GroupSummary,
+        kaas_ui_core::dto::Identity,
         kaas_ui_core::dto::Dropped,
         kaas_ui_core::dto::Header,
         kaas_ui_core::dto::Lag,

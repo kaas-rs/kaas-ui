@@ -10,6 +10,7 @@ pub mod clusters;
 pub mod configs;
 pub mod groups;
 pub mod health;
+pub mod me;
 pub mod messages;
 pub mod spec;
 pub mod topics;
