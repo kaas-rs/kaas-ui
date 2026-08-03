@@ -120,8 +120,19 @@ pub fn take(jar: PrivateCookieJar) -> (Option<Pending>, PrivateCookieJar) {
 }
 
 /// Remove a cookie, telling the browser to forget it too.
+///
+/// **The removal has to carry the same `Path` the cookie was set with.** A
+/// `Set-Cookie` that clears a name without naming a path is scoped by the
+/// browser to the requesting *directory* — `/auth` for a logout posted to
+/// `/auth/logout` — and the cookie this is trying to delete lives at `/`. The
+/// two do not match, so the browser deletes nothing and keeps sending the
+/// session it was told to forget.
+///
+/// That failure is silent and looks like the button doing nothing: the
+/// response is a perfectly good `303`, the redirect happens, and the next
+/// request is still signed in.
 pub fn clear(jar: PrivateCookieJar, name: &'static str) -> PrivateCookieJar {
-    jar.remove(Cookie::from(name))
+    jar.remove(Cookie::build(name).path("/").build())
 }
 
 /// The attributes every cookie here carries.
@@ -197,6 +208,67 @@ mod tests {
         // Gone on the second look, so a captured callback cannot be replayed.
         let (again, _) = take(jar);
         assert!(again.is_none());
+    }
+
+    #[test]
+    fn clearing_a_cookie_names_the_path_it_was_set_with() {
+        // The bug this pins: `jar.remove(Cookie::from(name))` emits a
+        // `Set-Cookie` with no `Path`, and a browser scopes such a removal to
+        // the requesting *directory* — `/auth` for a logout posted to
+        // `/auth/logout`. The session lives at `/`, the two do not match, and
+        // the browser keeps sending a session it was told to drop.
+        //
+        // Asserted on the header rather than on the jar, because the jar is
+        // not where it goes wrong: `read()` returns `None` either way, and the
+        // response is a perfectly good 303. Only the wire shows it.
+        use axum::http::HeaderMap;
+        use axum::http::header::{COOKIE, SET_COOKIE};
+        use axum::response::IntoResponse;
+
+        let key = Key::generate();
+        let issued = issue(
+            PrivateCookieJar::new(key.clone()),
+            "sub-1".to_owned(),
+            "Woestebanaan".to_owned(),
+            Vec::new(),
+            Duration::from_secs(3600),
+        );
+        let response = (issued, ()).into_response();
+        let set_cookie = response
+            .headers()
+            .get(SET_COOKIE)
+            .and_then(|value| value.to_str().ok())
+            .expect("a session was issued");
+        assert!(set_cookie.contains("Path=/"), "{set_cookie}");
+        let ciphertext = set_cookie
+            .split(';')
+            .next()
+            .expect("a name=value pair")
+            .to_owned();
+
+        // A second request, carrying that cookie — which is the only state in
+        // which a removal is written at all.
+        let mut headers = HeaderMap::new();
+        headers.insert(COOKIE, ciphertext.parse().expect("a cookie header"));
+        let jar = PrivateCookieJar::from_headers(&headers, key);
+        assert!(read(&jar).is_some(), "the fixture must start signed in");
+
+        let response = (clear(jar, SESSION_COOKIE), ()).into_response();
+        let removal = response
+            .headers()
+            .get(SET_COOKIE)
+            .and_then(|value| value.to_str().ok())
+            .expect("a removal was written")
+            .to_owned();
+
+        assert!(removal.starts_with(SESSION_COOKIE), "{removal}");
+        // The two attributes that make a removal actually remove: the path the
+        // cookie was set with, and an expiry that is already past.
+        assert!(removal.contains("Path=/"), "{removal}");
+        assert!(
+            removal.contains("Max-Age=0") || removal.contains("Expires="),
+            "{removal}"
+        );
     }
 
     #[test]
