@@ -126,7 +126,7 @@ matters.
 **Consequence for kaas-ui: there is no `cluster.capabilities()` to project
 from, and kaas-ui must not invent one by picking a broker.** Doing so produces a
 UI whose tabs flicker depending on which connection answered. See
-[Phase 1](../02-phase-1-fleet-and-capabilities.md) for the interim rule and
+[what is built](../11-built.md) for the interim rule and
 [upstream-asks.md](upstream-asks.md) item 1 for the fix.
 
 ### 4. `Error` is a taxonomy, and `ErrorCode` carries `Unknown(i16)`

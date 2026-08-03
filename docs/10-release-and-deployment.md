@@ -1,8 +1,8 @@
 # Release and deployment
 
 Not a phase — a track that runs alongside all of them. Its first deliverables
-land in [Phase 0](01-phase-0-skeleton.md) (an image that builds, CI that runs)
-and it is finished only when Phase 4's secrets are wired.
+landed with [Phase 0](11-built.md) (an image that builds, CI that runs) and it
+is finished only when Phase 4's secrets are wired.
 
 Three things to set up, in this order, because each depends on the one before:
 
@@ -259,8 +259,13 @@ apps/kaas-ui/
   configmap.yaml        the cluster registry — both Kafka clusters
   deployment.yaml
   service.yaml
-  external-secret.yaml  Phase 4 only: the OIDC client secret from Vault
 ```
+
+**No `external-secret.yaml`, and none is coming.** This sketch assumed a
+confidential OIDC client; kaas-ui shipped as a **public** client that proves
+itself with PKCE, so there is no kaas-ui secret to mount from Vault. Dex has
+one — its GitHub connector's client id and secret, in `apps/dex/` — and that is
+the only ExternalSecret this login flow needs.
 
 Plain kustomize, following `apps/code-server/` — the closest existing analogue.
 Not Helm: there is no chart yet, and a chart's indirection is only worth paying
@@ -321,7 +326,7 @@ to automate.
 | 0 | scale set added; `ci.yml` green on ARC; Dockerfile; `release.yml` pushing to GHCR; `apps/kaas-ui/` written but **not committed** |
 | 0 → 1 | first `v0.1.0` tag; image published; `apps/kaas-ui/` committed; app live at `kaas.smeding.cloud` |
 | 1–3 | tag bumps only |
-| 4 | `external-secret.yaml` for the OIDC client secret; a Dex instance to point at — **there is none in this cluster today**, so this is a prerequisite, not a step |
+| 4 | **done** — `apps/dex/` deployed with its GitHub connector's ExternalSecret, `apps/kaas-ui/` pointed at it and carrying `roles:`. No secret of kaas-ui's own: it is a public client |
 | 4+ | consider publishing a chart to `oci://ghcr.io/kaas-rs/charts` |
 
 ## Acceptance

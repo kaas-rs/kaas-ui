@@ -3,243 +3,196 @@
 *PLAN.md milestone M4.*
 
 **Goal.** OIDC against Dex, sessions, role mapping, cluster visibility, the
-`metadata` versus `messages` grant, and the access audit log.
+metadata-versus-payload boundary, and the access audit log.
 
 Creates `crates/kaas-ui-auth`.
 
-> **Slice 1 is built: authorization, without authentication.** `kaas-ui-auth`
-> holds `Principal`, `Role`, `Policy` and `Access`; `roles:` is a config block;
-> `Registry::get` takes the caller and answers `404` for a cluster no role
-> selects; the `messages` grant gates all four payload routes and rides on each
-> cluster's card so the tab disappears with it; `/api/me` and `/health` say who
-> the caller is and whether roles are being enforced at all.
->
-> **Every caller is still anonymous**, because nothing signs anyone in yet. Two
-> consequences worth stating plainly: with no `roles:` configured the
-> deployment is exactly as open as it was before — one anonymous caller,
-> everything visible, which is why 0.3.0's behaviour did not change — and with
-> `roles:` configured the fleet is empty for *everyone*, because no role covers
-> an anonymous caller. That is the safe direction for the gap to fail, and the
-> server warns about it at startup rather than leaving it to be found.
->
-> **Authentication stays optional, and that is a requirement rather than a
-> transitional state.** kaas-ui is developed behind code-server, where there is
-> no identity provider and no reason to run one: with no `dex` block and no
-> `roles`, `/dex` is not a route, nothing redirects, and every request is the
-> anonymous caller who sees everything. Two tests in `kaas-ui-server` hold the
-> line — the same path is the frontend without a `dex` block and the proxy with
-> one — because "it happens to work today" is how an optional dependency stops
-> being optional.
->
-> Next: the OIDC exchange and sessions, then the access audit, then Dex in the
-> cluster repo.
+> **Mostly built, and running.** Dex is deployed, kaas-ui is pointed at it, and
+> people sign in with GitHub at `https://kaas.smeding.cloud`. What is built is
+> below under [What shipped](#what-shipped); what is left is three items under
+> [What is still open](#what-is-still-open), and the largest of them is that
+> **no automated test has ever performed a login**.
 
-## Prerequisite: there is no Dex in this cluster
+## What shipped
 
-Checked. The only Dex running is `argocd-dex-server`, which is ArgoCD's embedded
-instance and not a general-purpose IdP. `spire-spiffe-oidc-discovery-provider`
-is a SPIFFE discovery endpoint, not a login provider.
+**Authorization**, in `kaas_ui_auth::policy`. Roles carry subjects, clusters and
+permissions of `resource` + `value` + `actions`, which is kafbat-ui's shape —
+anyone arriving from that UI already knows the model. What could not carry over
+is most of its vocabulary: `create`, `edit`, `delete`, `messages_produce` and
+`reset_offsets` describe writes, and no code path here could perform one. Two
+actions exist, `view` and `messages_read`, and an action that does not exist is
+**rejected by name** rather than accepted and ignored.
 
-**A Dex deployment is the first task of this phase**, in the cluster repo
-alongside kaas-ui — `apps/dex/`, discovered by the same ApplicationSet. In CI a
-static-password connector is enough; in the cluster, a GitHub connector against
-an OAuth App of its own.
-
-**It is served under kaas-ui's own hostname, at `/dex`.** Every browser hop of
-an OIDC login has to reach the provider — the redirect to `/dex/auth`, and the
-one GitHub sends back to `/dex/callback` — so Dex must be publicly reachable.
-Rather than give it a second hostname and a second DNS record, kaas-ui proxies
-`/dex/*` to the in-cluster Service, which is exactly what `argocd-server` does
-for its own Dex at `/api/dex`. Dex is configured with
-`issuer: https://kaas.smeding.cloud/dex` and serves every endpoint under that
-path; nothing is stripped in the proxy.
-
-That proxy forwards whatever method the browser sends, which retired the
-"every route is a `GET`" check — see [00-foundations.md](00-foundations.md).
-The read-only guarantee never depended on it: it is the single
-`Admin::connect_read_only` construction site, and nothing reachable through the
-proxy has an admin client at all.
-
-This is a real dependency and it is worth stating before the phase starts rather
-than discovering it three days in.
-
-## Dex is the only provider
-
-kaas-ui speaks generic OIDC and nothing else. Dex terminates GitHub, Google,
-Entra, LDAP or SAML and presents all of them as one issuer with a `groups`
-claim.
-
-The payoff is that **kaas-ui contains no provider-specific code at all** — and
-the counter-example is running in this cluster right now. `kafbat-ui` is
-configured with a GitHub OAuth2 client, `user-name-attribute: login`, and
-`custom-params: {type: github}`, because GitHub is *not* an OIDC provider:
-OAuth Apps issue opaque tokens with no `id_token`, no discovery document and no
-groups claim. Supporting it directly means a second code path with its own REST
-calls to `/user` and `/user/orgs`.
-
-Dex's GitHub connector does that work and emits `org` and `org:team` group
-strings — exactly the shape the role mapping below wants. Adding a second
-identity source later becomes a Dex config change rather than a kaas-ui release.
-
-Say this in the README. "We only support OIDC" reads as a limitation until you
-add that Dex makes it a superset.
-
-```yaml
-auth:
-  issuer: https://dex.smeding.cloud
-  client_id: kaas-ui
-  client_secret_file: /etc/kaas-ui/secrets/oidc-client-secret
-  redirect_url: https://kaas.smeding.cloud/auth/callback
-  scopes: [openid, profile, email, groups]
-```
-
-## Implementation
-
-`openidconnect` 4.0 against the discovery document. **PKCE, `state` and `nonce`
-are mandatory**, and the `id_token` signature is fully verified — not decoded.
-
-Sessions via `tower-sessions` 0.15 with an encrypted cookie store,
-`SameSite=Lax`, `Secure`, `HttpOnly`. A server-side store only if forced logout
-is needed; the cookie store is one less thing to run. RP-initiated logout, which
-Dex supports.
-
-The client secret comes from Vault through an `ExternalSecret`, the same pattern
-`kafbat-ui-github-oauth` uses today.
-
-## Authorization
-
-*Rebuilt on kafbat-ui's shape — roles carry subjects, clusters and permissions
-of `resource` + `value` + `actions` — because anyone arriving from that UI
-already knows the model. What could not carry over is most of its vocabulary:
-`create`, `edit`, `delete`, `messages_produce` and `reset_offsets` describe
-writes, and no code path here could perform one. Two actions exist, `view` and
-`messages_read`, and an action that does not exist is rejected by name rather
-than accepted and ignored. The sketch below is the original design; the shape
-that shipped is in `kaas_ui_auth::policy`.*
-
-*Two additions to kafbat's model. `clusters` takes id patterns, and
+Two additions to kafbat's model. `clusters` takes id patterns and
 `cluster_labels` an optional selector beside it, because a fleet grown past a
 handful wants `env: prod` as well as names. And **no roles at all means the
 anonymous caller is an administrator** — the open deployment every development
-instance runs, stated as a rule rather than left as an accident.*
+instance runs, stated as a rule rather than left as an accident.
 
-Read-only makes this small. With no writes, permissions collapse to two axes,
-and the second is the one that matters.
+**Cluster visibility is enforced in the registry lookup, not the router.**
+`Registry::get(id, &Access)` is the single lookup from Phase 0 with its second
+parameter; a caller who may not see a cluster gets `404`, not `403`, so ids are
+not enumerable by probing. One lookup site, one place to get it right.
 
-```yaml
-roles:
-  - name: everyone
-    subjects: ["kaas-rs"]                  # Dex GitHub connector: org membership
-    clusters: { env: dev }                 # label selector
-    grants: [metadata, messages]
+**Authentication**, in `kaas_ui_auth::oidc`. `openidconnect` 4.0 against the
+discovery document, read once at startup so a broken `issuer` fails the boot
+rather than somebody's first login. PKCE with `S256`, `state` and `nonce` are
+mandatory and generated with the request, so no path through the module omits
+one. The `id_token`'s signature is verified against the provider's JWKS — the
+whole reason Dex is in front of GitHub, which signs nothing.
 
-  - name: prod-oncall
-    subjects: ["kaas-rs:platform"]         # org:team
-    clusters: { env: prod }
-    grants: [metadata]                     # metadata only — no payloads
+**kaas-ui is a public client with no client secret.** PKCE is what proves that
+whoever redeems the code started the flow. This replaces the phase's original
+`client_secret_file` sketch and removes the ExternalSecret it implied: there is
+no kaas-ui secret in Vault because there is no kaas-ui secret. Dex still has
+one, for its GitHub connector.
 
-  - name: prod-support
-    subjects: ["kaas-rs:support"]
-    clusters: { env: prod }
-    grants: [metadata, messages]
-    topics: ["public-*"]                   # payload access scoped by pattern
-```
+**Sessions are encrypted cookies, with no store.** A subject, a name, the
+resolved role names and an expiry — small enough to carry. Encrypted rather than
+merely signed, because the pending-login cookie holds a PKCE verifier and a
+verifier anyone can read is not a verifier. The key is generated at startup, so
+**a restart ends every session**; for a single-replica read-only browser tool
+that is a better trade than another secret to mount and rotate, and the startup
+log says so rather than leaving it to be discovered as "it logs me out
+sometimes".
 
-**`metadata` versus `messages` is the meaningful boundary.** Browsing topic
-configuration is not the same act as reading customer data out of a payload.
-Topic contents are the sensitive surface in a read-only tool — payloads carry
-PII, tokens, order data — so "can browse metadata" and "can read message bodies"
-are different grants.
+**No refresh tokens.** `offline_access` is never requested; a session lasts its
+eight hours and then asks for a login again. This is the phase's "decide
+explicitly and write it down" trap, decided: a refresh token is a long-lived
+credential to store, protect and revoke, in exchange for saving a user one
+redirect a day on a tool they keep open for twenty minutes.
 
-**Hand-roll this.** A matrix over two actions does not need `casbin-rs`, and the
-policy file above is more legible than a Casbin model. Resist the pull; this is
-the part of an auth system that looks like it wants a framework and does not.
+**Dex is served under kaas-ui's own hostname at `/dex`**, proxied to the
+in-cluster Service — the arrangement ArgoCD uses for its own Dex at `/api/dex`.
+Every browser hop of an OIDC login has to reach the provider, and this costs no
+second DNS record and no second public surface. Nothing is stripped in the
+proxy: Dex serves every endpoint under its issuer's path, and rewriting would
+break the discovery document, which advertises absolute URLs built from that
+same issuer.
 
-**Cluster visibility is enforced in the registry lookup, not in the router.** A
-user without access gets `404`, not `403`, so cluster ids are not enumerable.
-The single `Registry::get(id, who)` from Phase 0 gains its second parameter
-here, and because there is only one lookup site there is only one place to get
-it right.
+That proxy forwards whatever method the browser sends, which retired the "every
+route is a `GET`" check — see [00-foundations.md](00-foundations.md). The
+read-only guarantee never depended on it: it is the single
+`Admin::connect_read_only` construction site, and nothing reachable through the
+proxy has an admin client at all.
 
-## Access audit
+**Authentication stays optional, and that is a requirement rather than a
+transitional state.** kaas-ui is developed behind code-server, where there is no
+identity provider and no reason to run one: with no `dex` block and no `roles`,
+`/dex` is not a route, nothing redirects, and every request is the anonymous
+caller who sees everything. Two tests in `kaas-ui-server` hold the line, because
+"it happens to work today" is how an optional dependency stops being optional.
 
-Append-only log of `(timestamp, subject, cluster, topic, action, offsets)` for
-**every message read**. SQLite via `sqlx`, or structured JSON on stdout for
-shipping elsewhere — configurable, defaulting to stdout in the cluster where
-the observability stack already collects it.
+**The access audit**, in `kaas_ui_auth::audit`. One JSON line per disclosure on
+stdout, carrying who, which cluster and topic, the seek, and the offsets
+actually returned. Written **before** the payload is disclosed, and a failed
+write **fails the request** — an audit log that is best-effort is a log. Metadata
+is not audited: listing topics is not reading a payload, and the boundary is the
+same one the `messages_read` action draws. SQLite via `sqlx` is **not** built; a
+database is a second thing to run, back up and migrate for a log nobody has yet
+asked to query, and the writer is injectable so adding one later changes that
+module and nothing else.
 
-This is the log that matters in a read-only tool, and it is the one most likely
-to be skipped precisely because nothing is being changed. With no writes, audit
-is about *reads*: who opened which topic's messages, on which cluster, when.
+## The thing this phase got wrong, and how it was found
 
-It is written **before the response is sent**, not after, and a failure to write
-it fails the request. An audit log that is best-effort is not an audit log.
+**A provider rotates its signing keys, and discovery happens once.**
+
+Dex mints a new signing key on a schedule and serves the previous one beside it
+for a while. `Provider::discover` read the JWKS at startup and held it for the
+life of the process, so from the first rotation onward **every login failed**
+with `Signature verification failed` — and stayed failed, because nothing
+re-read the keys. A restart fixed it until the next rotation.
+
+It was found in production, by a person who could not sign in, and the shape of
+it is worth keeping:
+
+- the failure is **not at the boundary you would suspect**. State, nonce and
+  PKCE all verified; the exchange succeeded; the token was genuine. The only
+  thing wrong was that this process had never seen the key that signed it;
+- it is **invisible for hours after a deploy**. A fresh pod has fresh keys, so
+  every test anyone runs by hand right after shipping passes;
+- it **does not degrade, it stops**. There is no partial mode, and no log line
+  until a user reports it.
+
+The fix is `Provider::refresh_keys`: on a signature failure — and only on a
+signature failure, which is the one verification error plausibly *our* fault
+rather than the caller's — re-read the key set and give the token exactly one
+more chance. Only the verification is retried, never the exchange: the code is
+single-use and spending it twice answers `invalid_grant`, turning a recoverable
+login into a failed one.
+
+Only the key set is re-fetched, not the whole discovery document. An endpoint
+that moved is a reconfiguration, not something to follow silently at login time.
+
+The unit test that guards it asserts the mechanism rather than the symptom —
+that the client reads the metadata cell *now* rather than a snapshot beside it —
+because collapsing that cell back into a plain field compiles, passes every
+other test in the module, and breaks logins some hours after each deploy.
 
 ## Traps
 
 - **`Error::Authentication` from a cluster is a 502, never a 401.** A cluster
-  whose SASL credentials were rejected must not log the user out. This is in the
-  error table and it is worth checking twice here.
+  whose SASL credentials were rejected must not log the *user* out.
 - **The groups claim can be large.** An encrypted cookie has a 4 KB budget.
-  Store the resolved role names, not the raw claim.
-- **Token refresh.** Sessions outlive the `id_token`. Either refresh against Dex
-  or accept that the session length is the session length — decide explicitly
-  and write it down; drifting into "it logs people out at odd times" is the
-  default outcome.
-- **The `messages` grant gates the endpoint AND the tab.** A `metadata`-only
-  user must not see a message tab that 403s on click. Same mechanism as the
-  capability projection — grants are projected into the same shape the frontend
-  already consumes.
+  Store the resolved role names, not the raw claim. Done.
+- **`messages_read` gates the endpoint AND the tab.** A view-only user must not
+  see a message tab that 403s on click. Grants ride on each cluster's card, so
+  the tab disappears with the permission.
+- **The keys expire, the endpoints do not.** See above. Anything cached from a
+  provider at startup needs an answer to "what happens when this changes".
 
 ## Acceptance
 
 ```sh
+cargo xtask ci      # green
 cargo xtask live --config config.dev.yaml
 ```
 
-- login works end to end against a Dex instance with a **static-password
-  connector**, run in CI as a container — the one place in this project where a
-  container fixture is the right answer, because the alternative is depending on
-  GitHub from a test;
-- a user in no matching role sees an **empty fleet**, not an error and not a
-  login loop;
-- a `metadata`-only user gets **403 on the messages endpoint and no message
-  tab**;
-- a user with no access to `strimzi` gets **404** on
-  `/api/clusters/strimzi/topics`, and that cluster is absent from
-  `/api/clusters`;
-- **every message read appears in the audit log**, with offsets — asserted by
-  reading the log back after a tail;
-- a forced audit-write failure fails the request rather than serving the
-  payload;
-- PKCE, `state` and `nonce` are all present in the authorize URL and all
-  verified on callback (unit test against a recorded flow).
+Met, and asserted:
 
-## Exit criteria
+- a cluster no role selects is **`404`**, and the fleet is empty rather than an
+  error — unit-tested and asserted in `live`;
+- PKCE, `state` and `nonce` are all present in the authorize URL, and two logins
+  never share a challenge — unit tests against a recorded discovery document;
+- **every message read appears in the audit log** with its offsets, a topic
+  *list* produces none, and with stdout pointed at `/dev/full` a tail answers
+  `500` with no payload while `/health` and the metadata routes are untouched —
+  proven by running;
+- the login flow verifies against the provider's **current** keys.
 
-- [ ] Dex deployed via GitOps, kaas-ui pointed at it
-- [~] **no provider-specific code anywhere in the workspace** — true of what
-  exists, and `kaas-ui-auth` has no dependency that could make it false; it
-  cannot be *met* until there is a provider to have been blind to
-- [ ] `id_token` signature verified, not decoded
-- [x] **one registry lookup, taking the caller, returning 404 for invisible
-  clusters** — `Registry::get(id, &Access)`, with the visibility test inside it
-  rather than in the router, and asserted both in unit tests and by running a
-  server with an enforcing policy: a configured cluster answers `404`, and the
-  fleet is empty rather than an error
-- [~] **`metadata` / `messages` gates both endpoint and tab** — unchanged, and
-  now provable by hand: give a role `grants: [metadata]`, sign in, and the tab
-  should be absent and the endpoint `403`. Nobody has done it yet
-- [~] **`metadata` / `messages` gates both endpoint and tab** — both are wired:
-  all four payload routes spend the grant against the topic name, and the tab
-  is hidden when the cluster's card does not carry it. Unit-tested, and not yet
-  provable end to end, because proving it needs a caller who holds one grant
-  and not the other — which needs sessions
-- [x] **audit log written before the response, failure is fatal to the
-  request** — one JSON line per disclosure on stdout, carrying who, which
-  cluster and topic, the seek, and the offsets actually returned. Proven by
-  running: four reads against `kaas-canary` produce four entries with their
-  ranges, a topic *list* produces none, and with stdout pointed at `/dev/full`
-  a tail answers `500` and no payload while `/health` and the metadata routes
-  are untouched. SQLite via `sqlx` is **not** built — see below
-- [ ] client secret from Vault via ExternalSecret, never in a ConfigMap
+Not met, and the reason each is still open is in the next section:
+
+- login end to end against a Dex with a static-password connector, in CI;
+- a view-only user gets 403 on the messages endpoint and no message tab, proven
+  with a real session rather than a constructed `Access`.
+
+## What is still open
+
+- [ ] **An automated test has never performed a login.** Everything from the
+  redirect to the session cookie is covered by unit tests over recorded
+  documents and by people using it; nothing exercises the whole flow
+  unattended. The phase's answer — a Dex with a static-password connector, run
+  in CI as a container — is the one place in this project where a container
+  fixture is the right call, because the alternative is depending on GitHub
+  from a test. It is also why the key-rotation bug reached a user.
+- [ ] **RP-initiated logout.** `POST /auth/logout` drops kaas-ui's cookie and
+  nothing else, so signing out leaves the Dex session intact and the next login
+  is silent. Dex supports the endpoint; kaas-ui does not call it.
+- [ ] **The grant boundary is unproven end to end.** Both halves are wired and
+  unit-tested — the four payload routes spend `messages_read` against the topic
+  name, and the tab is hidden when the cluster's card does not carry it — but
+  proving it needs a caller who holds one permission and not the other, which
+  needs the login test above.
+
+Two exit criteria from the original plan are **retired rather than unmet**:
+
+- ~~client secret from Vault via ExternalSecret~~ — kaas-ui is a public client
+  and has no secret. See above.
+- ~~no provider-specific code anywhere in the workspace~~ — true, and
+  `kaas-ui-auth` has no dependency that could make it false. It was never
+  falsifiable: Dex terminates GitHub, Google, Entra, LDAP or SAML and presents
+  all of them as one issuer with a `groups` claim, which is why "we only
+  support OIDC" is a superset rather than a limitation. The counter-example is
+  next door — `kafbat-ui` carries a GitHub-specific code path with its own REST
+  calls to `/user` and `/user/orgs`, because GitHub OAuth Apps issue opaque
+  tokens with no `id_token`, no discovery document and no groups claim.

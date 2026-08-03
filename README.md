@@ -131,7 +131,7 @@ The message viewer runs on **kaas-lib 0.2.0**. Three things it needed went in
 there rather than here, because version and implementation knowledge belongs in
 the library: the anchored backward walk, `ScanSpec::following`, and a fix for
 `scan` emitting records before its start offset. See
-[Phase 3](docs/04-phase-3-messages.md).
+[What is built](docs/11-built.md).
 
 ## Measurements
 

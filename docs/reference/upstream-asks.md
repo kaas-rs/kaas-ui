@@ -45,7 +45,7 @@ meaning "not reported by this path", which is honest, rather than `false`, which
 is a guess.
 
 **Worked around** in kaas-ui by rendering the fleet from
-`Cluster::snapshot()` alone (see [Phase 0](../01-phase-0-skeleton.md)), so this
+`Cluster::snapshot()` alone (see [what is built](../11-built.md)), so this
 is not blocking. It is filed because the workaround is a UI making a
 compatibility decision, which is the thing the ownership boundary exists to
 prevent.

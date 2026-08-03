@@ -9,9 +9,12 @@ multi-cluster from day one, OIDC via Dex.
 - `PLAN.md` — the design. Why read-only, why multi-cluster, why Dex. Stable.
 - `docs/` — the implementation plan. Phases 0–8 (= PLAN.md's M0–M8), plus
   release/deployment and four reference documents. Changes as phases land.
+- `docs/11-built.md` — what the finished phases decided differently from their
+  plan, and what was measured. **A phase that lands loses its plan file**; what
+  outlived it is here.
 
-Read `docs/README.md` first. Nothing is built yet — the workspace itself is
-Phase 0.
+Read `docs/README.md` first. Phases 0, 1, 2, 3 and 5 are done; Phase 4 (auth)
+is running with three things open; 6, 7 and 8 are not started.
 
 ## Relationship to kaas-lib and kaas
 

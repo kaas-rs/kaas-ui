@@ -33,10 +33,19 @@ Every phase's acceptance command below runs against them.
 | what it is | the `kaas` broker, 3 replicas, under development | Apache Kafka **4.2.0** via Strimzi, 3 dual-role nodes |
 | listeners | plain 9092, authed 9095, tls 9093 | plain 9092, tls 9093 |
 | api keys advertised | **37** | **75** |
-| topics | 21 | 14 |
-| groups | 4, all reporting `group_type: ""` | 8, all `classic` |
-| authorizer | yes — 24 ACLs | none configured |
+| topics | 13 | 17, of which 2 internal |
+| groups | 2, all reporting `group_type: ""` | 16, all `classic` |
+| authorizer | yes — 24 ACLs | none — `SECURITY_DISABLED(54)` |
 | topic ids | **not reported** — `Fetch` stays on the name path | reported — `Fetch` runs v18 by id |
+
+**The topic and group rows move; the rest does not.** Canaries connect and
+leave, benchmarks create and delete. Those two numbers were 21/14 topics and
+4/8 groups when this file was first written, and re-reading them is one
+`livetest probe` — so treat them as "roughly this many, both non-empty" rather
+than as constants. No assertion in `cargo xtask live` pins them, deliberately:
+a test that fails because someone's canary restarted is a test that gets
+disabled. The api-key counts and the ACL count are the stable facts, and they
+are the ones the capability work rests on.
 
 Both are `ClusterIP` only; there is no ingress in this cluster, so kaas-ui is
 reached in development by running it here and using the code-server port
@@ -56,8 +65,10 @@ happened to be able to read.
 
 ## Measured facts, not assumed ones
 
-Everything in this section came out of a probe run against both clusters on
-2026-08-01, using `kafka-admin` 0.1.0 from crates.io.
+Everything in this section came out of a probe run against both clusters,
+first on 2026-08-01 with `kafka-admin` 0.1.0 and re-read on 2026-08-03 with
+kaas-lib's `livetest probe` — which is the oracle: what the UI renders must
+agree with what it reports.
 
 ### The capability gap is the product's best test fixture
 
@@ -160,7 +171,7 @@ Two things to carry forward:
 - **`TailSpec::limit` is a per-topic target spread across partitions with
   `div_ceil`.** 20 over 16 partitions is 2 each, so 32 come back. The HTTP
   `?limit=` must either say so or truncate after merging — decided in
-  [Phase 3](../04-phase-3-messages.md).
+  [what is built](../11-built.md).
 - **~325 KB to reach the tail of a 40M-record topic** is the backward walk
   working. Phase 3's acceptance asserts on this via `ConnectionStats`, and the
   numbers above are the baseline.
