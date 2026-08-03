@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use figment::Figment;
 use figment::providers::{Env, Format, Yaml};
-use kaas_ui_auth::{Grant, OidcConfig, Role};
+use kaas_ui_auth::{OidcConfig, Resource, Role};
 use serde::{Deserialize, Serialize};
 
 /// Everything kaas-ui reads at startup.
@@ -353,18 +353,36 @@ impl Config {
                     role.name
                 )));
             }
-            if role.grants.is_empty() {
+            if role.permissions.is_empty() {
                 return Err(ConfigError::Invalid(format!(
-                    "role {:?} grants nothing: say what it permits, or remove it",
+                    "role {:?} permits nothing: say what it allows, or remove it",
                     role.name
                 )));
             }
-            if !role.topics.is_empty() && !role.grants.contains(&Grant::Messages) {
-                return Err(ConfigError::Invalid(format!(
-                    "role {:?} scopes topics but does not grant `messages`: the patterns would \
-                     have no effect, which reads like access nobody has",
-                    role.name
-                )));
+            for permission in &role.permissions {
+                if permission.actions.is_empty() {
+                    return Err(ConfigError::Invalid(format!(
+                        "role {:?} has a permission with no actions",
+                        role.name
+                    )));
+                }
+                if permission.value.is_some() && !permission.resource.is_named() {
+                    return Err(ConfigError::Invalid(format!(
+                        "role {:?} scopes {:?} by value, but that resource has no names for a \
+                         pattern to match — the pattern would be silently ignored",
+                        role.name, permission.resource
+                    )));
+                }
+                if permission.resource != Resource::Topic
+                    && permission
+                        .actions
+                        .contains(&kaas_ui_auth::Action::MessagesRead)
+                {
+                    return Err(ConfigError::Invalid(format!(
+                        "role {:?} grants `messages_read` on {:?}, which has no messages",
+                        role.name, permission.resource
+                    )));
+                }
             }
         }
 

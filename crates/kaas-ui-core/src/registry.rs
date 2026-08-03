@@ -313,7 +313,7 @@ impl Registry {
     pub fn get(&self, id: &str, who: &Access) -> Option<&Arc<ClusterHandle>> {
         self.clusters
             .get(id)
-            .filter(|handle| who.sees(&handle.labels))
+            .filter(|handle| who.sees(&handle.id, &handle.labels))
     }
 
     /// Every cluster this caller can see, in id order.
@@ -324,7 +324,7 @@ impl Registry {
     pub fn visible<'a>(&'a self, who: &'a Access) -> impl Iterator<Item = &'a Arc<ClusterHandle>> {
         self.clusters
             .values()
-            .filter(|handle| who.sees(&handle.labels))
+            .filter(|handle| who.sees(&handle.id, &handle.labels))
     }
 
     /// Every cluster, whoever is asking.
@@ -404,7 +404,7 @@ mod tests {
     /// `kaas-ui-auth`, and against the registry in
     /// [`a_cluster_no_role_selects_does_not_exist`].
     fn anyone() -> Access {
-        Access::unrestricted()
+        Access::admin()
     }
 
     fn config() -> Config {

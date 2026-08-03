@@ -45,7 +45,8 @@ pub mod identity;
 pub mod oidc;
 pub mod policy;
 
-pub use audit::{Action, Audit, AuditError, Read};
+pub use audit::{Audit, AuditError, Kind, Read};
 pub use identity::Principal;
 pub use oidc::{OidcConfig, OidcError, Pending, Provider};
-pub use policy::{Access, Grant, Grants, Policy, Role};
+pub use policy::Action;
+pub use policy::{Access, Permission, Policy, Resource, Role};

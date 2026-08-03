@@ -108,6 +108,21 @@ The client secret comes from Vault through an `ExternalSecret`, the same pattern
 
 ## Authorization
 
+*Rebuilt on kafbat-ui's shape — roles carry subjects, clusters and permissions
+of `resource` + `value` + `actions` — because anyone arriving from that UI
+already knows the model. What could not carry over is most of its vocabulary:
+`create`, `edit`, `delete`, `messages_produce` and `reset_offsets` describe
+writes, and no code path here could perform one. Two actions exist, `view` and
+`messages_read`, and an action that does not exist is rejected by name rather
+than accepted and ignored. The sketch below is the original design; the shape
+that shipped is in `kaas_ui_auth::policy`.*
+
+*Two additions to kafbat's model. `clusters` takes id patterns, and
+`cluster_labels` an optional selector beside it, because a fleet grown past a
+handful wants `env: prod` as well as names. And **no roles at all means the
+anonymous caller is an administrator** — the open deployment every development
+instance runs, stated as a rule rather than left as an accident.*
+
 Read-only makes this small. With no writes, permissions collapse to two axes,
 and the second is the one that matters.
 

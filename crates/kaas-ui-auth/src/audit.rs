@@ -36,10 +36,10 @@ use std::time::SystemTime;
 
 use serde::Serialize;
 
-/// What a caller did.
+/// Which read it was.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Action {
+pub enum Kind {
     /// The newest records of a topic, one shot.
     Tail,
     /// One bounded page of a window.
@@ -73,7 +73,7 @@ pub struct Read {
     /// Which topic.
     pub topic: String,
     /// What they did.
-    pub action: Action,
+    pub action: Kind,
     /// The seek that was asked for, where there was one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
@@ -99,7 +99,7 @@ impl Read {
         display_name: impl Into<String>,
         cluster: impl Into<String>,
         topic: impl Into<String>,
-        action: Action,
+        action: Kind,
     ) -> Self {
         Self {
             at: humantime::format_rfc3339_millis(SystemTime::now()).to_string(),
@@ -258,7 +258,7 @@ mod tests {
 
         audit
             .record(
-                &Read::new("sub-1", "Woestebanaan", "kaas", "kaas-canary", Action::Tail)
+                &Read::new("sub-1", "Woestebanaan", "kaas", "kaas-canary", Kind::Tail)
                     .with_mode("newest")
                     .with_range([12, 9, 30], 3),
             )
@@ -291,7 +291,7 @@ mod tests {
 
         audit
             .record(
-                &Read::new("sub-1", "Woestebanaan", "kaas", "orders", Action::Record)
+                &Read::new("sub-1", "Woestebanaan", "kaas", "orders", Kind::Record)
                     .at_record(3, 4_797_046),
             )
             .expect("a working writer");
@@ -310,7 +310,7 @@ mod tests {
         // nobody receives.
         let audit = Audit::to_writer(Box::new(Broken));
         let error = audit
-            .record(&Read::new("sub", "name", "kaas", "topic", Action::Stream))
+            .record(&Read::new("sub", "name", "kaas", "topic", Kind::Stream))
             .expect_err("the writer always fails");
         assert!(error.to_string().contains("no space left"), "{error}");
     }
@@ -323,7 +323,7 @@ mod tests {
         let audit = Audit::to_writer(Box::new(sink.clone()));
         audit
             .record(
-                &Read::new("sub", "name", "kaas", "empty", Action::Page)
+                &Read::new("sub", "name", "kaas", "empty", Kind::Page)
                     .with_mode("newest")
                     .with_range([], 0),
             )

@@ -32,7 +32,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::routes::split_list;
-use kaas_ui_auth::Action;
+use kaas_ui_auth::Kind;
 
 use crate::{ApiError, ApiResult, AppState, Caller};
 
@@ -136,7 +136,7 @@ pub async fn tail(
     // read that does not happen — see `kaas_ui_auth::audit`.
     state.record_read(
         &caller
-            .reading(&id, &topic, Action::Tail)
+            .reading(&id, &topic, Kind::Tail)
             .with_range(messages.iter().map(|row| row.offset), messages.len()),
     )?;
 
@@ -269,7 +269,7 @@ pub async fn page(
 
     state.record_read(
         &caller
-            .reading(&id, &topic, Action::Page)
+            .reading(&id, &topic, Kind::Page)
             .with_mode(format!("{mode:?}").to_lowercase())
             // `sort_key` already knows how to get an offset out of either row
             // kind; a malformed batch is a disclosure too, and its offset is
@@ -410,7 +410,7 @@ pub async fn one(
                 }
                 state.record_read(
                     &caller
-                        .reading(&id, &topic, Action::Record)
+                        .reading(&id, &topic, Kind::Record)
                         .at_record(partition, offset),
                 )?;
                 return Ok(Json(MessageDetail::of(&record)));
@@ -428,7 +428,7 @@ pub async fn one(
                 }
                 state.record_read(
                     &caller
-                        .reading(&id, &topic, Action::Record)
+                        .reading(&id, &topic, Kind::Record)
                         .at_record(partition, offset),
                 )?;
                 return Ok(Json(MessageDetail::Malformed(MalformedDetail {

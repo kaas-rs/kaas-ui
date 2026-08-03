@@ -41,7 +41,7 @@ use serde::Serialize;
 
 use super::seek::{Plan, SeekMode, SeekQuery};
 use crate::streaming::{self, Principal, Refusal};
-use kaas_ui_auth::Action;
+use kaas_ui_auth::Kind;
 
 use crate::{ApiError, ApiResult, AppState, Caller};
 
@@ -131,7 +131,7 @@ pub async fn stream(
     // could not be recorded is never opened.
     state.record_read(
         &caller
-            .reading(&id, &topic, Action::Stream)
+            .reading(&id, &topic, Kind::Stream)
             .with_mode(format!("{mode:?}").to_lowercase()),
     )?;
 

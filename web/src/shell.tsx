@@ -16,7 +16,7 @@ import {
 import { useCapabilities, useClusters, useIdentity } from "@/api/client";
 import { withBase } from "@/api/base";
 import { SignIn } from "@/pages/sign-in";
-import type { ClusterCard, Feature } from "@/api/types";
+import type { ClusterCard, Feature, Resource } from "@/api/types";
 import { clusterTone } from "@/components/domain";
 import { Button } from "@/components/ui/button";
 import {
@@ -101,16 +101,35 @@ const CLUSTER_NAV: {
   to: string;
   icon: typeof ListTree;
   feature?: Feature;
+  /** The permission this item needs `view` on. */
+  resource?: Resource;
 }[] = [
-  { label: "topics", to: "/clusters/$clusterId/topics", icon: ListTree },
+  {
+    label: "topics",
+    to: "/clusters/$clusterId/topics",
+    icon: ListTree,
+    resource: "topic",
+  },
   {
     label: "groups",
     to: "/clusters/$clusterId/groups",
     icon: Users,
     feature: "consumerGroups",
+    resource: "consumer",
   },
-  { label: "configs", to: "/clusters/$clusterId/configs", icon: Cog, feature: "configs" },
-  { label: "capabilities", to: "/clusters/$clusterId/capabilities", icon: Layers },
+  {
+    label: "configs",
+    to: "/clusters/$clusterId/configs",
+    icon: Cog,
+    feature: "configs",
+    resource: "cluster_config",
+  },
+  {
+    label: "capabilities",
+    to: "/clusters/$clusterId/capabilities",
+    icon: Layers,
+    resource: "cluster_config",
+  },
 ];
 
 /**
@@ -138,6 +157,12 @@ function ClusterSection({ card, active }: { card: ClusterCard; active: boolean }
   }, [active]);
 
   const items = CLUSTER_NAV.filter((item) => {
+    // Two reasons an item can be absent, and they are different claims: the
+    // broker cannot answer it, or this caller may not ask. Both end as "no
+    // item" rather than an item that errors on click.
+    if (item.resource && card.grants[item.resource]?.includes("view") !== true) {
+      return false;
+    }
     if (!item.feature) return true;
     // Until the answer arrives, show it: an item that appears under the cursor
     // is worse than one that errors once.

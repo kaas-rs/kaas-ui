@@ -18,7 +18,7 @@ use kafka_read::{Record, TimestampType};
 use serde::Serialize;
 use utoipa::ToSchema;
 
-use kaas_ui_auth::{Access, Grant, Grants, Principal};
+use kaas_ui_auth::{Access, Action, Principal, Resource};
 
 use crate::health::{ClusterHealth, ClusterStatus};
 use crate::registry::ClusterHandle;
@@ -125,12 +125,12 @@ pub struct ClusterCard {
     /// same mechanism the capability projection uses for what a *broker*
     /// cannot do.
     ///
-    /// `value_type` because the alias is a `BTreeSet`, which utoipa cannot
-    /// name — left alone it emits a `$ref` to a `BTreeSet` schema that does
-    /// not exist, and the generated client is then broken in a way nothing in
-    /// Rust notices.
-    #[schema(value_type = Vec<Grant>)]
-    pub grants: Grants,
+    /// `value_type` because the map is keyed by an enum, which utoipa cannot
+    /// name on its own — left alone it emits a `$ref` to a schema that does
+    /// not exist, and the generated client is broken in a way nothing in Rust
+    /// notices.
+    #[schema(value_type = std::collections::BTreeMap<Resource, Vec<Action>>)]
+    pub grants: std::collections::BTreeMap<Resource, std::collections::BTreeSet<Action>>,
 }
 
 impl ClusterCard {
@@ -165,7 +165,7 @@ impl ClusterCard {
             under_replicated_partition_count: 0,
             snapshot_age_ms: None,
             max_staleness_ms: millis(handle.max_staleness()),
-            grants: who.grants(&handle.labels),
+            grants: who.permissions(&handle.id, &handle.labels),
         };
 
         if let Some(admin) = handle.admin() {

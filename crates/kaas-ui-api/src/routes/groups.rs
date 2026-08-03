@@ -9,6 +9,8 @@ use kaas_ui_core::envelope::Envelope;
 use kafka_admin::types::oks;
 use kafka_admin::{Admin, OffsetSpec};
 
+use kaas_ui_auth::{Action, Resource};
+
 use crate::{ApiResult, AppState, Caller, call};
 
 /// `GET /api/clusters/{id}/groups`
@@ -24,7 +26,8 @@ pub async fn list(
     caller: Caller,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Envelope<GroupSummary>>> {
-    let (_, admin) = state.connected(&id, &caller)?;
+    let (handle, admin) = state.connected(&id, &caller)?;
+    caller.require(&id, &handle.labels, Resource::Consumer, Action::View, None)?;
     let listings = call("list_groups", admin.list_groups()).await?;
 
     let mut groups: Vec<GroupSummary> = listings.iter().map(GroupSummary::from).collect();
@@ -54,7 +57,8 @@ pub async fn detail(
     caller: Caller,
     Path((id, group)): Path<(String, String)>,
 ) -> ApiResult<Json<Envelope<GroupDetail>>> {
-    let (_, admin) = state.connected(&id, &caller)?;
+    let (handle, admin) = state.connected(&id, &caller)?;
+    caller.require(&id, &handle.labels, Resource::Consumer, Action::View, None)?;
     let described = call("describe_groups", admin.describe_groups([group])).await?;
     Ok(Json(Envelope::from_per_item(
         described,
@@ -84,7 +88,8 @@ pub async fn offsets(
     caller: Caller,
     Path((id, group)): Path<(String, String)>,
 ) -> ApiResult<Json<Envelope<GroupOffset>>> {
-    let (_, admin) = state.connected(&id, &caller)?;
+    let (handle, admin) = state.connected(&id, &caller)?;
+    caller.require(&id, &handle.labels, Resource::Consumer, Action::View, None)?;
 
     let committed = call("fetch_offsets", admin.fetch_offsets(&group, None)).await?;
 

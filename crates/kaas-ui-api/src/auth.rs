@@ -20,7 +20,7 @@ use axum::extract::{FromRef, FromRequestParts};
 use axum::http::request::Parts;
 use axum_extra::extract::PrivateCookieJar;
 use axum_extra::extract::cookie::Key;
-use kaas_ui_auth::{Access, Action, Grant, Principal, Read};
+use kaas_ui_auth::{Access, Action, Kind, Principal, Read, Resource};
 
 use crate::AppState;
 use crate::error::ApiError;
@@ -62,7 +62,7 @@ impl Caller {
     /// one place — an audit entry attributed to the wrong person is worse than
     /// none, and four handlers each assembling their own is four chances.
     #[must_use]
-    pub fn reading(&self, cluster: &str, topic: &str, action: Action) -> Read {
+    pub fn reading(&self, cluster: &str, topic: &str, action: Kind) -> Read {
         Read::new(
             self.principal.subject(),
             self.principal.display_name(),
@@ -72,41 +72,47 @@ impl Caller {
         )
     }
 
-    /// Require a grant on a cluster, or fail the request.
+    /// Require an action on a resource, or fail the request.
     ///
-    /// Takes the labels rather than the id because that is what a role selects
-    /// on, and takes the id only to say which cluster in the message.
+    /// Takes the cluster id *and* its labels because a role selects on both,
+    /// and `name` because a permission may be scoped to `public-*`.
     ///
     /// # Errors
     ///
-    /// `403` when the caller holds no role granting this on that cluster.
-    /// Never `404` — reaching this point means the cluster was already visible
-    /// through the registry lookup, so its existence is not a secret from this
-    /// caller.
+    /// `403` when no role of this caller's permits it. Never `404` — reaching
+    /// here means the cluster was already visible through the registry lookup,
+    /// so its existence is not a secret from this caller.
     pub fn require(
         &self,
         cluster: &str,
         labels: &std::collections::BTreeMap<String, String>,
-        grant: Grant,
+        resource: Resource,
+        action: Action,
+        name: Option<&str>,
     ) -> Result<(), ApiError> {
-        if self.access.may(labels, grant) {
+        if self.access.may(cluster, labels, resource, action, name) {
             return Ok(());
         }
-        Err(ApiError::forbidden(match grant {
-            Grant::Messages => format!(
-                "reading message payloads on cluster {cluster} needs the `messages` grant, which \
-                 no role of yours holds there"
+        Err(ApiError::forbidden(match (resource, action, name) {
+            (Resource::Topic, Action::MessagesRead, Some(topic)) => format!(
+                "reading payloads from {topic:?} on cluster {cluster} needs `messages_read` on a \
+                 role of yours that covers that topic"
             ),
-            Grant::Metadata => {
-                format!("browsing cluster {cluster} needs the `metadata` grant")
-            }
+            (Resource::Topic, Action::MessagesRead, None) => format!(
+                "reading payloads on cluster {cluster} needs `messages_read`, which no role of \
+                 yours holds there"
+            ),
+            (resource, action, _) => format!(
+                "this needs `{action:?}` on `{resource:?}` for cluster {cluster}, which no role \
+                 of yours holds"
+            ),
         }))
     }
 
     /// Require payload access to one named topic.
     ///
-    /// The grant *and* the role's topic patterns, asked as one question —
-    /// see [`Access::may_read_topic`].
+    /// The action *and* the value pattern, asked as one question — see
+    /// [`Access::may_read_topic`].
     ///
     /// # Errors
     ///
@@ -117,13 +123,13 @@ impl Caller {
         labels: &std::collections::BTreeMap<String, String>,
         topic: &str,
     ) -> Result<(), ApiError> {
-        if self.access.may_read_topic(labels, topic) {
-            return Ok(());
-        }
-        Err(ApiError::forbidden(format!(
-            "reading payloads from {topic:?} on cluster {cluster} is outside the topics your \
-             roles grant `messages` on"
-        )))
+        self.require(
+            cluster,
+            labels,
+            Resource::Topic,
+            Action::MessagesRead,
+            Some(topic),
+        )
     }
 }
 
@@ -198,9 +204,14 @@ clusters:
         let caller = caller_for(Policy::open()).await;
 
         assert!(!caller.principal().is_authenticated());
-        assert!(caller.access().is_unrestricted());
-        assert!(caller.require("dev", &labels(), Grant::Messages).is_ok());
+        // No policy at all: this caller is an administrator.
+        assert!(caller.access().is_administrator());
         assert!(caller.require_topic("dev", &labels(), "payments").is_ok());
+        assert!(
+            caller
+                .require("dev", &labels(), Resource::Consumer, Action::View, None)
+                .is_ok()
+        );
     }
 
     #[tokio::test]
@@ -208,19 +219,14 @@ clusters:
         // Not a hypothetical: this is what every request looks like the moment
         // roles are configured and before the OIDC slice lands, so it had
         // better fail closed rather than open.
-        let policy = Policy::enforcing(vec![Role {
-            name: "dev".to_owned(),
-            subjects: vec!["kaas-rs".to_owned()],
-            grants: [Grant::Metadata, Grant::Messages].into_iter().collect(),
-            ..Role::default()
-        }]);
+        let policy = Policy::enforcing(vec![Role::admin("admin", vec!["Woestebanaan".to_owned()])]);
         let caller = caller_for(policy).await;
 
-        assert!(!caller.access().is_unrestricted());
-        assert!(!caller.access().sees(&labels()));
+        assert!(!caller.access().is_administrator());
+        assert!(!caller.access().sees("dev", &labels()));
         assert_eq!(
             caller
-                .require("dev", &labels(), Grant::Messages)
+                .require_topic("dev", &labels(), "anything")
                 .expect_err("no role covers an anonymous caller")
                 .status(),
             axum::http::StatusCode::FORBIDDEN

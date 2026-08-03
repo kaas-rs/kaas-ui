@@ -6,7 +6,7 @@
     "license": {
       "name": "Apache-2.0"
     },
-    "version": "0.5.0"
+    "version": "0.6.1"
   },
   "paths": {
     "/api/clusters": {
@@ -996,6 +996,15 @@
   },
   "components": {
     "schemas": {
+      "Action": {
+        "type": "string",
+        "description": "What may be done to it.",
+        "enum": [
+          "view",
+          "messages_read",
+          "all"
+        ]
+      },
       "ApiErrorBody": {
         "type": "object",
         "description": "The body of a failed request.",
@@ -1282,11 +1291,23 @@
             "description": "The failure, when unreachable."
           },
           "grants": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Grant"
+            "type": "object",
+            "description": "What the caller may do here.\n\nProjected per cluster rather than per session because that is what a\nrole grants: `metadata` on prod and `messages` on dev is one caller\nwith two answers. The frontend hides what it must not offer — a\nmessages tab that 403s on click is worse than no tab — which is the\nsame mechanism the capability projection uses for what a *broker*\ncannot do.\n\n`value_type` because the map is keyed by an enum, which utoipa cannot\nname on its own — left alone it emits a `$ref` to a schema that does\nnot exist, and the generated client is broken in a way nothing in Rust\nnotices.",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/Action"
+              }
             },
-            "description": "What the caller may do here.\n\nProjected per cluster rather than per session because that is what a\nrole grants: `metadata` on prod and `messages` on dev is one caller\nwith two answers. The frontend hides what it must not offer — a\nmessages tab that 403s on click is worse than no tab — which is the\nsame mechanism the capability projection uses for what a *broker*\ncannot do.\n\n`value_type` because the alias is a `BTreeSet`, which utoipa cannot\nname — left alone it emits a `$ref` to a `BTreeSet` schema that does\nnot exist, and the generated client is then broken in a way nothing in\nRust notices."
+            "propertyNames": {
+              "type": "string",
+              "description": "What a permission is about.\n\nOnly what exists. A schema registry and an ACL viewer are Phases 6 and 7,\nand their resources arrive with them rather than ahead of them.",
+              "enum": [
+                "cluster_config",
+                "topic",
+                "consumer"
+              ]
+            }
           },
           "id": {
             "type": "string",
@@ -1671,11 +1692,23 @@
                   "description": "The failure, when unreachable."
                 },
                 "grants": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/Grant"
+                  "type": "object",
+                  "description": "What the caller may do here.\n\nProjected per cluster rather than per session because that is what a\nrole grants: `metadata` on prod and `messages` on dev is one caller\nwith two answers. The frontend hides what it must not offer — a\nmessages tab that 403s on click is worse than no tab — which is the\nsame mechanism the capability projection uses for what a *broker*\ncannot do.\n\n`value_type` because the map is keyed by an enum, which utoipa cannot\nname on its own — left alone it emits a `$ref` to a schema that does\nnot exist, and the generated client is broken in a way nothing in Rust\nnotices.",
+                  "additionalProperties": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/Action"
+                    }
                   },
-                  "description": "What the caller may do here.\n\nProjected per cluster rather than per session because that is what a\nrole grants: `metadata` on prod and `messages` on dev is one caller\nwith two answers. The frontend hides what it must not offer — a\nmessages tab that 403s on click is worse than no tab — which is the\nsame mechanism the capability projection uses for what a *broker*\ncannot do.\n\n`value_type` because the alias is a `BTreeSet`, which utoipa cannot\nname — left alone it emits a `$ref` to a `BTreeSet` schema that does\nnot exist, and the generated client is then broken in a way nothing in\nRust notices."
+                  "propertyNames": {
+                    "type": "string",
+                    "description": "What a permission is about.\n\nOnly what exists. A schema registry and an ACL viewer are Phases 6 and 7,\nand their resources arrive with them rather than ahead of them.",
+                    "enum": [
+                      "cluster_config",
+                      "topic",
+                      "consumer"
+                    ]
+                  }
                 },
                 "id": {
                   "type": "string",
@@ -2896,14 +2929,6 @@
         ],
         "description": "Whether a feature can be shown, and if not, why not."
       },
-      "Grant": {
-        "type": "string",
-        "description": "What a role permits. Two, because reading is the only verb.",
-        "enum": [
-          "metadata",
-          "messages"
-        ]
-      },
       "GroupDetail": {
         "oneOf": [
           {
@@ -3928,6 +3953,15 @@
             "description": "Whether no partition resolved to an offset.\n\nPrecomputed because it is the case worth saying out loud, and a UI that\nhas to derive it will derive it in three places and differently."
           }
         }
+      },
+      "Resource": {
+        "type": "string",
+        "description": "What a permission is about.\n\nOnly what exists. A schema registry and an ACL viewer are Phases 6 and 7,\nand their resources arrive with them rather than ahead of them.",
+        "enum": [
+          "cluster_config",
+          "topic",
+          "consumer"
+        ]
       },
       "ResourceError": {
         "type": "object",

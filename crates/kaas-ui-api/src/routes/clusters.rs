@@ -6,6 +6,8 @@ use kaas_ui_core::dto::{Broker, ClusterCard, ClusterDescriptionDto, ClusterDetai
 use kaas_ui_core::envelope::Envelope;
 use kaas_ui_core::health::ClusterStatus;
 
+use kaas_ui_auth::{Action, Resource};
+
 use crate::{ApiResult, AppState, Caller, call};
 
 /// `GET /api/clusters`
@@ -68,6 +70,13 @@ pub async fn detail(
     Path(id): Path<String>,
 ) -> ApiResult<Json<Envelope<ClusterDetail>>> {
     let (handle, admin) = state.connected(&id, &caller)?;
+    caller.require(
+        &id,
+        &handle.labels,
+        Resource::ClusterConfig,
+        Action::View,
+        None,
+    )?;
     let snapshot = admin.cluster().snapshot();
 
     let mut brokers = Broker::list(&snapshot);
@@ -108,7 +117,14 @@ pub async fn brokers(
     caller: Caller,
     Path(id): Path<String>,
 ) -> ApiResult<Json<Envelope<Broker>>> {
-    let (_, admin) = state.connected(&id, &caller)?;
+    let (handle, admin) = state.connected(&id, &caller)?;
+    caller.require(
+        &id,
+        &handle.labels,
+        Resource::ClusterConfig,
+        Action::View,
+        None,
+    )?;
     let snapshot = admin.cluster().snapshot();
     let mut brokers = Broker::list(&snapshot);
 
@@ -145,7 +161,14 @@ pub async fn log_dirs(
     caller: Caller,
     Path((id, node)): Path<(String, i32)>,
 ) -> ApiResult<Json<Envelope<LogDirDto>>> {
-    let (_, admin) = state.connected(&id, &caller)?;
+    let (handle, admin) = state.connected(&id, &caller)?;
+    caller.require(
+        &id,
+        &handle.labels,
+        Resource::ClusterConfig,
+        Action::View,
+        None,
+    )?;
     let dirs = call("describe_log_dirs", admin.describe_log_dirs(node)).await?;
     Ok(Json(Envelope::new(
         dirs.iter().map(LogDirDto::from).collect(),

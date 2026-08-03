@@ -177,7 +177,8 @@ async fn serve(config_path: PathBuf, config: Config) -> Result<(), Box<dyn std::
     // failure this line exists to prevent.
     let policy = if config.roles.is_empty() {
         tracing::info!(
-            "authentication is not configured: every request is anonymous and sees every cluster"
+            "no roles are configured: every request is the anonymous caller, and that caller is \
+             an administrator"
         );
         Policy::open()
     } else {

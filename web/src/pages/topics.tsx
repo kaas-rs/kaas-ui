@@ -243,7 +243,7 @@ export function TopicDetail({
   // one that errors once, and an open deployment always grants both.
   const clusters = useClusters();
   const grants = clusters.data?.items.find((card) => card.id === clusterId)?.grants;
-  const mayReadMessages = grants === undefined || grants.includes("messages");
+  const mayReadMessages = grants === undefined || !!grants.topic?.includes("messages_read");
   const navigate = useNavigate();
 
   /**

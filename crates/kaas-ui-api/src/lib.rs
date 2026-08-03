@@ -302,7 +302,7 @@ fn api_router() -> Router<AppState> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kaas_ui_auth::{Access, Grant, Principal, Role};
+    use kaas_ui_auth::{Access, Principal, Role};
     use kaas_ui_core::Config;
 
     fn state(policy: Policy) -> AppState {
@@ -323,7 +323,7 @@ clusters:
 
     /// The caller an open deployment resolves for every request.
     fn anyone() -> Caller {
-        Caller::new(Principal::anonymous(), Access::unrestricted())
+        Caller::new(Principal::anonymous(), Access::admin())
     }
 
     #[test]
@@ -340,13 +340,8 @@ clusters:
         // configured, and this caller still gets a 404. A 403 would confirm
         // the id, and confirming ids is how a registry becomes enumerable.
         let policy = Policy::enforcing(vec![Role {
-            name: "prod-only".to_owned(),
-            subjects: vec!["someone".to_owned()],
-            clusters: [("env".to_owned(), "prod".to_owned())]
-                .into_iter()
-                .collect(),
-            grants: [Grant::Metadata].into_iter().collect(),
-            ..Role::default()
+            clusters: vec!["prod-*".to_owned()],
+            ..Role::admin("prod-only", vec!["someone".to_owned()])
         }]);
         let state = state(policy);
         let nobody = Caller::new(Principal::new("stranger", None, []), Access::none());

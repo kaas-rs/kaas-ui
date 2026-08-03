@@ -9,6 +9,8 @@ use kafka_admin::ConfigResource;
 use serde::Deserialize;
 
 use crate::routes::split_list;
+use kaas_ui_auth::{Action, Resource};
+
 use crate::{ApiError, ApiResult, AppState, Caller, call};
 
 /// Which resources to describe.
@@ -38,7 +40,14 @@ pub async fn cluster_configs(
     Path(id): Path<String>,
     Query(query): Query<ConfigQuery>,
 ) -> ApiResult<Json<Envelope<ConfigResourceEntry>>> {
-    let (_, admin) = state.connected(&id, &caller)?;
+    let (handle, admin) = state.connected(&id, &caller)?;
+    caller.require(
+        &id,
+        &handle.labels,
+        Resource::ClusterConfig,
+        Action::View,
+        None,
+    )?;
 
     let resources: Vec<ConfigResource> = match query.resource.as_deref() {
         Some(raw) => split_list(raw)
@@ -82,7 +91,14 @@ pub async fn topic_configs(
     caller: Caller,
     Path((id, topic)): Path<(String, String)>,
 ) -> ApiResult<Json<Envelope<ConfigResourceEntry>>> {
-    let (_, admin) = state.connected(&id, &caller)?;
+    let (handle, admin) = state.connected(&id, &caller)?;
+    caller.require(
+        &id,
+        &handle.labels,
+        Resource::ClusterConfig,
+        Action::View,
+        None,
+    )?;
     describe(&admin, vec![ConfigResource::topic(topic)]).await
 }
 

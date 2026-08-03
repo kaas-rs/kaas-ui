@@ -5,6 +5,8 @@ use axum::extract::{Path, Query, State};
 use kaas_ui_core::capabilities::{Capabilities, CapabilitySource, project};
 use serde::Deserialize;
 
+use kaas_ui_auth::{Action, Resource};
+
 use crate::{ApiError, ApiResult, AppState, Caller, call};
 
 /// Which broker to read the version table from.
@@ -46,7 +48,14 @@ pub async fn capabilities(
     Path(id): Path<String>,
     Query(query): Query<CapabilityQuery>,
 ) -> ApiResult<Json<Capabilities>> {
-    let (_, admin) = state.connected(&id, &caller)?;
+    let (handle, admin) = state.connected(&id, &caller)?;
+    caller.require(
+        &id,
+        &handle.labels,
+        Resource::ClusterConfig,
+        Action::View,
+        None,
+    )?;
     let snapshot = admin.cluster().snapshot();
 
     let node_id = match query.broker {

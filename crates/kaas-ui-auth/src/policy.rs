@@ -2,22 +2,28 @@
 //!
 //! A [`Policy`] is a list of [`Role`]s from the config file. Resolving one
 //! against a [`Principal`] gives an [`Access`], and every question the rest of
-//! the workspace asks — is this cluster visible, may this caller read a
-//! payload — is asked of that.
+//! the workspace asks is asked of that.
 //!
-//! # Two grants, and the second is the one that matters
+//! # The shape is kafbat-ui's; the verbs cannot be
 //!
-//! Browsing a topic's configuration is not the same act as reading customer
-//! data out of a payload. Payloads carry PII, tokens and order data, so
-//! [`Grant::Metadata`] and [`Grant::Messages`] are separate and a role may
-//! hold the first without the second.
+//! Roles carry subjects, clusters and permissions of `resource` + `value` +
+//! `actions`, which is the model anyone arriving from kafbat-ui already knows.
+//! What does not carry over is most of its vocabulary: `create`, `edit`,
+//! `delete`, `messages_produce`, `reset_offsets` and the rest describe writes,
+//! and kaas-ui has no code path that could perform one. Offering them here
+//! would be a config surface that grants nothing — worse than absent, because
+//! it would read as protection.
+//!
+//! So there are two actions. [`Action::View`] is the metadata surface, and
+//! [`Action::MessagesRead`] is the payloads — the boundary that matters,
+//! because browsing a topic's configuration is not the same act as reading
+//! customer data out of it.
 //!
 //! # Absence is 404, not 403
 //!
-//! [`Access::sees`] is consulted inside the registry lookup, so a cluster a
-//! caller has no role for does not exist as far as that caller is concerned.
-//! A 403 would confirm the id, and confirming ids is how a registry becomes
-//! enumerable.
+//! [`Access::sees`] is consulted inside the registry lookup, so a cluster no
+//! role covers does not exist as far as that caller is concerned. A 403 would
+//! confirm the id, and confirming ids is how a registry becomes enumerable.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -27,28 +33,130 @@ use utoipa::ToSchema;
 
 use crate::identity::Principal;
 
-/// What a role permits. Two, because reading is the only verb.
+/// What a permission is about.
+///
+/// Only what exists. A schema registry and an ACL viewer are Phases 6 and 7,
+/// and their resources arrive with them rather than ahead of them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
-pub enum Grant {
-    /// Cluster, broker, topic, config and group *description*. No payloads.
-    Metadata,
-    /// Record keys, values and headers — the sensitive surface.
-    Messages,
+pub enum Resource {
+    /// The cluster itself: brokers, configs, capabilities, log dirs.
+    ClusterConfig,
+    /// Topics — their list, their description, their configs and offsets, and
+    /// with [`Action::MessagesRead`], the records inside them.
+    Topic,
+    /// Consumer groups, their members and their committed offsets.
+    Consumer,
 }
 
-/// A set of grants, which is how they are carried and projected.
-pub type Grants = BTreeSet<Grant>;
+impl Resource {
+    /// Every resource, for a role that says `all`.
+    #[must_use]
+    pub fn every() -> [Self; 3] {
+        [Self::ClusterConfig, Self::Topic, Self::Consumer]
+    }
+
+    /// Whether a `value` pattern means anything here.
+    ///
+    /// Topics and groups are named, so a role can be scoped to `public-*`. A
+    /// cluster's own configuration is not a set of things with names, and a
+    /// pattern against it would silently match nothing.
+    #[must_use]
+    pub fn is_named(self) -> bool {
+        matches!(self, Self::Topic | Self::Consumer)
+    }
+}
+
+/// What may be done to it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Action {
+    /// See that it exists and read its description. No payloads.
+    View,
+    /// Read record keys, values and headers — the sensitive surface.
+    ///
+    /// Only meaningful on [`Resource::Topic`].
+    MessagesRead,
+    /// Every action this resource has. `all` in the config file.
+    All,
+}
+
+impl Action {
+    /// The concrete actions `self` stands for on a resource.
+    fn expand(self, resource: Resource) -> BTreeSet<Self> {
+        match self {
+            Self::All if resource == Resource::Topic => {
+                [Self::View, Self::MessagesRead].into_iter().collect()
+            }
+            Self::All => [Self::View].into_iter().collect(),
+            other => [other].into_iter().collect(),
+        }
+    }
+}
+
+/// One line of a role's `permissions` list.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "snake_case")]
+pub struct Permission {
+    /// What this is about.
+    pub resource: Resource,
+    /// Which ones, by name. `*` is the only wildcard and may appear anywhere.
+    ///
+    /// Absent means every one of them. Ignored for a resource that has no
+    /// names — see [`Resource::is_named`].
+    #[serde(default)]
+    pub value: Option<String>,
+    /// What may be done.
+    pub actions: Vec<Action>,
+}
+
+impl Permission {
+    /// Everything, on everything — what a role called `admin` is.
+    #[must_use]
+    pub fn all() -> Vec<Self> {
+        Resource::every()
+            .into_iter()
+            .map(|resource| Self {
+                resource,
+                value: None,
+                actions: vec![Action::All],
+            })
+            .collect()
+    }
+
+    /// Whether this permission covers one action on one named thing.
+    fn covers(&self, resource: Resource, action: Action, name: Option<&str>) -> bool {
+        if self.resource != resource {
+            return false;
+        }
+        if !self
+            .actions
+            .iter()
+            .any(|held| held.expand(resource).contains(&action))
+        {
+            return false;
+        }
+        match (&self.value, name) {
+            // A pattern only constrains a resource that has names.
+            (Some(pattern), Some(name)) if resource.is_named() => matches(pattern, name),
+            _ => true,
+        }
+    }
+}
 
 /// One entry in the `roles:` list.
 ///
 /// ```yaml
 /// roles:
 ///   - name: prod-support
-///     subjects: ["kaas-rs:support"]   # a subject, or a group the provider asserted
-///     clusters: { env: prod }         # label selector; every pair must match
-///     grants: [metadata, messages]
-///     topics: ["public-*"]            # payload access scoped by pattern
+///     subjects: ["kaas-rs:support"]   # a subject, a group, a login, an email
+///     clusters: ["prod-*"]            # cluster ids; `*` matches every one
+///     permissions:
+///       - resource: topic
+///         value: "public-*"
+///         actions: [view, messages_read]
+///       - resource: consumer
+///         actions: [view]
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default, rename_all = "snake_case")]
@@ -61,18 +169,31 @@ pub struct Role {
     /// one, because a rule that accidentally grants the world is the one
     /// mistake this file must not make easy.
     pub subjects: Vec<String>,
-    /// A label selector over clusters. Empty matches every cluster.
-    pub clusters: BTreeMap<String, String>,
-    /// What the role permits on those clusters.
-    pub grants: Grants,
-    /// Topic patterns the [`Grant::Messages`] grant is limited to.
+    /// Cluster ids, with `*` as a wildcard. Empty matches every cluster.
+    pub clusters: Vec<String>,
+    /// An additional label selector over those clusters. Every pair must
+    /// match.
     ///
-    /// Empty means every topic. `*` is the only wildcard, and it may appear
-    /// anywhere: `public-*`, `*-events`, `*`.
-    pub topics: Vec<String>,
+    /// kafbat-ui names clusters and stops there; a fleet grown past a handful
+    /// wants `env: prod` as well, and both are cheap to honour.
+    pub cluster_labels: BTreeMap<String, String>,
+    /// What the role permits on them.
+    pub permissions: Vec<Permission>,
 }
 
 impl Role {
+    /// A role that permits everything, everywhere.
+    #[must_use]
+    pub fn admin(name: impl Into<String>, subjects: Vec<String>) -> Self {
+        Self {
+            name: name.into(),
+            subjects,
+            clusters: vec!["*".to_owned()],
+            cluster_labels: BTreeMap::new(),
+            permissions: Permission::all(),
+        }
+    }
+
     /// Whether this role applies to a caller.
     fn covers(&self, who: &Principal) -> bool {
         self.subjects.iter().any(|subject| {
@@ -83,16 +204,18 @@ impl Role {
         })
     }
 
-    /// Whether this role's selector matches a cluster's labels.
-    fn selects(&self, labels: &BTreeMap<String, String>) -> bool {
-        self.clusters
+    /// Whether this role selects a cluster.
+    fn selects(&self, cluster: &str, labels: &BTreeMap<String, String>) -> bool {
+        let by_name = self.clusters.is_empty()
+            || self
+                .clusters
+                .iter()
+                .any(|pattern| matches(pattern, cluster));
+        let by_label = self
+            .cluster_labels
             .iter()
-            .all(|(key, value)| labels.get(key).is_some_and(|found| found == value))
-    }
-
-    /// Whether a topic is inside this role's patterns.
-    fn covers_topic(&self, topic: &str) -> bool {
-        self.topics.is_empty() || self.topics.iter().any(|pattern| matches(pattern, topic))
+            .all(|(key, value)| labels.get(key).is_some_and(|found| found == value));
+        by_name && by_label
     }
 }
 
@@ -104,11 +227,12 @@ pub struct Policy {
 }
 
 impl Policy {
-    /// No authentication configured: everyone sees everything.
+    /// No authentication configured: one anonymous caller, and they are an
+    /// administrator.
     ///
-    /// The honest name for what a deployment without an `auth` block does. It
-    /// is a mode, not a fallback — a policy that failed to load must never
-    /// arrive here, and nothing in this crate produces it by accident.
+    /// The honest name for what a deployment without an identity provider
+    /// does. Every development instance runs this way, and it is what kaas-ui
+    /// did before any of this existed.
     #[must_use]
     pub fn open() -> Self {
         Self {
@@ -145,14 +269,10 @@ impl Policy {
     }
 
     /// Resolve this policy for one caller.
-    ///
-    /// Every role that covers them, kept whole: the cluster and topic
-    /// questions are answered per cluster later, and flattening them here
-    /// would lose which grant came with which selector.
     #[must_use]
     pub fn access(&self, who: &Principal) -> Access {
         if !self.enforcing {
-            return Access::unrestricted();
+            return Access::admin();
         }
         Access {
             roles: self
@@ -161,27 +281,23 @@ impl Policy {
                 .filter(|role| role.covers(who))
                 .map(Arc::clone)
                 .collect(),
-            unrestricted: false,
+            administrator: false,
         }
     }
-}
 
-impl Policy {
     /// Rebuild an access from role names a previous resolution produced.
     ///
     /// A session cookie carries role *names* rather than the groups claim they
     /// came from — a 4 KB budget and an organisation with three hundred teams
     /// do not fit in the same cookie. The cost is that editing `roles:` takes
-    /// effect at the next login rather than the next request, which is a
-    /// trade worth stating out loud: this is a login system, not a live
-    /// permission bus.
-    ///
-    /// A name that no longer matches a configured role is dropped, so deleting
-    /// a role revokes it for sessions already in flight.
+    /// effect at the next login rather than the next request: this is a login
+    /// system, not a live permission bus. A name that no longer matches a
+    /// configured role is dropped, so deleting a role revokes it for sessions
+    /// already open.
     #[must_use]
     pub fn access_for_roles(&self, names: &[String]) -> Access {
         if !self.enforcing {
-            return Access::unrestricted();
+            return Access::admin();
         }
         Access {
             roles: self
@@ -190,7 +306,7 @@ impl Policy {
                 .filter(|role| names.iter().any(|name| *name == role.name))
                 .map(Arc::clone)
                 .collect(),
-            unrestricted: false,
+            administrator: false,
         }
     }
 }
@@ -199,16 +315,17 @@ impl Policy {
 #[derive(Debug, Clone, Default)]
 pub struct Access {
     roles: Vec<Arc<Role>>,
-    unrestricted: bool,
+    administrator: bool,
 }
 
 impl Access {
-    /// Everything, for a deployment with no authentication configured.
+    /// Everything, everywhere — the caller on a deployment with no identity
+    /// provider configured.
     #[must_use]
-    pub fn unrestricted() -> Self {
+    pub fn admin() -> Self {
         Self {
             roles: Vec::new(),
-            unrestricted: true,
+            administrator: true,
         }
     }
 
@@ -220,67 +337,105 @@ impl Access {
     pub fn none() -> Self {
         Self {
             roles: Vec::new(),
-            unrestricted: false,
+            administrator: false,
         }
     }
 
-    /// Whether this caller is subject to any role at all.
+    /// Whether this caller holds everything by virtue of there being no
+    /// policy to hold them to.
     #[must_use]
-    pub fn is_unrestricted(&self) -> bool {
-        self.unrestricted
+    pub fn is_administrator(&self) -> bool {
+        self.administrator
     }
 
-    /// Whether a cluster with these labels exists for this caller.
+    /// Whether a cluster exists for this caller.
     ///
-    /// Visibility is any grant at all: a role with `grants: []` selects a
-    /// cluster it can say nothing about, which is a config mistake rather than
-    /// a way to hide one, and hiding it here would make that mistake silent.
+    /// Any permission at all makes it visible. A role that selects a cluster
+    /// and permits nothing on it is a config mistake rather than a way to hide
+    /// one, and hiding it here would make that mistake silent.
     #[must_use]
-    pub fn sees(&self, labels: &BTreeMap<String, String>) -> bool {
-        self.unrestricted || self.roles.iter().any(|role| role.selects(labels))
-    }
-
-    /// Everything this caller may do on a cluster with these labels.
-    #[must_use]
-    pub fn grants(&self, labels: &BTreeMap<String, String>) -> Grants {
-        if self.unrestricted {
-            return [Grant::Metadata, Grant::Messages].into_iter().collect();
-        }
-        self.roles
-            .iter()
-            .filter(|role| role.selects(labels))
-            .flat_map(|role| role.grants.iter().copied())
-            .collect()
-    }
-
-    /// Whether one grant is held on a cluster with these labels.
-    #[must_use]
-    pub fn may(&self, labels: &BTreeMap<String, String>, grant: Grant) -> bool {
-        self.unrestricted
+    pub fn sees(&self, cluster: &str, labels: &BTreeMap<String, String>) -> bool {
+        self.administrator
             || self
                 .roles
                 .iter()
-                .any(|role| role.selects(labels) && role.grants.contains(&grant))
+                .any(|role| role.selects(cluster, labels) && !role.permissions.is_empty())
     }
 
-    /// Whether this caller may read payloads from one named topic.
+    /// Whether one action is permitted on one named thing.
     ///
-    /// The [`Grant::Messages`] grant *and* the topic patterns, in one place,
-    /// because they are one question. A role granting `messages` on
-    /// `public-*` says nothing about `payments`, and asking the two halves
-    /// separately is how that turns into a leak.
+    /// `name` is the topic or group; `None` asks about the resource in
+    /// general, which is what a list endpoint needs.
     #[must_use]
-    pub fn may_read_topic(&self, labels: &BTreeMap<String, String>, topic: &str) -> bool {
-        self.unrestricted
+    pub fn may(
+        &self,
+        cluster: &str,
+        labels: &BTreeMap<String, String>,
+        resource: Resource,
+        action: Action,
+        name: Option<&str>,
+    ) -> bool {
+        self.administrator
             || self.roles.iter().any(|role| {
-                role.selects(labels)
-                    && role.grants.contains(&Grant::Messages)
-                    && role.covers_topic(topic)
+                role.selects(cluster, labels)
+                    && role
+                        .permissions
+                        .iter()
+                        .any(|permission| permission.covers(resource, action, name))
             })
     }
 
-    /// The names of the roles that covered this caller, for `/api/me` and the
-    /// audit log.
+    /// Whether this caller may read payloads out of one named topic.
+    ///
+    /// The action *and* the value pattern in one question, because they are
+    /// one question: a role granting `messages_read` on `public-*` says
+    /// nothing about `payments`, and asking the halves separately is how that
+    /// becomes a leak.
+    #[must_use]
+    pub fn may_read_topic(
+        &self,
+        cluster: &str,
+        labels: &BTreeMap<String, String>,
+        topic: &str,
+    ) -> bool {
+        self.may(
+            cluster,
+            labels,
+            Resource::Topic,
+            Action::MessagesRead,
+            Some(topic),
+        )
+    }
+
+    /// What this caller may do on a cluster, projected for the frontend.
+    ///
+    /// Per resource, so the UI can hide a section it must not offer — a tab
+    /// that 403s on click is worse than no tab, which is the same rule the
+    /// capability projection follows for what a *broker* cannot answer.
+    #[must_use]
+    pub fn permissions(
+        &self,
+        cluster: &str,
+        labels: &BTreeMap<String, String>,
+    ) -> BTreeMap<Resource, BTreeSet<Action>> {
+        let mut held: BTreeMap<Resource, BTreeSet<Action>> = BTreeMap::new();
+        for resource in Resource::every() {
+            for action in [Action::View, Action::MessagesRead] {
+                if action == Action::MessagesRead && resource != Resource::Topic {
+                    continue;
+                }
+                // `None`: this is the cluster-level answer. A role scoped to
+                // `public-*` still reports `messages_read` here, and the
+                // per-topic check refuses the topics outside it.
+                if self.may(cluster, labels, resource, action, None) {
+                    held.entry(resource).or_default().insert(action);
+                }
+            }
+        }
+        held
+    }
+
+    /// The names of the roles that covered this caller.
     pub fn role_names(&self) -> impl Iterator<Item = &str> {
         self.roles.iter().map(|role| role.name.as_str())
     }
@@ -291,8 +446,8 @@ impl Access {
 /// Hand-written rather than pulled in: the pattern language is one character
 /// wide, and a dependency here would be a larger surface than the function.
 /// Text either side of a `*` is anchored — `public-*` does not match
-/// `not-public-orders` — because a topic pattern that matches in the middle of
-/// a name is a pattern nobody can review.
+/// `not-public-orders` — because a pattern that matches in the middle of a
+/// name is a pattern nobody can review.
 fn matches(pattern: &str, value: &str) -> bool {
     let mut segments = pattern.split('*');
 
@@ -305,8 +460,8 @@ fn matches(pattern: &str, value: &str) -> bool {
 
     let tail: Vec<&str> = segments.collect();
     let Some((last, middle)) = tail.split_last() else {
-        // No `*` in the pattern at all: it was an exact match, and the prefix
-        // strip above only proves it is a prefix.
+        // No `*` in the pattern at all: the prefix strip above only proves it
+        // is a prefix.
         return rest.is_empty();
     };
 
@@ -328,7 +483,6 @@ fn matches(pattern: &str, value: &str) -> bool {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::*;
 
@@ -339,131 +493,178 @@ mod tests {
             .collect()
     }
 
-    fn role(name: &str, subjects: &[&str], selector: &[(&str, &str)], grants: &[Grant]) -> Role {
-        Role {
-            name: name.to_owned(),
-            subjects: subjects.iter().map(|s| (*s).to_owned()).collect(),
-            clusters: labels(selector),
-            grants: grants.iter().copied().collect(),
-            topics: Vec::new(),
-        }
-    }
-
     fn member(groups: &[&str]) -> Principal {
         Principal::new("sub-1", None, groups.iter().map(|g| (*g).to_owned()))
     }
 
-    #[test]
-    fn an_open_policy_grants_everything_to_anyone() {
-        let access = Policy::open().access(&Principal::anonymous());
-        assert!(access.is_unrestricted());
-        assert!(access.sees(&labels(&[("env", "prod")])));
-        assert!(access.may(&labels(&[("env", "prod")]), Grant::Messages));
-        assert!(access.may_read_topic(&labels(&[]), "payments"));
+    fn view_topics(name: &str, subjects: &[&str], clusters: &[&str]) -> Role {
+        Role {
+            name: name.to_owned(),
+            subjects: subjects.iter().map(|s| (*s).to_owned()).collect(),
+            clusters: clusters.iter().map(|c| (*c).to_owned()).collect(),
+            cluster_labels: BTreeMap::new(),
+            permissions: vec![Permission {
+                resource: Resource::Topic,
+                value: None,
+                actions: vec![Action::View],
+            }],
+        }
     }
 
     #[test]
-    fn an_enforcing_policy_hides_clusters_no_role_selects() {
-        let policy = Policy::enforcing(vec![role(
-            "dev",
-            &["kaas-rs"],
-            &[("env", "dev")],
-            &[Grant::Metadata, Grant::Messages],
-        )]);
-        let access = policy.access(&member(&["kaas-rs"]));
+    fn no_policy_means_an_administrator() {
+        // The default this whole file bends around: a deployment with no
+        // identity provider has one caller and they can do everything.
+        let access = Policy::open().access(&Principal::anonymous());
+        assert!(access.is_administrator());
+        assert!(access.sees("prod", &labels(&[])));
+        assert!(access.may_read_topic("prod", &labels(&[]), "payments"));
+        assert!(access.may(
+            "prod",
+            &labels(&[]),
+            Resource::Consumer,
+            Action::View,
+            Some("anything")
+        ));
+    }
 
-        assert!(access.sees(&labels(&[("env", "dev"), ("kind", "kaas")])));
-        assert!(!access.sees(&labels(&[("env", "prod")])));
-        // Absent labels are not a wildcard: a cluster with no `env` at all is
-        // not selected by `env: dev`.
-        assert!(!access.sees(&labels(&[("kind", "kaas")])));
+    #[test]
+    fn an_admin_role_permits_every_resource_and_action() {
+        let policy = Policy::enforcing(vec![Role::admin("admin", vec!["Woestebanaan".to_owned()])]);
+        let access = policy.access(&Principal::new("sub", None, []));
+        assert!(!access.is_administrator(), "held by role, not by default");
+
+        // The subject did not match — the principal has no identifiers here.
+        assert!(!access.sees("kaas", &labels(&[])));
+
+        // The login is an *identity*, not the display name: a name somebody
+        // chose must never grant access, which is why `identifiers` covers the
+        // subject, the login and the email and stops there.
+        let mine = policy.access(&Principal::new(
+            "sub",
+            Some("Ben".to_owned()),
+            ["Woestebanaan".to_owned()],
+        ));
+        assert!(mine.sees("kaas", &labels(&[])));
+        assert!(mine.may_read_topic("kaas", &labels(&[]), "payments"));
+        assert!(mine.may(
+            "kaas",
+            &labels(&[]),
+            Resource::ClusterConfig,
+            Action::View,
+            None
+        ));
+        assert!(mine.may("kaas", &labels(&[]), Resource::Consumer, Action::View, None));
+    }
+
+    #[test]
+    fn a_login_or_an_email_names_a_subject_as_well_as_the_sub_claim() {
+        // Dex's `sub` is an opaque blob; a role names a person by the login or
+        // the email, which is what `identifiers` carries.
+        let policy = Policy::enforcing(vec![Role::admin("admin", vec!["Woestebanaan".to_owned()])]);
+        let by_login = Principal::new("CgVhZG1pbhIFbG9jYWw", None, ["Woestebanaan".to_owned()]);
+        assert!(policy.access(&by_login).sees("kaas", &labels(&[])));
+    }
+
+    #[test]
+    fn view_without_messages_read_is_the_boundary_that_matters() {
+        let policy = Policy::enforcing(vec![view_topics("readers", &["*"], &["*"])]);
+        let access = policy.access(&member(&[]));
+
+        assert!(access.sees("kaas", &labels(&[])));
+        assert!(access.may("kaas", &labels(&[]), Resource::Topic, Action::View, None));
+        assert!(!access.may_read_topic("kaas", &labels(&[]), "anything"));
+        // And a resource this role says nothing about is not permitted.
+        assert!(!access.may("kaas", &labels(&[]), Resource::Consumer, Action::View, None));
+    }
+
+    #[test]
+    fn a_value_pattern_scopes_payloads_to_named_topics() {
+        let policy = Policy::enforcing(vec![Role {
+            name: "support".to_owned(),
+            subjects: vec!["*".to_owned()],
+            clusters: vec!["*".to_owned()],
+            cluster_labels: BTreeMap::new(),
+            permissions: vec![Permission {
+                resource: Resource::Topic,
+                value: Some("public-*".to_owned()),
+                actions: vec![Action::All],
+            }],
+        }]);
+        let access = policy.access(&member(&[]));
+
+        assert!(access.may_read_topic("kaas", &labels(&[]), "public-orders"));
+        assert!(!access.may_read_topic("kaas", &labels(&[]), "payments"));
+        // The cluster-level projection still advertises the action, because
+        // the tab exists for the topics it covers.
+        assert!(
+            access.permissions("kaas", &labels(&[]))[&Resource::Topic]
+                .contains(&Action::MessagesRead)
+        );
+    }
+
+    #[test]
+    fn clusters_are_matched_by_id_and_optionally_by_label() {
+        let mut role = view_topics("prod", &["*"], &["prod-*"]);
+        role.cluster_labels = labels(&[("env", "prod")]);
+        let policy = Policy::enforcing(vec![role]);
+        let access = policy.access(&member(&[]));
+
+        assert!(access.sees("prod-eu", &labels(&[("env", "prod")])));
+        // Right name, wrong label.
+        assert!(!access.sees("prod-eu", &labels(&[("env", "dev")])));
+        // Right label, wrong name.
+        assert!(!access.sees("staging", &labels(&[("env", "prod")])));
     }
 
     #[test]
     fn a_caller_in_no_role_sees_an_empty_fleet_rather_than_an_error() {
-        let policy = Policy::enforcing(vec![role("dev", &["kaas-rs"], &[], &[Grant::Metadata])]);
+        let policy = Policy::enforcing(vec![view_topics("dev", &["kaas-rs"], &["*"])]);
         let access = policy.access(&member(&["someone-else"]));
 
-        assert!(!access.is_unrestricted());
-        assert!(!access.sees(&labels(&[("env", "dev")])));
+        assert!(!access.is_administrator());
+        assert!(!access.sees("kaas", &labels(&[])));
         assert_eq!(access.role_names().count(), 0);
     }
 
     #[test]
-    fn an_empty_selector_matches_every_cluster() {
-        let policy = Policy::enforcing(vec![role("all", &["*"], &[], &[Grant::Metadata])]);
-        let access = policy.access(&member(&[]));
-        assert!(access.sees(&labels(&[("env", "prod")])));
-        assert!(access.sees(&labels(&[])));
-    }
-
-    #[test]
     fn a_star_subject_never_covers_the_anonymous_caller() {
-        let policy = Policy::enforcing(vec![role("all", &["*"], &[], &[Grant::Metadata])]);
-        assert!(!policy.access(&Principal::anonymous()).sees(&labels(&[])));
-        assert!(policy.access(&member(&[])).sees(&labels(&[])));
+        let policy = Policy::enforcing(vec![view_topics("all", &["*"], &["*"])]);
+        assert!(
+            !policy
+                .access(&Principal::anonymous())
+                .sees("kaas", &labels(&[]))
+        );
+        assert!(policy.access(&member(&[])).sees("kaas", &labels(&[])));
     }
 
     #[test]
-    fn metadata_without_messages_is_the_whole_point() {
-        let policy = Policy::enforcing(vec![role(
-            "oncall",
-            &["kaas-rs:platform"],
-            &[("env", "prod")],
-            &[Grant::Metadata],
-        )]);
-        let access = policy.access(&member(&["kaas-rs:platform"]));
-        let prod = labels(&[("env", "prod")]);
+    fn a_session_is_rebuilt_from_its_role_names_and_a_deleted_role_stops_applying() {
+        let policy = Policy::enforcing(vec![view_topics("dev", &["*"], &["*"])]);
+        assert!(
+            policy
+                .access_for_roles(&["dev".to_owned()])
+                .sees("kaas", &labels(&[]))
+        );
+        // Revocation without waiting for a session to expire.
+        assert!(
+            !policy
+                .access_for_roles(&["gone".to_owned()])
+                .sees("kaas", &labels(&[]))
+        );
+    }
 
-        assert!(access.sees(&prod));
-        assert!(access.may(&prod, Grant::Metadata));
-        assert!(!access.may(&prod, Grant::Messages));
-        assert!(!access.may_read_topic(&prod, "anything"));
+    #[test]
+    fn all_means_every_action_the_resource_has_and_no_more() {
         assert_eq!(
-            access.grants(&prod),
-            [Grant::Metadata].into_iter().collect()
+            Action::All.expand(Resource::Topic),
+            [Action::View, Action::MessagesRead].into_iter().collect()
         );
-    }
-
-    #[test]
-    fn grants_from_several_matching_roles_are_unioned() {
-        let policy = Policy::enforcing(vec![
-            role(
-                "reader",
-                &["kaas-rs"],
-                &[("env", "dev")],
-                &[Grant::Metadata],
-            ),
-            role("payloads", &["kaas-rs:platform"], &[], &[Grant::Messages]),
-        ]);
-        let access = policy.access(&member(&["kaas-rs", "kaas-rs:platform"]));
-        let dev = labels(&[("env", "dev")]);
-
+        // A consumer group has no payloads to read.
         assert_eq!(
-            access.grants(&dev),
-            [Grant::Metadata, Grant::Messages].into_iter().collect()
+            Action::All.expand(Resource::Consumer),
+            [Action::View].into_iter().collect()
         );
-        assert_eq!(access.role_names().count(), 2);
-    }
-
-    #[test]
-    fn topic_patterns_scope_the_messages_grant() {
-        let mut scoped = role(
-            "support",
-            &["kaas-rs:support"],
-            &[("env", "prod")],
-            &[Grant::Metadata, Grant::Messages],
-        );
-        scoped.topics = vec!["public-*".to_owned()];
-        let policy = Policy::enforcing(vec![scoped]);
-        let access = policy.access(&member(&["kaas-rs:support"]));
-        let prod = labels(&[("env", "prod")]);
-
-        assert!(access.may_read_topic(&prod, "public-orders"));
-        assert!(!access.may_read_topic(&prod, "payments"));
-        // The grant is still held — it is the topic that is out of scope, and
-        // the projection to the frontend says so at cluster level.
-        assert!(access.may(&prod, Grant::Messages));
     }
 
     #[test]
@@ -475,112 +676,42 @@ mod tests {
         assert!(matches("*", "anything at all"));
         assert!(matches("exact", "exact"));
         assert!(!matches("exact", "exactly"));
-        assert!(!matches("exact", "ex"));
-    }
-
-    #[test]
-    fn a_pattern_may_have_several_wildcards() {
-        assert!(matches("a*b*c", "a-b-c"));
-        assert!(matches("a*b*c", "abc"));
-        assert!(!matches("a*b*c", "a-c"));
-        assert!(!matches("a*b*c", "a-b-c-d"));
-    }
-
-    #[test]
-    fn a_pattern_never_matches_across_a_missing_prefix() {
-        // The regression this function exists to avoid: `find` alone would let
-        // a middle segment match anywhere, so a pattern could quietly cover a
-        // topic nobody meant to include.
         assert!(!matches("orders-*", "shadow-orders-eu"));
     }
 
     #[test]
     fn a_role_deserializes_from_the_documented_shape() {
-        // The field names and the grant spellings are a config-file contract.
-        // YAML is the config crate's business; the shape is this crate's, and
-        // JSON exercises the same derive.
         let parsed: Role = serde_json::from_str(
             r#"{
                 "name": "prod-support",
                 "subjects": ["kaas-rs:support"],
-                "clusters": {"env": "prod"},
-                "grants": ["metadata", "messages"],
-                "topics": ["public-*"]
+                "clusters": ["prod-*"],
+                "permissions": [
+                    {"resource": "topic", "value": "public-*", "actions": ["view", "messages_read"]},
+                    {"resource": "consumer", "actions": ["view"]}
+                ]
             }"#,
         )
         .unwrap();
 
         assert_eq!(parsed.name, "prod-support");
-        assert_eq!(parsed.grants, [Grant::Metadata, Grant::Messages].into());
-        assert_eq!(parsed.topics, ["public-*"]);
-        assert_eq!(parsed.clusters.get("env").map(String::as_str), Some("prod"));
-    }
-
-    #[test]
-    fn a_role_needs_nothing_but_a_name() {
-        let parsed: Role = serde_json::from_str(r#"{"name": "bare"}"#).unwrap();
-        assert!(parsed.subjects.is_empty());
-        assert!(parsed.grants.is_empty());
-        // A role nobody is in and which grants nothing is useless, not
-        // dangerous — it selects every cluster and permits nothing on them.
-        assert!(
-            !Policy::enforcing(vec![parsed])
-                .access(&member(&["kaas-rs"]))
-                .sees(&labels(&[]))
-        );
+        assert_eq!(parsed.permissions.len(), 2);
+        assert_eq!(parsed.permissions[0].resource, Resource::Topic);
+        assert_eq!(parsed.permissions[1].actions, [Action::View]);
     }
 
     #[test]
     fn an_unknown_key_is_rejected_rather_than_ignored() {
-        // `grant:` for `grants:` must not silently produce a role that
-        // permits nothing.
-        let parsed = serde_json::from_str::<Role>(r#"{"name": "typo", "grant": ["messages"]}"#);
-        assert!(parsed.is_err());
-    }
-}
-
-#[cfg(test)]
-#[allow(clippy::unwrap_used)]
-mod session_tests {
-    use super::tests_support::*;
-    use super::*;
-
-    #[test]
-    fn a_session_is_rebuilt_from_its_role_names() {
-        let policy = Policy::enforcing(vec![role_named("dev")]);
-        let access = policy.access_for_roles(&["dev".to_owned()]);
-        assert!(access.sees(&labels_of(&[("env", "dev")])));
-    }
-
-    #[test]
-    fn a_role_that_was_deleted_stops_applying_to_sessions_already_open() {
-        // Revocation without waiting for a session to expire: the name in the
-        // cookie no longer matches anything, so it grants nothing.
-        let policy = Policy::enforcing(vec![role_named("other")]);
-        let access = policy.access_for_roles(&["dev".to_owned()]);
-        assert!(!access.sees(&labels_of(&[("env", "dev")])));
-        assert_eq!(access.role_names().count(), 0);
-    }
-}
-
-#[cfg(test)]
-mod tests_support {
-    use super::*;
-
-    pub fn labels_of(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
-        pairs
-            .iter()
-            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
-            .collect()
-    }
-
-    pub fn role_named(name: &str) -> Role {
-        Role {
-            name: name.to_owned(),
-            subjects: vec!["*".to_owned()],
-            clusters: labels_of(&[("env", "dev")]),
-            grants: [Grant::Metadata].into_iter().collect(),
-            topics: Vec::new(),
-        }
+        // `permission:` for `permissions:` must not produce a role that grants
+        // nothing while looking like it grants something.
+        assert!(serde_json::from_str::<Role>(r#"{"name": "typo", "permission": []}"#).is_err());
+        // And an action that does not exist here — every write verb kafbat-ui
+        // has — is refused by name rather than ignored.
+        assert!(
+            serde_json::from_str::<Permission>(
+                r#"{"resource": "topic", "actions": ["messages_produce"]}"#
+            )
+            .is_err()
+        );
     }
 }

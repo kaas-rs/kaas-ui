@@ -74,11 +74,27 @@ export interface ClusterCard {
    * the same rule the capability projection follows for what a *broker*
    * cannot answer.
    */
-  grants: Grant[];
+  grants: Partial<Record<Resource, Action[]>>;
 }
 
-/** The two things a role can permit. Reading is the only verb. */
-export type Grant = "metadata" | "messages";
+/**
+ * What a permission is about. Mirrors kafbat-ui's resource list, minus the
+ * ones this application has no code for.
+ *
+ * Snake case, unlike every other field on the wire: these are the words the
+ * config file uses, and the API echoes them verbatim so that what the UI hides
+ * and what an operator typed are visibly the same vocabulary.
+ */
+export type Resource = "cluster_config" | "topic" | "consumer";
+
+/**
+ * What may be done to it.
+ *
+ * Two, because reading is the only verb kaas-ui has: `create`, `edit`,
+ * `delete`, `messagesProduce` and the rest of kafbat-ui's vocabulary describe
+ * writes, and there is no code path here that could perform one.
+ */
+export type Action = "view" | "messages_read";
 
 /** `GET /api/me` — who the request is from. */
 export interface Identity {
