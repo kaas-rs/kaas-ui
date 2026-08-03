@@ -88,6 +88,14 @@ export interface Identity {
   roles: string[];
   /** Whether this deployment applies roles at all. */
   enforcing: boolean;
+  /**
+   * Whether an identity provider is configured.
+   *
+   * Distinct from `enforcing`: this decides whether to offer a sign-in
+   * button, while `enforcing` decides whether being signed out means seeing
+   * nothing.
+   */
+  loginAvailable: boolean;
 }
 
 export interface Broker {

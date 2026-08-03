@@ -166,6 +166,35 @@ impl Policy {
     }
 }
 
+impl Policy {
+    /// Rebuild an access from role names a previous resolution produced.
+    ///
+    /// A session cookie carries role *names* rather than the groups claim they
+    /// came from — a 4 KB budget and an organisation with three hundred teams
+    /// do not fit in the same cookie. The cost is that editing `roles:` takes
+    /// effect at the next login rather than the next request, which is a
+    /// trade worth stating out loud: this is a login system, not a live
+    /// permission bus.
+    ///
+    /// A name that no longer matches a configured role is dropped, so deleting
+    /// a role revokes it for sessions already in flight.
+    #[must_use]
+    pub fn access_for_roles(&self, names: &[String]) -> Access {
+        if !self.enforcing {
+            return Access::unrestricted();
+        }
+        Access {
+            roles: self
+                .roles
+                .iter()
+                .filter(|role| names.iter().any(|name| *name == role.name))
+                .map(Arc::clone)
+                .collect(),
+            unrestricted: false,
+        }
+    }
+}
+
 /// One caller's resolved view of the fleet.
 #[derive(Debug, Clone, Default)]
 pub struct Access {
@@ -507,5 +536,51 @@ mod tests {
         // permits nothing.
         let parsed = serde_json::from_str::<Role>(r#"{"name": "typo", "grant": ["messages"]}"#);
         assert!(parsed.is_err());
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod session_tests {
+    use super::tests_support::*;
+    use super::*;
+
+    #[test]
+    fn a_session_is_rebuilt_from_its_role_names() {
+        let policy = Policy::enforcing(vec![role_named("dev")]);
+        let access = policy.access_for_roles(&["dev".to_owned()]);
+        assert!(access.sees(&labels_of(&[("env", "dev")])));
+    }
+
+    #[test]
+    fn a_role_that_was_deleted_stops_applying_to_sessions_already_open() {
+        // Revocation without waiting for a session to expire: the name in the
+        // cookie no longer matches anything, so it grants nothing.
+        let policy = Policy::enforcing(vec![role_named("other")]);
+        let access = policy.access_for_roles(&["dev".to_owned()]);
+        assert!(!access.sees(&labels_of(&[("env", "dev")])));
+        assert_eq!(access.role_names().count(), 0);
+    }
+}
+
+#[cfg(test)]
+mod tests_support {
+    use super::*;
+
+    pub fn labels_of(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+            .collect()
+    }
+
+    pub fn role_named(name: &str) -> Role {
+        Role {
+            name: name.to_owned(),
+            subjects: vec!["*".to_owned()],
+            clusters: labels_of(&[("env", "dev")]),
+            grants: [Grant::Metadata].into_iter().collect(),
+            topics: Vec::new(),
+        }
     }
 }

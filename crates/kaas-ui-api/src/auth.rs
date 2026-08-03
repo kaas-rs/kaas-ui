@@ -5,22 +5,26 @@
 //! to consult: [`AppState::cluster`](crate::AppState::cluster) will not compile
 //! without one.
 //!
-//! # Today it is always anonymous
+//! # Where the caller comes from
 //!
-//! There is no OIDC exchange yet — that is the next slice of Phase 4 — so this
-//! resolves [`Principal::anonymous`] for every request. With no `roles`
-//! configured the policy is open and an anonymous caller is unrestricted,
-//! which is exactly how kaas-ui behaved before any of this existed.
+//! An encrypted session cookie, or nobody. No cookie, an expired one, or one
+//! this process cannot decrypt — a restart rotates the key — all read as the
+//! anonymous caller, because "signed out" is what all three mean to whoever is
+//! looking at the screen.
 //!
-//! What it is *not* is a stub: the resolution below is the real one, and when
-//! sessions land the only change here is where the principal comes from.
+//! The cookie carries the *role names* a login resolved to rather than the
+//! groups claim behind them. See `Policy::access_for_roles` for what that
+//! trades away.
 
-use axum::extract::FromRequestParts;
+use axum::extract::{FromRef, FromRequestParts};
 use axum::http::request::Parts;
+use axum_extra::extract::PrivateCookieJar;
+use axum_extra::extract::cookie::Key;
 use kaas_ui_auth::{Access, Grant, Principal};
 
 use crate::AppState;
 use crate::error::ApiError;
+use crate::session;
 
 /// The caller, and what they may do.
 #[derive(Debug, Clone)]
@@ -111,15 +115,22 @@ impl FromRequestParts<AppState> for Caller {
     type Rejection = ApiError;
 
     async fn from_request_parts(
-        _parts: &mut Parts,
+        parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        // The session lookup goes here. Until it exists, every caller is the
-        // anonymous one — and against an open policy that is unrestricted,
-        // against an enforcing one it is nobody, which is the safe direction
-        // for the mistake to fall.
-        let principal = Principal::anonymous();
-        let access = state.policy().access(&principal);
+        let jar = PrivateCookieJar::from_headers(&parts.headers, Key::from_ref(state));
+
+        let Some(found) = session::read(&jar) else {
+            // No session is not an error. An open deployment makes this
+            // caller unrestricted; an enforcing one makes them nobody, which
+            // is the safe direction for the gap to fall.
+            let principal = Principal::anonymous();
+            let access = state.policy().access(&principal);
+            return Ok(Self::new(principal, access));
+        };
+
+        let principal = Principal::new(found.subject, Some(found.name), []);
+        let access = state.policy().access_for_roles(&found.roles);
         Ok(Self::new(principal, access))
     }
 }

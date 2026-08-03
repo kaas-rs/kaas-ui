@@ -30,5 +30,6 @@ pub async fn me(State(state): State<AppState>, caller: Caller) -> Json<Identity>
         caller.principal(),
         caller.access(),
         state.policy().is_enforcing(),
+        state.auth().is_some(),
     ))
 }

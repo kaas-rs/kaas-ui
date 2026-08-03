@@ -1,8 +1,21 @@
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
 import { useEffect, useState, type ReactNode } from "react";
-import { ChevronRight, Cog, Layers, ListTree, Monitor, Moon, Sun, Users } from "lucide-react";
+import {
+  ChevronRight,
+  Cog,
+  Layers,
+  ListTree,
+  LogOut,
+  Monitor,
+  Moon,
+  Sun,
+  User,
+  Users,
+} from "lucide-react";
 
-import { useCapabilities, useClusters } from "@/api/client";
+import { useCapabilities, useClusters, useIdentity } from "@/api/client";
+import { withBase } from "@/api/base";
+import { SignIn } from "@/pages/sign-in";
 import type { ClusterCard, Feature } from "@/api/types";
 import { clusterTone } from "@/components/domain";
 import { Button } from "@/components/ui/button";
@@ -259,11 +272,21 @@ function ClusterSection({ card, active }: { card: ClusterCard; active: boolean }
  */
 export function Shell() {
   const [theme, setTheme] = useTheme();
+  const identity = useIdentity();
   const clusters = useClusters();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const activeCluster = pathname.match(/^\/clusters\/([^/]+)/)?.[1];
 
   const ThemeIcon = theme === "dark" ? Moon : theme === "light" ? Sun : Monitor;
+
+  // Signed out, on a deployment that enforces roles: there is nothing behind
+  // this to render. An open deployment never reaches here, and neither does
+  // one whose provider is configured but whose roles are not — that caller
+  // already sees everything, so demanding a login first would be theatre.
+  const me = identity.data;
+  if (me && me.loginAvailable && me.enforcing && !me.authenticated) {
+    return <SignIn enforcing={me.enforcing} />;
+  }
 
   return (
     <SidebarProvider>
@@ -304,6 +327,23 @@ export function Shell() {
 
         <SidebarFooter>
           <SidebarMenu>
+            {me?.authenticated ? (
+              <SidebarMenuItem>
+                {/* A form rather than a link: logout is a POST so that a page
+                    elsewhere cannot sign somebody out by being loaded. */}
+                <form method="post" action={withBase("/auth/logout")}>
+                  <SidebarMenuButton
+                    type="submit"
+                    tooltip={`${me.displayName} — sign out`}
+                    className="w-full"
+                  >
+                    <User aria-hidden />
+                    <span className="truncate">{me.displayName}</span>
+                    <LogOut aria-hidden className="ml-auto size-3.5 opacity-60" />
+                  </SidebarMenuButton>
+                </form>
+              </SidebarMenuItem>
+            ) : null}
             <SidebarMenuItem>
               <SidebarMenuButton
                 onClick={() =>

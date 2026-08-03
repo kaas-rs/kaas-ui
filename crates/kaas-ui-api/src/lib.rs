@@ -26,8 +26,10 @@ use std::time::Duration;
 
 use arc_swap::ArcSwap;
 use axum::Router;
-use axum::routing::get;
-use kaas_ui_auth::Policy;
+use axum::extract::FromRef;
+use axum::routing::{get, post};
+use axum_extra::extract::cookie::Key;
+use kaas_ui_auth::{Policy, Provider};
 use kaas_ui_core::registry::{ClusterHandle, Registry};
 use kafka_admin::Admin;
 
@@ -35,6 +37,7 @@ pub mod auth;
 pub mod error;
 pub mod openapi;
 pub mod routes;
+pub mod session;
 pub mod streaming;
 
 pub use auth::Caller;
@@ -57,6 +60,11 @@ pub struct AppState {
     registry: Arc<ArcSwap<Registry>>,
     /// Who may see what. [`Policy::open`] when nothing was configured.
     policy: Arc<Policy>,
+    /// The identity provider, when one is configured.
+    auth: Option<Arc<Provider>>,
+    /// Encrypts the session and pending-login cookies. Generated at startup,
+    /// so a restart signs everyone out — see [`session`].
+    cookie_key: Key,
     streams: Arc<streaming::StreamGovernor>,
     stopping: Arc<streaming::ShutdownSignal>,
     shutdown: streaming::Shutdown,
@@ -69,6 +77,8 @@ impl AppState {
         Self {
             registry,
             policy: Arc::new(policy),
+            auth: None,
+            cookie_key: Key::generate(),
             streams: Arc::new(streaming::StreamGovernor::default()),
             stopping: Arc::new(stopping),
             shutdown,
@@ -78,6 +88,21 @@ impl AppState {
     /// The current registry.
     pub fn registry(&self) -> arc_swap::Guard<Arc<Registry>> {
         self.registry.load()
+    }
+
+    /// Attach an identity provider.
+    ///
+    /// Absent, `/auth/*` answers 404 and every caller is anonymous — which is
+    /// the development deployment and was the whole cluster until Phase 4.
+    #[must_use]
+    pub fn with_auth(mut self, provider: Arc<Provider>) -> Self {
+        self.auth = Some(provider);
+        self
+    }
+
+    /// The identity provider, if there is one.
+    pub fn auth(&self) -> Option<&Arc<Provider>> {
+        self.auth.as_ref()
     }
 
     /// The authorization policy.
@@ -147,6 +172,13 @@ impl AppState {
     }
 }
 
+/// So `PrivateCookieJar` can be extracted in a handler.
+impl FromRef<AppState> for Key {
+    fn from_ref(state: &AppState) -> Self {
+        state.cookie_key.clone()
+    }
+}
+
 /// Run a cluster call under the request ceiling.
 ///
 /// The caller decides what the failure means: `?` turns it into a failed
@@ -173,6 +205,10 @@ pub(crate) async fn call<T>(
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(routes::health::health))
+        // Outside `/api`: these are browser navigations, not data.
+        .route("/auth/login", get(routes::auth::login))
+        .route("/auth/callback", get(routes::auth::callback))
+        .route("/auth/logout", post(routes::auth::logout))
         .nest("/api", api_router())
         .with_state(state)
 }

@@ -30,8 +30,20 @@
 //! [`Access`] — so the arrow points this way and cannot point back. Anything
 //! here that starts wanting a cluster type belongs in core instead.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::indexing_slicing
+    )
+)]
+
 pub mod identity;
+pub mod oidc;
 pub mod policy;
 
 pub use identity::Principal;
+pub use oidc::{OidcConfig, OidcError, Pending, Provider};
 pub use policy::{Access, Grant, Grants, Policy, Role};

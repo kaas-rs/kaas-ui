@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use figment::Figment;
 use figment::providers::{Env, Format, Yaml};
-use kaas_ui_auth::{Grant, Role};
+use kaas_ui_auth::{Grant, OidcConfig, Role};
 use serde::{Deserialize, Serialize};
 
 /// Everything kaas-ui reads at startup.
@@ -29,6 +29,13 @@ pub struct Config {
     /// Absent — the default — and nothing is mounted at `/dex`, which is what
     /// a deployment with no authentication wants.
     pub dex: Option<DexConfig>,
+    /// The identity provider, when there is one.
+    ///
+    /// Absent is the open deployment: no login routes, one anonymous caller.
+    /// Present, and `/auth/login` exists — but what anyone may *see* is still
+    /// `roles` below, so configuring this alone changes nothing except that
+    /// kaas-ui learns your name.
+    pub auth: Option<OidcConfig>,
     /// Who may see which clusters, and whether they may read payloads.
     ///
     /// Empty is the open deployment: no authentication, one anonymous caller,
@@ -266,7 +273,7 @@ impl Config {
     /// if it is not said out loud.
     #[must_use]
     pub fn role_warning(&self) -> Option<String> {
-        if self.roles.is_empty() {
+        if self.roles.is_empty() || self.auth.is_some() {
             return None;
         }
         Some(format!(

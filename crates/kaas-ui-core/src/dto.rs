@@ -48,17 +48,27 @@ pub struct Identity {
     /// inferring from an empty role list — which is also what a misconfigured
     /// policy looks like.
     pub enforcing: bool,
+    /// Whether an identity provider is configured at all.
+    ///
+    /// Distinct from `enforcing`, and the frontend needs both: this decides
+    /// whether to offer a sign-in button, while `enforcing` decides whether
+    /// being signed out means seeing nothing. A deployment can have roles and
+    /// no provider — which is a misconfiguration the startup log warns about —
+    /// or a provider and no roles, which is an open deployment that happens to
+    /// know your name.
+    pub login_available: bool,
 }
 
 impl Identity {
     /// Project a resolved caller.
-    pub fn of(who: &Principal, access: &Access, enforcing: bool) -> Self {
+    pub fn of(who: &Principal, access: &Access, enforcing: bool, login_available: bool) -> Self {
         Self {
             authenticated: who.is_authenticated(),
             subject: who.subject().to_owned(),
             display_name: who.display_name().to_owned(),
             roles: access.role_names().map(str::to_owned).collect(),
             enforcing,
+            login_available,
         }
     }
 }

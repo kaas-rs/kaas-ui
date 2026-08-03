@@ -19,6 +19,8 @@ kafka-read  = { workspace = true }
 arc-swap     = { workspace = true }
 async-stream = { workspace = true }
 axum         = { workspace = true }
+axum-extra   = { workspace = true }
+time         = { workspace = true }
 bytes        = { workspace = true }
 futures      = { workspace = true }
 serde        = { workspace = true }

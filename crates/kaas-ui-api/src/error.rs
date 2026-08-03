@@ -78,6 +78,24 @@ impl ApiError {
         }
     }
 
+    /// `502`. The identity provider could not be reached or refused.
+    ///
+    /// Never `401`: the caller did nothing wrong, and asking them to sign in
+    /// again when signing in is what failed is a loop.
+    pub fn bad_gateway_login(detail: &str) -> Self {
+        Self {
+            status: StatusCode::BAD_GATEWAY,
+            body: ApiErrorBody {
+                message: format!("the login provider is unreachable: {detail}"),
+                kind: None,
+                code: None,
+                code_number: None,
+                unsupported_api: None,
+                retriable: true,
+            },
+        }
+    }
+
     /// `503`. The cluster is configured but has not connected yet, or its last
     /// attempt failed. Distinct from `502`: nothing was asked of a broker.
     pub fn not_connected(cluster: &str, detail: &str) -> Self {

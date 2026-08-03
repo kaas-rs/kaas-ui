@@ -6,7 +6,7 @@
     "license": {
       "name": "Apache-2.0"
     },
-    "version": "0.3.0"
+    "version": "0.5.0"
   },
   "paths": {
     "/api/clusters": {
@@ -3278,7 +3278,8 @@
           "subject",
           "displayName",
           "roles",
-          "enforcing"
+          "enforcing",
+          "loginAvailable"
         ],
         "properties": {
           "authenticated": {
@@ -3292,6 +3293,10 @@
           "enforcing": {
             "type": "boolean",
             "description": "Whether this deployment applies roles at all.\n\n`false` is the open deployment: no identity provider, one anonymous\ncaller, everything visible. The frontend uses it to decide whether to\noffer signing in, and it is worth being explicit about rather than\ninferring from an empty role list — which is also what a misconfigured\npolicy looks like."
+          },
+          "loginAvailable": {
+            "type": "boolean",
+            "description": "Whether an identity provider is configured at all.\n\nDistinct from `enforcing`, and the frontend needs both: this decides\nwhether to offer a sign-in button, while `enforcing` decides whether\nbeing signed out means seeing nothing. A deployment can have roles and\nno provider — which is a misconfiguration the startup log warns about —\nor a provider and no roles, which is an open deployment that happens to\nknow your name."
           },
           "roles": {
             "type": "array",

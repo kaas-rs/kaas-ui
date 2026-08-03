@@ -28,7 +28,7 @@ use arc_swap::ArcSwap;
 use axum::Router;
 use clap::Parser;
 use kaas_ui_api::AppState;
-use kaas_ui_auth::Policy;
+use kaas_ui_auth::{Policy, Provider};
 use kaas_ui_core::{Config, Registry};
 use tower_http::compression::CompressionLayer;
 use tower_http::trace::TraceLayer;
@@ -187,7 +187,22 @@ async fn serve(config_path: PathBuf, config: Config) -> Result<(), Box<dyn std::
         tracing::warn!("{warning}");
     }
 
-    let state = AppState::new(Arc::clone(&registry), policy);
+    let mut state = AppState::new(Arc::clone(&registry), policy);
+
+    // Discovery happens here, at startup, so a wrong issuer is a failure to
+    // boot rather than a failure at somebody's first login. Sessions are
+    // encrypted with a key generated per process: restarting signs everyone
+    // out, which is the trade for having no session store and no key to keep.
+    if let Some(auth) = config.auth.clone() {
+        let provider = Provider::discover(auth)
+            .await
+            .map_err(std::io::Error::other)?;
+        tracing::info!(
+            session_ttl = ?provider.session_ttl(),
+            "logins are enabled; a restart ends every session"
+        );
+        state = state.with_auth(Arc::new(provider));
+    }
 
     let app =
         build_router(state.clone(), config.dex.as_ref(), base).map_err(std::io::Error::other)?;

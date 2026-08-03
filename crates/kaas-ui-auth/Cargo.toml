@@ -8,11 +8,17 @@ repository.workspace   = true
 rust-version.workspace = true
 
 [dependencies]
-serde  = { workspace = true }
-utoipa = { workspace = true }
+humantime-serde = { workspace = true }
+openidconnect   = { workspace = true }
+serde         = { workspace = true }
+thiserror     = { workspace = true }
+tracing       = { workspace = true }
+utoipa        = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
+url        = "2"
+tokio      = { workspace = true }
 
 [lints]
 workspace = true
