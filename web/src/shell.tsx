@@ -5,17 +5,15 @@ import {
   Cog,
   Layers,
   ListTree,
-  LogOut,
   Monitor,
   Moon,
   Sun,
-  User,
   Users,
 } from "lucide-react";
 
 import { useCapabilities, useClusters, useIdentity } from "@/api/client";
-import { withBase } from "@/api/base";
 import { SignIn } from "@/pages/sign-in";
+import { NavUser } from "@/components/nav-user";
 import type { ClusterCard, Feature, Resource } from "@/api/types";
 import { clusterTone } from "@/components/domain";
 import { Button } from "@/components/ui/button";
@@ -351,24 +349,12 @@ export function Shell() {
         </SidebarContent>
 
         <SidebarFooter>
+          {/* Rendered whenever `/api/me` has answered, signed in or not:
+              anonymous is a real state here and hiding it makes "who am I"
+              unanswerable on exactly the deployments where it is least
+              obvious. */}
+          {me ? <NavUser identity={me} /> : null}
           <SidebarMenu>
-            {me?.authenticated ? (
-              <SidebarMenuItem>
-                {/* A form rather than a link: logout is a POST so that a page
-                    elsewhere cannot sign somebody out by being loaded. */}
-                <form method="post" action={withBase("/auth/logout")}>
-                  <SidebarMenuButton
-                    type="submit"
-                    tooltip={`${me.displayName} — sign out`}
-                    className="w-full"
-                  >
-                    <User aria-hidden />
-                    <span className="truncate">{me.displayName}</span>
-                    <LogOut aria-hidden className="ml-auto size-3.5 opacity-60" />
-                  </SidebarMenuButton>
-                </form>
-              </SidebarMenuItem>
-            ) : null}
             <SidebarMenuItem>
               <SidebarMenuButton
                 onClick={() =>
