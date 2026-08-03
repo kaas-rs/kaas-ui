@@ -358,104 +358,74 @@ export function LagCell({ lag }: { lag: Lag }) {
 }
 
 /**
- * Partitions down, brokers across. Four states, four fills, no legend needed
- * after five seconds of looking — and under-replicated is not the same colour
- * as offline, because a short ISR and a replica on a dead broker are different
- * problems.
+ * One placement cell: what broker `broker` holds of partition `partition`.
+ *
+ * Four states, four fills, and under-replicated is deliberately not the same
+ * colour as offline â a short ISR and a replica on a dead broker are different
+ * problems with different fixes.
+ *
+ * `preferred` is the fifth thing, and it is why the table no longer needs a
+ * `replicas` column. Kafka's replica list is **ordered**, and `replicas[0]` is
+ * the *preferred* leader â the broker leadership returns to when it is
+ * rebalanced. A grid of unordered glyphs cannot say that, so the preferred
+ * broker's cell is outlined. When the outline and the `L` are on the same cell
+ * the partition is where it wants to be; when they are apart, leadership has
+ * moved and a preferred-leader election would move it back. That condition was
+ * invisible in both of the views this replaced.
  */
-export function PartitionGrid({
-  partitions,
-  brokerIds,
-}: {
-  partitions: Partition[];
-  brokerIds: number[];
-}) {
-  if (brokerIds.length === 0) return null;
-  const shown = partitions.slice(0, 200);
-
-  const cell = (partition: Partition, broker: number) => {
-    if (!partition.replicas.includes(broker)) {
-      return { label: "", style: {}, title: "no replica" };
-    }
-    if (partition.offlineReplicas.includes(broker)) {
-      return {
-        label: "✕",
-        style: { background: "var(--danger-soft)", color: "var(--danger)" },
-        title: "offline replica",
-      };
-    }
-    if (!partition.isr.includes(broker)) {
-      return {
-        label: "△",
-        style: { background: "var(--warn-soft)", color: "var(--warn-ink)" },
-        title: "out of sync",
-      };
-    }
-    if (partition.leader === broker) {
-      return {
-        label: "L",
-        style: { background: "var(--rust)", color: "#3B2E2A" },
-        title: "leader",
-      };
-    }
+export function placementCell(
+  partition: Partition,
+  broker: number,
+): { label: string; style: Record<string, string>; title: string; preferred: boolean } {
+  const preferred = partition.replicas[0] === broker;
+  if (!partition.replicas.includes(broker)) {
+    return { label: "", style: {}, title: "no replica", preferred: false };
+  }
+  if (partition.offlineReplicas.includes(broker)) {
     return {
-      label: "·",
-      style: { background: "var(--ok-soft)", color: "var(--ok)" },
-      title: "in-sync follower",
+      label: "✕",
+      style: { background: "var(--danger-soft)", color: "var(--danger)" },
+      title: "offline replica",
+      preferred,
     };
+  }
+  if (!partition.isr.includes(broker)) {
+    return {
+      label: "△",
+      style: { background: "var(--warn-soft)", color: "var(--warn-ink)" },
+      title: "out of sync",
+      preferred,
+    };
+  }
+  if (partition.leader === broker) {
+    return {
+      label: "L",
+      style: { background: "var(--rust)", color: "#3B2E2A" },
+      title: preferred ? "leader, on its preferred broker" : "leader",
+      preferred,
+    };
+  }
+  return {
+    label: "·",
+    style: { background: "var(--ok-soft)", color: "var(--ok)" },
+    title: preferred ? "in-sync follower, and the preferred leader" : "in-sync follower",
+    preferred,
   };
+}
 
+/** What the glyphs in the placement columns mean. */
+export function PlacementLegend() {
   return (
-    <div className="overflow-x-auto">
-      <table className="border-collapse text-[12px]">
-        <thead>
-          <tr>
-            <th className="px-2 py-1 text-left font-semibold text-ink-muted">p</th>
-            {brokerIds.map((broker) => (
-              <th
-                key={broker}
-                className="px-2 py-1 font-mono font-normal text-ink-muted"
-              >
-                {broker}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {shown.map((partition) => (
-            <tr key={partition.partition}>
-              <td className="px-2 py-0.5 font-mono text-ink-muted">
-                {partition.partition}
-              </td>
-              {brokerIds.map((broker) => {
-                const { label, style, title } = cell(partition, broker);
-                return (
-                  <td key={broker} className="p-0.5">
-                    <div
-                      title={`p${partition.partition} on broker ${broker}: ${title}`}
-                      style={style}
-                      className="grid h-5 w-6 place-items-center rounded-[2px] font-mono"
-                    >
-                      {label}
-                    </div>
-                  </td>
-                );
-              })}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {partitions.length > shown.length ? (
-        <p className="mt-2 text-[12px] text-ink-faint">
-          showing the first {shown.length} of {partitions.length} partitions
-        </p>
-      ) : null}
-      <div className="mt-3 flex gap-4 text-[12px] text-ink-muted">
-        <Legend fill="var(--rust)" glyph="L" label="leader" />
-        <Legend fill="var(--ok-soft)" glyph="·" label="in sync" />
-        <Legend fill="var(--warn-soft)" glyph="△" label="out of sync" />
-        <Legend fill="var(--danger-soft)" glyph="✕" label="offline" />
-      </div>
+    <div className="text-ink-muted flex flex-wrap items-center gap-4 text-[12px]">
+      <Legend fill="var(--rust)" glyph="L" label="leader" />
+      <Legend fill="var(--ok-soft)" glyph="·" label="in sync" />
+      <Legend fill="var(--warn-soft)" glyph="△" label="out of sync" />
+      <Legend fill="var(--danger-soft)" glyph="✕" label="offline" />
+      <span className="inline-flex items-center gap-1.5">
+        <span className="border-ink-muted grid size-4 place-items-center rounded-[2px] border-2" />
+        preferred leader
+      </span>
+      <span className="text-ink-faint">empty — no replica there</span>
     </div>
   );
 }

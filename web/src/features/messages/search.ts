@@ -55,8 +55,16 @@ export const messageSearch = fields.transform(usable);
 
 export type MessageSearch = Fields;
 
-/** The topic page's tabs. In the URL, so a shared link opens the right one. */
-export const TOPIC_TABS = ["partitions", "placement", "configs", "messages"] as const;
+/**
+ * The topic page's tabs. In the URL, so a shared link opens the right one.
+ *
+ * `placement` was one of these until the grid moved into the partition table.
+ * It is not listed here and does not need to be: `?tab=placement` falls
+ * through the `.catch` below onto `partitions`, which is now where the
+ * placement is — so links shared while it was its own tab still open on the
+ * view they were pointing at.
+ */
+export const TOPIC_TABS = ["partitions", "configs", "messages"] as const;
 
 export type TopicTab = (typeof TOPIC_TABS)[number];
 

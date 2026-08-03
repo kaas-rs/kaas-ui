@@ -10,13 +10,16 @@ import {
   Empty,
   ErrorChips,
   Mono,
-  PartitionGrid,
-  Section,
+  PlacementLegend,
+  placementCell,
   SnapshotAge,
   Spinner,
   bytes,
   count,
 } from "@/components/domain";
+import type { ReactNode } from "react";
+import { cn } from "@/lib/utils";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -315,7 +318,6 @@ export function TopicDetail({
       >
         <TabsList>
           <TabsTrigger value="partitions">partitions</TabsTrigger>
-          <TabsTrigger value="placement">placement</TabsTrigger>
           <TabsTrigger value="configs">configs</TabsTrigger>
           {mayReadMessages ? (
             <TabsTrigger value="messages">messages</TabsTrigger>
@@ -323,12 +325,7 @@ export function TopicDetail({
         </TabsList>
 
         <TabsContent value="partitions" className="mt-4">
-          <Partitions partitions={info.partitions} />
-        </TabsContent>
-        <TabsContent value="placement" className="mt-4">
-          <Section title="Replica placement">
-            <PartitionGrid partitions={info.partitions} brokerIds={info.brokerIds} />
-          </Section>
+          <Partitions partitions={info.partitions} brokerIds={info.brokerIds} />
         </TabsContent>
         <TabsContent value="configs" className="mt-4">
           <TopicConfigs clusterId={clusterId} topic={topic} />
@@ -353,82 +350,162 @@ export function TopicDetail({
   );
 }
 
-function Partitions({ partitions }: { partitions: Partition[] }) {
+/**
+ * A partition-table header that says what its column means.
+ *
+ * Every column here is a Kafka term with a precise meaning and a plausible
+ * wrong reading — `records` is what is *retained*, not what was ever written,
+ * and `epoch` counts leadership changes rather than anything about data. One
+ * line each, on hover, is cheaper than a legend nobody scrolls to.
+ */
+function Head({
+  label,
+  hint,
+  right,
+  className,
+}: {
+  label: ReactNode;
+  hint: string;
+  right?: boolean;
+  className?: string;
+}) {
   return (
-    <div className="rounded-md border">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead className="text-right">partition</TableHead>
-            <TableHead className="text-right">leader</TableHead>
-            <TableHead className="text-right">epoch</TableHead>
-            <TableHead>replicas</TableHead>
-            <TableHead>isr</TableHead>
-            <TableHead className="text-right">earliest</TableHead>
-            <TableHead className="text-right">latest</TableHead>
-            <TableHead className="text-right">records</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {partitions.map((partition) => {
-            const records =
-              partition.earliestOffset !== null && partition.latestOffset !== null
-                ? partition.latestOffset - partition.earliestOffset
-                : null;
-            return (
-              <TableRow key={partition.partition}>
-                <TableCell className="text-right font-mono">
-                  {partition.partition}
-                </TableCell>
-                <TableCell className="text-right">
-                  {partition.leader === null ? (
-                    <span className="text-danger" title="no leader">
-                      ✕ none
-                    </span>
-                  ) : (
-                    <span className="font-mono">{partition.leader}</span>
+    <TableHead className={cn(right && "text-right", className)}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="cursor-help decoration-dotted underline-offset-4 hover:underline">
+            {label}
+          </span>
+        </TooltipTrigger>
+        <TooltipContent>{hint}</TooltipContent>
+      </Tooltip>
+    </TableHead>
+  );
+}
+
+/**
+ * Partitions, with the replica placement in the same rows.
+ *
+ * These were two tabs. They are one table because they were always one
+ * question asked twice: the grid said *where* a partition lives and the table
+ * said *what state* it is in, and answering "which broker is the out-of-sync
+ * replica on, and how far behind is that partition" meant holding one view in
+ * your head while looking at the other.
+ *
+ * The broker columns come first, right after the partition number, because
+ * that block is the shape you scan — a column of `L` glyphs drifting to one
+ * broker is a leader imbalance, and a gap in it is visible before any number
+ * is read.
+ */
+function Partitions({
+  partitions,
+  brokerIds,
+}: {
+  partitions: Partition[];
+  brokerIds: number[];
+}) {
+  return (
+    <div className="space-y-3">
+      <div className="overflow-x-auto rounded-md border">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <Head label="partition" hint="its index within the topic" right />
+              {/* One column per broker. Narrow and centred so the block reads
+                  as a grid rather than as eight more columns of data. */}
+              {brokerIds.map((broker, index) => (
+                <Head
+                  key={broker}
+                  label={broker}
+                  hint={`broker ${broker} — what it holds of each partition`}
+                  className={cn(
+                    "px-1 text-center font-mono font-normal",
+                    index === 0 && "border-line border-l",
+                    index === brokerIds.length - 1 && "border-line border-r",
                   )}
-                </TableCell>
-                <TableCell className="text-right font-mono text-ink-faint">
-                  {partition.leaderEpoch}
-                </TableCell>
-                <TableCell className="font-mono text-ink-muted">
-                  {partition.replicas.join(", ")}
-                </TableCell>
-                <TableCell>
-                  <span
-                    className={
-                      partition.underReplicated
-                        ? "font-mono font-medium text-warn-ink"
-                        : "font-mono text-ink-muted"
-                    }
-                  >
-                    {partition.isr.join(", ")}
-                    {partition.underReplicated
-                      ? ` △ ${partition.replicas.length - partition.isr.length} short`
-                      : ""}
-                  </span>
-                  {partition.offlineReplicas.length > 0 ? (
-                    <span className="ml-2 font-mono text-danger">
-                      ✕ offline {partition.offlineReplicas.join(", ")}
-                    </span>
-                  ) : null}
-                </TableCell>
-                <TableCell className="text-right font-mono">
-                  {count(partition.earliestOffset)}
-                </TableCell>
-                <TableCell className="text-right font-mono">
-                  {count(partition.latestOffset)}
-                </TableCell>
-                <TableCell className="text-right font-mono">{count(records)}</TableCell>
-              </TableRow>
-            );
-          })}
-        </TableBody>
-      </Table>
+                />
+              ))}
+              <Head
+                label="epoch"
+                hint="leader epoch — it bumps on every leadership change"
+                right
+              />
+              <Head label="earliest" hint="the oldest offset still retained" right />
+              <Head label="latest" hint="the offset the next record will get" right />
+              <Head
+                label="records"
+                hint="latest − earliest: what is retained, not what was ever written"
+                right
+              />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {partitions.map((partition) => {
+              const records =
+                partition.earliestOffset !== null && partition.latestOffset !== null
+                  ? partition.latestOffset - partition.earliestOffset
+                  : null;
+              return (
+                <TableRow key={partition.partition}>
+                  <TableCell className="text-right font-mono whitespace-nowrap">
+                    {partition.partition}
+                    {/* Every other state has a glyph. "No leader at all" has
+                        the *absence* of one, which reads as nothing wrong
+                        unless it is said. */}
+                    {partition.leader === null ? (
+                      <span className="text-danger ml-1.5" title="no leader">
+                        ✕
+                      </span>
+                    ) : null}
+                  </TableCell>
+                  {brokerIds.map((broker, index) => {
+                    const { label, style, title, preferred } = placementCell(
+                      partition,
+                      broker,
+                    );
+                    return (
+                      <TableCell
+                        key={broker}
+                        className={cn(
+                          "px-1 py-0.5",
+                          index === 0 && "border-line border-l",
+                          index === brokerIds.length - 1 && "border-line border-r",
+                        )}
+                      >
+                        <div
+                          title={`p${partition.partition} on broker ${broker}: ${title}`}
+                          style={style}
+                          className={cn(
+                            "mx-auto grid h-5 w-6 place-items-center rounded-[2px] font-mono text-[12px]",
+                            preferred && "outline-ink-muted outline-2 -outline-offset-1",
+                          )}
+                        >
+                          {label}
+                        </div>
+                      </TableCell>
+                    );
+                  })}
+                  <TableCell className="text-ink-faint text-right font-mono">
+                    {partition.leaderEpoch}
+                  </TableCell>
+                  <TableCell className="text-right font-mono">
+                    {count(partition.earliestOffset)}
+                  </TableCell>
+                  <TableCell className="text-right font-mono">
+                    {count(partition.latestOffset)}
+                  </TableCell>
+                  <TableCell className="text-right font-mono">{count(records)}</TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </div>
+      {brokerIds.length > 0 ? <PlacementLegend /> : null}
     </div>
   );
 }
+
 
 function TopicConfigs({ clusterId, topic }: { clusterId: string; topic: string }) {
   const configs = useTopicConfigs(clusterId, topic);
