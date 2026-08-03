@@ -8,6 +8,7 @@ repository.workspace   = true
 rust-version.workspace = true
 
 [dependencies]
+arc-swap        = { workspace = true }
 humantime       = "2"
 humantime-serde = { workspace = true }
 openidconnect   = { workspace = true }

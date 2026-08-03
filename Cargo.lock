@@ -1500,6 +1500,7 @@ dependencies = [
 name = "kaas-ui-auth"
 version = "0.7.0"
 dependencies = [
+ "arc-swap",
  "humantime",
  "humantime-serde",
  "openidconnect",

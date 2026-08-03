@@ -25,15 +25,17 @@
 //! them one redirect a day. Decided rather than drifted into, which is what
 //! `docs/05-phase-4-auth.md` asks for.
 
+use std::sync::Arc;
 use std::time::Duration;
 
+use arc_swap::ArcSwap;
 use openidconnect::core::{
-    CoreAuthenticationFlow, CoreClient, CoreGenderClaim, CoreProviderMetadata,
+    CoreAuthenticationFlow, CoreClient, CoreGenderClaim, CoreJsonWebKeySet, CoreProviderMetadata,
 };
 use openidconnect::reqwest;
 use openidconnect::{
-    AuthorizationCode, ClientId, CsrfToken, EmptyAdditionalClaims, IdTokenClaims, IssuerUrl, Nonce,
-    PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, Scope,
+    AuthorizationCode, ClaimsVerificationError, ClientId, CsrfToken, EmptyAdditionalClaims,
+    IdTokenClaims, IssuerUrl, Nonce, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, Scope,
 };
 use serde::{Deserialize, Serialize};
 
@@ -114,9 +116,12 @@ pub struct Pending {
 }
 
 /// A discovered provider, ready to start and finish logins.
-#[derive(Debug, Clone)]
+///
+/// The metadata sits behind an [`ArcSwap`] because one part of it — the key
+/// set — **expires while the process runs**. See [`Provider::refresh_keys`].
+#[derive(Debug)]
 pub struct Provider {
-    metadata: CoreProviderMetadata,
+    metadata: ArcSwap<CoreProviderMetadata>,
     config: OidcConfig,
     http: reqwest::Client,
 }
@@ -160,10 +165,41 @@ impl Provider {
         );
 
         Ok(Self {
-            metadata,
+            metadata: ArcSwap::from_pointee(metadata),
             config,
             http,
         })
+    }
+
+    /// Re-read the provider's signing keys.
+    ///
+    /// **A provider rotates its keys, and discovery is done once.** Dex mints
+    /// a new signing key on a schedule and serves the previous one alongside
+    /// it for a while; a client that cached the key set at startup keeps
+    /// verifying against a key that is no longer used, and every login fails
+    /// with `Signature verification failed` from the moment of the first
+    /// rotation until the process restarts. It does not recover on its own,
+    /// which is what makes it worth a method rather than a comment.
+    ///
+    /// Only the key set is re-fetched. The rest of the discovery document
+    /// describes endpoints, and an endpoint that moved is a reconfiguration
+    /// rather than something to follow silently at login time.
+    ///
+    /// # Errors
+    ///
+    /// [`OidcError::Discovery`] if the key set could not be fetched. The
+    /// caller keeps the keys it had — a provider having a bad moment must not
+    /// leave this with none.
+    pub async fn refresh_keys(&self) -> Result<(), OidcError> {
+        let current = self.metadata.load();
+        let jwks = CoreJsonWebKeySet::fetch_async(current.jwks_uri(), &self.http)
+            .await
+            .map_err(|error| OidcError::Discovery(error.to_string()))?;
+
+        let refreshed = current.as_ref().clone().set_jwks(jwks);
+        self.metadata.store(Arc::new(refreshed));
+        tracing::info!(issuer = %self.config.issuer, "re-read the provider's signing keys");
+        Ok(())
     }
 
     /// How long a session from this provider lasts.
@@ -188,7 +224,7 @@ impl Provider {
         let redirect = RedirectUrl::new(self.config.redirect_url.clone())
             .map_err(|error| OidcError::Config(error.to_string()))?;
         Ok(CoreClient::from_provider_metadata(
-            self.metadata.clone(),
+            self.metadata.load().as_ref().clone(),
             ClientId::new(self.config.client_id.clone()),
             // No client secret. This is a public client, and PKCE is what
             // stands in for one — see the module docs.
@@ -274,11 +310,34 @@ impl Provider {
             )
         })?;
 
+        let nonce = Nonce::new(pending.nonce.clone());
+
+        // The happy path, and the only path on a provider that has not
+        // rotated since this process started.
+        match id_token.claims(&client.id_token_verifier(), &nonce) {
+            Ok(claims) => return Ok(principal_of(claims)),
+            Err(ClaimsVerificationError::SignatureVerification(_)) => {}
+            Err(error) => {
+                return Err(OidcError::Rejected(format!(
+                    "the id_token did not verify: {error}"
+                )));
+            }
+        }
+
+        // A signature this process cannot check is the one verification
+        // failure that is plausibly **our** fault rather than the caller's:
+        // the key that signed it may simply be newer than the set held here.
+        // Re-read the keys and give the token exactly one more chance.
+        //
+        // Only the verification is retried. The code was already spent above
+        // and is single-use — exchanging it again answers `invalid_grant` and
+        // turns a recoverable login into a failed one.
+        tracing::info!("an id_token was signed by an unknown key; re-reading the provider's keys");
+        self.refresh_keys().await?;
+
+        let client = self.client()?;
         let claims = id_token
-            .claims(
-                &client.id_token_verifier(),
-                &Nonce::new(pending.nonce.clone()),
-            )
+            .claims(&client.id_token_verifier(), &nonce)
             .map_err(|error| {
                 OidcError::Rejected(format!("the id_token did not verify: {error}"))
             })?;
@@ -324,7 +383,7 @@ impl Provider {
     #[cfg(test)]
     fn from_metadata(metadata: CoreProviderMetadata, config: OidcConfig) -> Self {
         Self {
-            metadata,
+            metadata: ArcSwap::from_pointee(metadata),
             config,
             http: reqwest::Client::new(),
         }
@@ -400,6 +459,46 @@ mod tests {
         let scope = query.get("scope").cloned().unwrap_or_default();
         assert!(scope.contains("groups"), "{scope}");
         assert_eq!(scope.matches("openid").count(), 1, "{scope}");
+    }
+
+    #[test]
+    fn a_login_verifies_against_the_current_keys_not_the_ones_discovered_at_startup() {
+        // The regression this guards is a live one: Dex rotates its signing
+        // key on a schedule, and a process that pinned the key set at
+        // discovery fails **every** login from the first rotation onward with
+        // `Signature verification failed`, without recovering. Collapsing the
+        // ArcSwap back into a plain field compiles, passes every other test in
+        // this module, and breaks logins some hours after each deploy.
+        //
+        // Asserted through the authorization endpoint because that is the part
+        // of the metadata a unit test can see; what matters is that `client()`
+        // reads what is in the cell now rather than a snapshot beside it.
+        let provider = Provider::from_metadata(recorded_metadata(), recorded_config());
+        let (before, _) = provider.start_login().expect("the fixture is valid");
+        assert!(
+            before.starts_with("https://kaas.smeding.cloud/dex/auth?"),
+            "{before}"
+        );
+
+        let rotated: CoreProviderMetadata = serde_json::from_str(
+            r#"{
+                "issuer": "https://kaas.smeding.cloud/dex",
+                "authorization_endpoint": "https://kaas.smeding.cloud/dex/rotated",
+                "token_endpoint": "https://kaas.smeding.cloud/dex/token",
+                "jwks_uri": "https://kaas.smeding.cloud/dex/keys",
+                "response_types_supported": ["code"],
+                "subject_types_supported": ["public"],
+                "id_token_signing_alg_values_supported": ["RS256"]
+            }"#,
+        )
+        .expect("the fixture parses");
+        provider.metadata.store(Arc::new(rotated));
+
+        let (after, _) = provider.start_login().expect("the fixture is valid");
+        assert!(
+            after.starts_with("https://kaas.smeding.cloud/dex/rotated?"),
+            "the client is pinned to the metadata it booted with: {after}"
+        );
     }
 
     #[test]
