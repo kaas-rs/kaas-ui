@@ -22,6 +22,15 @@ Creates `crates/kaas-ui-auth`.
 > an anonymous caller. That is the safe direction for the gap to fail, and the
 > server warns about it at startup rather than leaving it to be found.
 >
+> **Authentication stays optional, and that is a requirement rather than a
+> transitional state.** kaas-ui is developed behind code-server, where there is
+> no identity provider and no reason to run one: with no `dex` block and no
+> `roles`, `/dex` is not a route, nothing redirects, and every request is the
+> anonymous caller who sees everything. Two tests in `kaas-ui-server` hold the
+> line — the same path is the frontend without a `dex` block and the proxy with
+> one — because "it happens to work today" is how an optional dependency stops
+> being optional.
+>
 > Next: the OIDC exchange and sessions, then the access audit, then Dex in the
 > cluster repo.
 
@@ -34,7 +43,22 @@ is a SPIFFE discovery endpoint, not a login provider.
 **A Dex deployment is the first task of this phase**, in the cluster repo
 alongside kaas-ui — `apps/dex/`, discovered by the same ApplicationSet. In CI a
 static-password connector is enough; in the cluster, a GitHub connector against
-the same OAuth App `kafbat-ui` already uses.
+an OAuth App of its own.
+
+**It is served under kaas-ui's own hostname, at `/dex`.** Every browser hop of
+an OIDC login has to reach the provider — the redirect to `/dex/auth`, and the
+one GitHub sends back to `/dex/callback` — so Dex must be publicly reachable.
+Rather than give it a second hostname and a second DNS record, kaas-ui proxies
+`/dex/*` to the in-cluster Service, which is exactly what `argocd-server` does
+for its own Dex at `/api/dex`. Dex is configured with
+`issuer: https://kaas.smeding.cloud/dex` and serves every endpoint under that
+path; nothing is stripped in the proxy.
+
+That proxy forwards whatever method the browser sends, which retired the
+"every route is a `GET`" check — see [00-foundations.md](00-foundations.md).
+The read-only guarantee never depended on it: it is the single
+`Admin::connect_read_only` construction site, and nothing reachable through the
+proxy has an admin client at all.
 
 This is a real dependency and it is worth stating before the phase starts rather
 than discovering it three days in.

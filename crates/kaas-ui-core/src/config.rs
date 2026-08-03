@@ -23,6 +23,12 @@ pub struct Config {
     pub server: ServerConfig,
     /// The cluster registry.
     pub clusters: Vec<ClusterEntry>,
+    /// Where the login provider is, when kaas-ui serves it under its own
+    /// hostname.
+    ///
+    /// Absent — the default — and nothing is mounted at `/dex`, which is what
+    /// a deployment with no authentication wants.
+    pub dex: Option<DexConfig>,
     /// Who may see which clusters, and whether they may read payloads.
     ///
     /// Empty is the open deployment: no authentication, one anonymous caller,
@@ -36,6 +42,23 @@ pub struct Config {
     /// direction for the gap to fail, and [`Config::role_warning`] says so at
     /// startup rather than leaving it to be discovered.
     pub roles: Vec<Role>,
+}
+
+/// The Dex this deployment logs in through.
+///
+/// kaas-ui proxies `/dex/*` to it rather than giving it a hostname of its own.
+/// Every browser hop of an OIDC login has to reach the provider, and this way
+/// it does so over the name the browser is already on — one DNS record, one
+/// public surface. ArgoCD serves its own Dex at `/api/dex` for the same
+/// reason.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "snake_case")]
+pub struct DexConfig {
+    /// The in-cluster address, as in `http://dex.dex.svc.cluster.local:5556`.
+    ///
+    /// Plain HTTP on purpose: the hop does not leave the cluster, and the
+    /// public leg is terminated by whatever fronts kaas-ui.
+    pub upstream: String,
 }
 
 /// HTTP server settings.

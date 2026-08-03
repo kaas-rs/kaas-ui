@@ -16,6 +16,7 @@
 )]
 
 mod assets;
+mod dex;
 mod reload;
 
 use std::path::PathBuf;
@@ -112,6 +113,42 @@ fn main() -> ExitCode {
     }
 }
 
+/// Assemble the router.
+///
+/// Split out of [`serve`] so that **authentication being optional is a test
+/// rather than a claim**. A development instance behind code-server runs with
+/// no identity provider anywhere: no `dex` block, no `roles`, one anonymous
+/// caller who sees everything. That is not a fallback for a misconfiguration,
+/// it is the default, and the tests below hold it in place.
+fn build_router(
+    state: AppState,
+    dex: Option<&kaas_ui_core::config::DexConfig>,
+    base: String,
+) -> Result<Router, String> {
+    let mut app = Router::new().merge(kaas_ui_api::router(state));
+
+    // The login provider, if this deployment has one. Merged before the asset
+    // fallback, which would otherwise answer `/dex/...` with index.html — a
+    // 200 carrying the wrong document, which is a worse failure than a 404.
+    if let Some(dex) = dex {
+        let proxy = dex::DexProxy::new(&dex.upstream)?;
+        tracing::info!(upstream = %dex.upstream, "serving the login provider at /dex");
+        app = app.merge(dex::router(proxy));
+    }
+
+    Ok(app
+        // Everything that is not an API route is the frontend, including the
+        // client-side routes that have no file behind them.
+        .fallback(move |uri| assets::serve(uri, base.clone()))
+        // Safe over the message stream: `DefaultPredicate` already declines
+        // `text/event-stream`, so events are not held back waiting for a
+        // compression buffer to fill. Replacing this predicate with a
+        // hand-written one would silently reintroduce that — a live view whose
+        // records arrive in bursts of a hundred, seconds late.
+        .layer(CompressionLayer::new())
+        .layer(TraceLayer::new_for_http()))
+}
+
 async fn serve(config_path: PathBuf, config: Config) -> Result<(), Box<dyn std::error::Error>> {
     let listen = config.server.listen;
 
@@ -152,18 +189,8 @@ async fn serve(config_path: PathBuf, config: Config) -> Result<(), Box<dyn std::
 
     let state = AppState::new(Arc::clone(&registry), policy);
 
-    let app = Router::new()
-        .merge(kaas_ui_api::router(state.clone()))
-        // Everything that is not an API route is the frontend, including the
-        // client-side routes that have no file behind them.
-        .fallback(move |uri| assets::serve(uri, base.clone()))
-        // Safe over the message stream: `DefaultPredicate` already declines
-        // `text/event-stream`, so events are not held back waiting for a
-        // compression buffer to fill. Replacing this predicate with a
-        // hand-written one would silently reintroduce that — a live view whose
-        // records arrive in bursts of a hundred, seconds late.
-        .layer(CompressionLayer::new())
-        .layer(TraceLayer::new_for_http());
+    let app =
+        build_router(state.clone(), config.dex.as_ref(), base).map_err(std::io::Error::other)?;
 
     let listener = tokio::net::TcpListener::bind(listen).await?;
     tracing::info!(%listen, "serving");
@@ -247,5 +274,80 @@ async fn shutdown() {
     tokio::select! {
         () = interrupt => tracing::info!("interrupted"),
         () = terminate => tracing::info!("terminated"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use kaas_ui_auth::Policy;
+    use kaas_ui_core::config::DexConfig;
+    use tower::ServiceExt;
+
+    use super::*;
+
+    fn state() -> AppState {
+        let config = Config::from_yaml(
+            r#"
+clusters:
+  - id: kaas
+    bootstrap: ["kaas.kaas.svc.cluster.local:9092"]
+"#,
+        )
+        .expect("the fixture config parses");
+        AppState::new(
+            Arc::new(ArcSwap::from_pointee(Registry::from_config(&config))),
+            Policy::open(),
+        )
+    }
+
+    async fn get(app: Router, path: &str) -> StatusCode {
+        app.oneshot(
+            Request::builder()
+                .uri(path)
+                .body(Body::empty())
+                .expect("the request builds"),
+        )
+        .await
+        .expect("the router answers")
+        .status()
+    }
+
+    /// The development instance: kaas-ui behind code-server, no identity
+    /// provider within reach, and none wanted. `/dex` is not a route at all —
+    /// it falls through to the frontend like any other unknown path.
+    #[tokio::test]
+    async fn without_a_dex_block_there_is_no_login_provider_to_reach() {
+        let app = build_router(state(), None, String::new()).expect("the router builds");
+
+        // The SPA fallback answers, which is what an unrouted path does here.
+        assert_eq!(get(app.clone(), "/dex/auth").await, StatusCode::OK);
+        // And the application is entirely usable without one.
+        assert_eq!(get(app.clone(), "/health").await, StatusCode::OK);
+        assert_eq!(get(app, "/api/me").await, StatusCode::OK);
+    }
+
+    /// And with one configured the same path is the proxy — reaching for an
+    /// upstream that is not there, rather than serving the frontend. The
+    /// difference between these two tests is the whole of "optional".
+    #[tokio::test]
+    async fn with_a_dex_block_the_same_path_is_proxied() {
+        let dex = DexConfig {
+            // Nothing listens here. A 502 proves the request left kaas-ui.
+            upstream: "http://127.0.0.1:1".to_owned(),
+        };
+        let app = build_router(state(), Some(&dex), String::new()).expect("the router builds");
+
+        assert_eq!(get(app.clone(), "/dex/auth").await, StatusCode::BAD_GATEWAY);
+        assert_eq!(get(app, "/health").await, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn an_unusable_dex_address_stops_the_process_rather_than_the_login() {
+        let dex = DexConfig {
+            upstream: "dex.dex.svc.cluster.local:5556".to_owned(),
+        };
+        assert!(build_router(state(), Some(&dex), String::new()).is_err());
     }
 }
