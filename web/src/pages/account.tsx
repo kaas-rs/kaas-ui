@@ -202,23 +202,6 @@ export function Account() {
           </>
         )}
       </Section>
-
-      <Section title="Session">
-        <div className="rounded-md border px-4 py-1">
-          <Row label="how it ends">
-            <span className="text-ink-muted">
-              signing out, the session expiring, or the server restarting
-            </span>
-          </Row>
-          <Row label="why a restart ends it">
-            {/* Worth saying here rather than leaving it to be discovered as
-                "it logs me out sometimes". */}
-            <span className="text-ink-muted">
-              the cookie key is generated at startup and never stored
-            </span>
-          </Row>
-        </div>
-      </Section>
     </div>
   );
 }
