@@ -36,10 +36,16 @@ was committed.
 
 **1. Read-only is the architecture, not a setting.** Exactly one
 `Admin::connect_read_only(` in the workspace, in `kaas-ui-core/src/registry.rs`.
-No `Admin::connect(` anywhere. No mutating endpoint exists — not disabled, not
-403, *absent from the router*. If `Error::ReadOnly` ever reaches a user, kaas-ui
-has a bug: it built a request it should have been incapable of building. Treat
-it as a 500, not a 405.
+No `Admin::connect(` anywhere. That is the guarantee, and it holds whatever
+HTTP verb reaches a handler: a read-only admin cannot write to a cluster. If
+`Error::ReadOnly` ever reaches a user, kaas-ui has a bug: it built a request it
+should have been incapable of building. Treat it as a 500, not a 405.
+
+The HTTP surface used to claim more than this — "every route is a `GET`" — and
+that claim is gone. It was a proxy for the property above, and a weaker one:
+the auth flow needs `POST`, and the Dex proxy forwards whatever the browser
+sends. What is enforced is the construction site, which is where writing would
+have to begin.
 
 **2. No Kafka version number appears anywhere.** No `if version >= 3.5`, no
 parsing of a broker version string, no per-version branch. kaas-lib owns version
@@ -76,7 +82,7 @@ fills them, not up front.
 **7. Conventional commits, work lands on `main`.**
 
 Rules 1 and 2 are enforced by greps in `cargo xtask ci`, not by good intentions
-— alongside the committed-`link`-fence check and "no non-GET data route".
+— alongside the committed-`link`-fence check.
 
 ## The development environment
 

@@ -5,9 +5,11 @@ router needs.
 
 ## Every data endpoint is a GET
 
-The only non-GET routes in the application are the auth flow — `POST
-/auth/login`, `GET /auth/callback`, `POST /auth/logout`. A CI grep enforces it
-(see [00-foundations.md](../00-foundations.md)).
+Because reading is what they do — not because a check forbids the alternative.
+The auth flow adds `POST /auth/login` and `POST /auth/logout`, and the Dex
+proxy at `/dex/*` forwards whatever method the browser sends. What guarantees
+read-only is the single `Admin::connect_read_only` construction site: a handler
+reached by any verb has no client that can write.
 
 ## The envelope
 

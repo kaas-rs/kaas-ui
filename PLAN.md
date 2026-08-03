@@ -181,8 +181,10 @@ generated TypeScript client.
 
 ## 4. The HTTP contract
 
-Every data endpoint is a `GET`. The only non-GET routes in the application are
-the auth flow.
+Every data endpoint is a `GET`, because reading is what they do. Non-GET routes
+exist for the auth flow and for the Dex proxy, which forwards whatever the
+browser sends. Read-only is guaranteed by the single `connect_read_only`
+construction site rather than by the shape of the router.
 
 ### Partial results are the default envelope
 

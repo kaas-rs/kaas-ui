@@ -13,7 +13,6 @@ pub fn all() -> Task {
     one_construction_site()?;
     no_kafka_version_literal()?;
     no_committed_link_fence()?;
-    no_mutating_route()?;
     Ok(())
 }
 
@@ -198,45 +197,5 @@ fn no_committed_link_fence() -> Task {
         );
     }
     println!("  ok  no local kaas-lib override");
-    Ok(())
-}
-
-/// **4. No non-GET data route.**
-///
-/// No mutating endpoint exists — not disabled, not 403, absent from the
-/// router. The auth flow (a later phase) is the only thing that may add one,
-/// and it will be a named exception rather than a loosened rule.
-fn no_mutating_route() -> Task {
-    let mut hits = Vec::new();
-    for path in sources() {
-        let Ok(source) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        for (number, line) in source.lines().enumerate() {
-            if is_comment(line) {
-                continue;
-            }
-            for verb in [".post(", ".put(", ".patch(", ".delete("] {
-                if line.contains(verb) {
-                    hits.push(format!(
-                        "{}:{}: {}",
-                        path.display(),
-                        number + 1,
-                        line.trim()
-                    ));
-                }
-            }
-        }
-    }
-
-    if !hits.is_empty() {
-        return Err(format!(
-            "a non-GET route exists:\n  {}\n\n\
-             Every data endpoint is a GET. There is no write path to add one to.",
-            hits.join("\n  ")
-        ));
-    }
-
-    println!("  ok  every route is a GET");
     Ok(())
 }

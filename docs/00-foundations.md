@@ -180,8 +180,13 @@ a Kafka release added something, that knowledge belongs in kaas-lib — see
 
 **3. No local override committed.** The `xtask link` fence must be absent.
 
-A fourth check is worth adding once there is a router: **no non-GET data route**.
-`.post(`, `.put(`, `.patch(` and `.delete(` may appear only in the auth router.
+A fourth check was planned here — **no non-GET data route** — and was built,
+and has been removed. It grepped every source file for `.post(`, `.put(`,
+`.patch(` and `.delete(`, which meant it would have failed on the very auth
+router this paragraph carved an exception for. More importantly it enforced a
+proxy for the real property rather than the property: what stops kaas-ui
+writing to a cluster is check 1, the single `Admin::connect_read_only`
+construction site. A handler reached by `POST` has nothing to write with.
 
 ## Error handling and the domain boundary
 

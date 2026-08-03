@@ -3,9 +3,11 @@
 //! Knows about [`kaas_ui_core`] and axum, and never opens a socket. Two rules
 //! hold this crate together:
 //!
-//! * **Every data route is a `GET`.** There is no mutating endpoint — not
-//!   disabled, not 403, absent from the router. A CI check greps for `.post(`,
-//!   `.put(`, `.patch(` and `.delete(` and fails on any of them.
+//! * **Nothing here can write to a cluster.** Not because of the verbs on the
+//!   routes, but because the only admin client in the workspace is built by
+//!   `Admin::connect_read_only` — a handler reached by any method at all has
+//!   nothing to write with. The data routes are `GET`s because reading is what
+//!   they do, not because a rule forbids the alternative.
 //! * **The registry is reached through one lookup.** [`AppState::cluster`] is
 //!   the only way to a handle, and a cluster the caller cannot see is `404`
 //!   rather than `403`, so ids are not enumerable by probing.
