@@ -8,8 +8,20 @@
 # Both live clusters are reachable on their plaintext listener from inside the
 # Kubernetes cluster this is developed in. See docs/reference/environment.md.
 
+# No `dex` block and no `roles`: development runs **unauthenticated**, behind
+# code-server's /proxy/8099, with one anonymous caller who sees every cluster.
+# That is the default rather than a fallback — `cargo test -p kaas-ui-server`
+# holds it in place — so a login provider never has to exist for this to work.
 server:
   listen: "127.0.0.1:8099"
+  # The twin of the port above, and it belongs here rather than in an
+  # environment variable someone has to remember. code-server publishes this
+  # process at /proxy/8099 and strips the prefix before kaas-ui sees it, so a
+  # request arriving here is indistinguishable from one made at the root —
+  # kaas-ui has to be *told*. Start it without this and every asset URL in
+  # index.html points at the domain root, which 404s against code-server and
+  # looks like a broken build rather than a missing setting.
+  base_path: "/proxy/8099"
 
 clusters:
   - id: kaas
