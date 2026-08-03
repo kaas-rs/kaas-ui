@@ -18,6 +18,7 @@ import { Empty } from "@/components/domain";
 import { BASE_PATH } from "@/api/base";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Fleet } from "@/pages/fleet";
+import { Account } from "@/pages/account";
 import { CapabilitiesPage, ClusterConfigs, ClusterOverview } from "@/pages/cluster";
 import { TopicDetail, Topics } from "@/pages/topics";
 import { GroupDetail, Groups } from "@/pages/groups";
@@ -29,6 +30,14 @@ const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
   component: Fleet,
+});
+
+/** Who this session is, and what it reaches. Not under a cluster: the answer
+    spans all of them. */
+const accountRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/account",
+  component: Account,
 });
 
 /** Everything under a cluster. Navigation lives in the sidebar, not in tabs. */
@@ -137,6 +146,7 @@ const capabilitiesRoute = createRoute({
 
 const routeTree = rootRoute.addChildren([
   indexRoute,
+  accountRoute,
   clusterRoute.addChildren([
     overviewRoute,
     topicsRoute,
