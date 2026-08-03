@@ -20,7 +20,7 @@ use axum::extract::{FromRef, FromRequestParts};
 use axum::http::request::Parts;
 use axum_extra::extract::PrivateCookieJar;
 use axum_extra::extract::cookie::Key;
-use kaas_ui_auth::{Access, Grant, Principal};
+use kaas_ui_auth::{Access, Action, Grant, Principal, Read};
 
 use crate::AppState;
 use crate::error::ApiError;
@@ -54,6 +54,22 @@ impl Caller {
     #[must_use]
     pub fn access(&self) -> &Access {
         &self.access
+    }
+
+    /// Begin an audit entry for a disclosure this caller is about to receive.
+    ///
+    /// Here rather than in each handler so the subject and the name come from
+    /// one place — an audit entry attributed to the wrong person is worse than
+    /// none, and four handlers each assembling their own is four chances.
+    #[must_use]
+    pub fn reading(&self, cluster: &str, topic: &str, action: Action) -> Read {
+        Read::new(
+            self.principal.subject(),
+            self.principal.display_name(),
+            cluster,
+            topic,
+            action,
+        )
     }
 
     /// Require a grant on a cluster, or fail the request.

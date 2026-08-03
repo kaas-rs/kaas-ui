@@ -212,10 +212,19 @@ cargo xtask live --config config.dev.yaml
   rather than in the router, and asserted both in unit tests and by running a
   server with an enforcing policy: a configured cluster answers `404`, and the
   fleet is empty rather than an error
+- [~] **`metadata` / `messages` gates both endpoint and tab** — unchanged, and
+  now provable by hand: give a role `grants: [metadata]`, sign in, and the tab
+  should be absent and the endpoint `403`. Nobody has done it yet
 - [~] **`metadata` / `messages` gates both endpoint and tab** — both are wired:
   all four payload routes spend the grant against the topic name, and the tab
   is hidden when the cluster's card does not carry it. Unit-tested, and not yet
   provable end to end, because proving it needs a caller who holds one grant
   and not the other — which needs sessions
-- [ ] audit log written before the response, failure is fatal to the request
+- [x] **audit log written before the response, failure is fatal to the
+  request** — one JSON line per disclosure on stdout, carrying who, which
+  cluster and topic, the seek, and the offsets actually returned. Proven by
+  running: four reads against `kaas-canary` produce four entries with their
+  ranges, a topic *list* produces none, and with stdout pointed at `/dev/full`
+  a tail answers `500` and no payload while `/health` and the metadata routes
+  are untouched. SQLite via `sqlx` is **not** built — see below
 - [ ] client secret from Vault via ExternalSecret, never in a ConfigMap

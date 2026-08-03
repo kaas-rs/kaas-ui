@@ -41,6 +41,8 @@ use serde::Serialize;
 
 use super::seek::{Plan, SeekMode, SeekQuery};
 use crate::streaming::{self, Principal, Refusal};
+use kaas_ui_auth::Action;
+
 use crate::{ApiError, ApiResult, AppState, Caller};
 
 /// How long records accumulate before they leave as one event.
@@ -123,6 +125,15 @@ pub async fn stream(
     // payload access to `public-*` and nothing else.
     caller.require_topic(&id, &handle.labels, &topic)?;
     let (mode, plan) = Plan::build(&topic, &query)?;
+
+    // Before the stream opens, which is when disclosure begins. There are no
+    // offsets yet — the seek is what there is to record, and a stream that
+    // could not be recorded is never opened.
+    state.record_read(
+        &caller
+            .reading(&id, &topic, Action::Stream)
+            .with_mode(format!("{mode:?}").to_lowercase()),
+    )?;
 
     // Taken before anything expensive happens, and released by dropping the
     // permit — which is the only release there is, because a stream that ends

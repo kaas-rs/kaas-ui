@@ -29,7 +29,7 @@ use axum::Router;
 use axum::extract::FromRef;
 use axum::routing::{get, post};
 use axum_extra::extract::cookie::Key;
-use kaas_ui_auth::{Policy, Provider};
+use kaas_ui_auth::{Audit, Policy, Provider};
 use kaas_ui_core::registry::{ClusterHandle, Registry};
 use kafka_admin::Admin;
 
@@ -65,6 +65,9 @@ pub struct AppState {
     /// Encrypts the session and pending-login cookies. Generated at startup,
     /// so a restart signs everyone out — see [`session`].
     cookie_key: Key,
+    /// Who read which payloads. Always present: a read-only tool's audit is
+    /// its whole security story, and making it optional would make it absent.
+    audit: Arc<Audit>,
     streams: Arc<streaming::StreamGovernor>,
     stopping: Arc<streaming::ShutdownSignal>,
     shutdown: streaming::Shutdown,
@@ -79,6 +82,7 @@ impl AppState {
             policy: Arc::new(policy),
             auth: None,
             cookie_key: Key::generate(),
+            audit: Arc::new(Audit::to_stdout()),
             streams: Arc::new(streaming::StreamGovernor::default()),
             stopping: Arc::new(stopping),
             shutdown,
@@ -98,6 +102,30 @@ impl AppState {
     pub fn with_auth(mut self, provider: Arc<Provider>) -> Self {
         self.auth = Some(provider);
         self
+    }
+
+    /// Send the audit somewhere other than stdout. For tests.
+    #[must_use]
+    pub fn with_audit(mut self, audit: Arc<Audit>) -> Self {
+        self.audit = audit;
+        self
+    }
+
+    /// The access audit.
+    pub fn audit(&self) -> &Audit {
+        &self.audit
+    }
+
+    /// Record a disclosure, or fail the request that would have made it.
+    ///
+    /// # Errors
+    ///
+    /// `500` when the entry could not be written. The payload is not sent:
+    /// that is what makes this an audit log rather than a log.
+    pub fn record_read(&self, entry: &kaas_ui_auth::Read) -> ApiResult<()> {
+        self.audit
+            .record(entry)
+            .map_err(|error| ApiError::audit_failed(&error.to_string()))
     }
 
     /// The identity provider, if there is one.

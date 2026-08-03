@@ -8,8 +8,10 @@ repository.workspace   = true
 rust-version.workspace = true
 
 [dependencies]
+humantime       = "2"
 humantime-serde = { workspace = true }
 openidconnect   = { workspace = true }
+serde_json      = { workspace = true }
 serde         = { workspace = true }
 thiserror     = { workspace = true }
 tracing       = { workspace = true }

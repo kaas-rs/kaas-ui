@@ -96,6 +96,27 @@ impl ApiError {
         }
     }
 
+    /// `500`. The read happened but could not be recorded, so it is refused.
+    ///
+    /// The payload is not sent. An audit log that a request can proceed
+    /// without is not an audit log, and the only way to keep that true is for
+    /// the failure to be fatal here rather than logged and shrugged at.
+    pub fn audit_failed(detail: &str) -> Self {
+        Self {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            body: ApiErrorBody {
+                message: format!(
+                    "this read was not served because it could not be recorded: {detail}"
+                ),
+                kind: None,
+                code: None,
+                code_number: None,
+                unsupported_api: None,
+                retriable: true,
+            },
+        }
+    }
+
     /// `503`. The cluster is configured but has not connected yet, or its last
     /// attempt failed. Distinct from `502`: nothing was asked of a broker.
     pub fn not_connected(cluster: &str, detail: &str) -> Self {

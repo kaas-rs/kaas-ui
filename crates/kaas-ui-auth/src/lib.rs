@@ -40,10 +40,12 @@
     )
 )]
 
+pub mod audit;
 pub mod identity;
 pub mod oidc;
 pub mod policy;
 
+pub use audit::{Action, Audit, AuditError, Read};
 pub use identity::Principal;
 pub use oidc::{OidcConfig, OidcError, Pending, Provider};
 pub use policy::{Access, Grant, Grants, Policy, Role};

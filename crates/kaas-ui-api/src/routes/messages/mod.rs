@@ -32,6 +32,8 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::routes::split_list;
+use kaas_ui_auth::Action;
+
 use crate::{ApiError, ApiResult, AppState, Caller};
 
 pub use seek::{Plan, SeekMode, SeekQuery};
@@ -129,6 +131,14 @@ pub async fn tail(
             .then_with(|| a.partition.cmp(&b.partition))
     });
     messages.truncate(limit);
+
+    // Before the payload leaves, not after. A read nobody could record is a
+    // read that does not happen — see `kaas_ui_auth::audit`.
+    state.record_read(
+        &caller
+            .reading(&id, &topic, Action::Tail)
+            .with_range(messages.iter().map(|row| row.offset), messages.len()),
+    )?;
 
     let mut envelope = Envelope::new(messages).with_total(fetched);
     if malformed > 0 {
@@ -256,6 +266,16 @@ pub async fn page(
     rows.truncate(limit);
     let has_more = rows.len() >= limit;
     let next_offset = next_anchor(mode, &rows);
+
+    state.record_read(
+        &caller
+            .reading(&id, &topic, Action::Page)
+            .with_mode(format!("{mode:?}").to_lowercase())
+            // `sort_key` already knows how to get an offset out of either row
+            // kind; a malformed batch is a disclosure too, and its offset is
+            // the one the reader saw.
+            .with_range(rows.iter().map(|row| sort_key(row).1), rows.len()),
+    )?;
 
     Ok(Json(MessagePage {
         items: rows,
@@ -388,6 +408,11 @@ pub async fn one(
                 if record.offset != offset {
                     break;
                 }
+                state.record_read(
+                    &caller
+                        .reading(&id, &topic, Action::Record)
+                        .at_record(partition, offset),
+                )?;
                 return Ok(Json(MessageDetail::of(&record)));
             }
             Ok(ScanEvent::Malformed {
@@ -401,6 +426,11 @@ pub async fn one(
                 if offset < base || offset > end {
                     break;
                 }
+                state.record_read(
+                    &caller
+                        .reading(&id, &topic, Action::Record)
+                        .at_record(partition, offset),
+                )?;
                 return Ok(Json(MessageDetail::Malformed(MalformedDetail {
                     partition,
                     offset: base,
