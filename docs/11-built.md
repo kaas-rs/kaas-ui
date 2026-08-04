@@ -1,7 +1,7 @@
 # What is built
 
-Phases 0, 1, 2, 3 and 5 are done, and their plan files are gone — a plan for
-work already finished is a document that can only go stale. What could not go
+Phases 0–5 are done, and their plan files are gone — a plan for work already
+finished is a document that can only go stale. What could not go
 with them is here: **what each phase decided differently from its plan**, the
 numbers that were measured rather than predicted, and the things that were
 left unproven and are still unproven.
@@ -16,17 +16,18 @@ is surprising.
 | 1 — capabilities | the capability projection, `source` naming the broker, the four degradation components, brokers, log dirs, configs |
 | 2 — topics | server-side filter/sort/page, detail, partitions, placement grid, configs, offsets |
 | 3 — messages | seven seek modes over SSE, virtualised list, detail panel, URL state |
+| 4 — auth | OIDC via Dex, encrypted-cookie sessions, roles in kafbat's shape, the access audit |
 | 5 — groups | four group kinds, members, committed offsets, lag as states rather than a subtraction |
 
-Still open: [Phase 4](05-phase-4-auth.md) (auth — mostly built, three real
-gaps), [Phase 6](07-phase-6-schema-registry.md),
+Still open: [Phase 6](07-phase-6-schema-registry.md),
 [Phase 7](08-phase-7-read-only-admin.md), [Phase 8](09-phase-8-cross-cluster.md).
 
 ## Acceptance, as it stands
 
 ```sh
-cargo xtask ci      # green: fmt, clippy, 126 unit tests, three invariant greps
+cargo xtask ci      # green: fmt, clippy, 135 unit tests, three invariant greps
 cargo xtask live    # green: 49 assertions against kaas, strimzi and dead
+cargo xtask login   # green: 9 assertions, a real login against dex-test
 ```
 
 The invariant greps are the ones that matter, because they are what keeps the
@@ -34,7 +35,7 @@ architecture from being edited away: exactly one `Admin::connect_read_only`
 (today at `crates/kaas-ui-core/src/registry.rs:200`), no Kafka version literal
 anywhere, no committed `xtask link` fence.
 
-Unit tests: 54 in `kaas-ui-api`, 37 in `kaas-ui-core`, 25 in `kaas-ui-auth`,
+Unit tests: 55 in `kaas-ui-api`, 40 in `kaas-ui-core`, 30 in `kaas-ui-auth`,
 10 in `kaas-ui-server`.
 
 ## Measured
@@ -225,6 +226,98 @@ that fills it rather than up front. It earns its boundary in
 [Phase 6](07-phase-6-schema-registry.md), where Avro and Protobuf go behind a
 trait.
 
+## Phase 4 — the decisions
+
+**kaas-ui is a public client with no client secret.** PKCE is what proves that
+whoever redeems the code started the flow. This replaced the phase's original
+`client_secret_file` sketch and removed the ExternalSecret it implied: there is
+no kaas-ui secret in Vault because there is no kaas-ui secret. The limit is
+worth knowing — Dex enforces a verifier whenever a challenge was issued, but
+does not require one to be issued, so the strength of the arrangement rests
+entirely on kaas-ui always sending `S256`. That habit is a unit test.
+
+**Sessions are encrypted cookies with no store.** Encrypted rather than merely
+signed, because the pending-login cookie carries a PKCE verifier and a verifier
+anyone can read is not a verifier. The key is generated at startup, so a
+restart ends every session — for a single-replica read-only browser tool, a
+better trade than another secret to mount and rotate, and the startup log says
+so rather than leaving it to be found.
+
+**No refresh tokens.** `offline_access` is never requested. A refresh token is
+a long-lived credential to store, protect and revoke, in exchange for saving
+someone one redirect a day on a tool they keep open for twenty minutes.
+
+**Dex is served under kaas-ui's own hostname at `/dex`**, proxied to the
+in-cluster Service — ArgoCD's arrangement at `/api/dex`, for ArgoCD's reason:
+every browser hop of a login must reach the provider, and this costs no second
+DNS record and no second public surface. Nothing is stripped in the proxy,
+because Dex serves every endpoint under its issuer's path.
+
+That proxy forwards whatever method the browser sends, which **retired the
+"every route is a `GET`" check**. The read-only guarantee never depended on it:
+it is the single `Admin::connect_read_only` construction site, and nothing
+reachable through the proxy has an admin client at all.
+
+**The hops kaas-ui makes itself go to the Service, not the hostname**
+(`auth.internal_url`, since 0.7.5). Discovery, the token exchange and the key
+set are dialled in-cluster; only `authorization_endpoint` and the GitHub
+connector's `redirectURI` — the two hops a *browser* makes — stay on the public
+issuer. ArgoCD splits in the same place, between `--dex-server` and `/api/dex`.
+
+Without the split the deployment could not cold-start, and until 0.7.5 it never
+had. The tunnel routes `kaas.smeding.cloud` to kaas-ui and kaas-ui serves
+`/dex`, so startup discovery was a request to a process that was not listening
+yet: `502`, exit, forever. It went unnoticed for eleven releases because a
+rolling deploy always left the previous pod Ready to answer the new one's
+discovery; a node restart on 2026-08-04 removed the predecessor and turned a
+latent cycle into a permanent crash loop. The trap in fixing it is rewriting
+the endpoints uniformly — no browser resolves `dex.dex.svc.cluster.local`, and
+a uniform rewrite breaks login at the first redirect, on the cluster only.
+
+**Two exit criteria were retired rather than met.** The Vault client secret,
+above. And "no provider-specific code anywhere", which was true and never
+falsifiable: Dex terminates GitHub, Google, Entra, LDAP or SAML and presents
+all of them as one issuer with a `groups` claim. The counter-example is next
+door — `kafbat-ui` carries a GitHub-specific path with its own REST calls to
+`/user` and `/user/orgs`, because GitHub OAuth Apps issue opaque tokens with no
+`id_token`, no discovery document and no groups claim.
+
+**A third was retired on a measurement: RP-initiated logout.** The phase file
+said "Dex supports the endpoint; kaas-ui does not call it", and that was wrong.
+Dex v2.45.1 advertises no `end_session_endpoint`, and `/dex/end_session`,
+`/dex/logout`, `/dex/auth/logout` and `/dex/session/end` all answer 404;
+upstream, [dexidp/dex#1697](https://github.com/dexidp/dex/issues/1697) is open
+and states that Dex has no concept of sessions at all. The silent second login
+is **GitHub's** session, not Dex's — and the implementation proposed upstream
+only forwards to the upstream provider's end-session endpoint, which GitHub,
+being OAuth2, does not have. No relying party can end it. `POST /auth/logout`
+ends this session on this device, which is the whole of what is available.
+
+**The login acceptance is a Deployment, not a container.** The phase asked for
+a Dex container in CI, reasoning that the alternative was depending on GitHub
+from a test. That was a false choice, and the same one this project already
+declined for Kafka: `cargo xtask login` runs inside the cluster against
+`dex-test` — ClusterIP, two static-password users, absent from the tunnel — so
+it works identically on the ARC runners and on the development box. A container
+would have run only in CI, because there is no Docker here.
+
+Two users, because one can show that a permission works and never that its
+absence bites. That is what finally proved the grant boundary: same fleet for
+both, `200` from `/messages/tail` for `acceptance-admin`, `403` for
+`acceptance-viewer`.
+
+**The harness passed twice while proving nothing**, which is the most useful
+thing this phase produced. kaas-ui's cookies are `Secure` — correct, the
+browser is on https — so a loopback acceptance run's RFC-6265 cookie jar drops
+them; and the callback's "arrived without having started a login" branch
+redirects to `/`, *where a successful login also lands*. Version one asserted
+on the landing URL and was green having verified nothing. Version two parsed
+`data.items` from a route that answers `items`, and read every caller's fleet
+as empty — which looks exactly like access control working. Both now guarded:
+the run drives each hop itself and asserts on the session cookie's existence,
+and the anonymous case is only meaningful because the authenticated one
+immediately after it is non-empty.
+
 ## Phase 5 — the decisions
 
 **Four kinds, four components, one discriminated union.** `GroupDescription`'s
@@ -271,6 +364,11 @@ otherwise assume was covered:
   namespace remains the cheapest way to get a real `Unrecognized` group, and
   it is worth doing: that variant is the one most likely to be wrong and least
   likely to be exercised by accident.
+- **No browser has ever driven a login.** `cargo xtask login` performs the
+  whole OIDC flow, but it is an HTTP client with a hand-rolled cookie map, not
+  a browser: nothing exercises the `Secure`/`SameSite=Lax` attributes, the
+  redirect a real browser makes on `SameSite`, or the sign-in page's own
+  behaviour. What is proven is the protocol and the grant boundary behind it.
 - **Tab sets differing between the two clusters is asserted at the API**, not in
   a browser. The live run shows `kaas` projecting 7 available features against
   Strimzi's 16; that the rendered tab sets differ accordingly has been seen but

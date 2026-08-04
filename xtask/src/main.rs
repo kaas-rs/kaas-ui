@@ -3,6 +3,7 @@
 //! ```text
 //! ci      fmt + clippy + unit tests + the invariant checks. No cluster.
 //! live    phase acceptance, against the two live clusters
+//! login   Phase 4 acceptance: a real login against dex-test in the cluster
 //! docs    write docs/openapi.json
 //! link    point the workspace at ../kaas-lib
 //! unlink  undo it
@@ -14,6 +15,7 @@
 
 mod checks;
 mod live;
+mod login;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -25,12 +27,13 @@ fn main() -> ExitCode {
     let result = match task.as_str() {
         "ci" => ci(),
         "live" => live::run(&rest),
+        "login" => login::run(),
         "docs" => docs(),
         "link" => link(),
         "unlink" => unlink(),
         other => {
             eprintln!("unknown task {other:?}\n");
-            eprintln!("usage: cargo xtask <ci|live|docs|link|unlink>");
+            eprintln!("usage: cargo xtask <ci|live|login|docs|link|unlink>");
             return ExitCode::FAILURE;
         }
     };

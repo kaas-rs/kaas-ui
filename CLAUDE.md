@@ -13,8 +13,7 @@ multi-cluster from day one, OIDC via Dex.
   plan, and what was measured. **A phase that lands loses its plan file**; what
   outlived it is here.
 
-Read `docs/README.md` first. Phases 0, 1, 2, 3 and 5 are done; Phase 4 (auth)
-is running with three things open; 6, 7 and 8 are not started.
+Read `docs/README.md` first. Phases 0–5 are done; 6, 7 and 8 are not started.
 
 ## Relationship to kaas-lib and kaas
 
@@ -117,6 +116,7 @@ what it reports.
 ```sh
 cargo xtask ci      # fmt + clippy + unit tests + the invariant greps. No cluster.
 cargo xtask live    # phase acceptance, against both clusters
+cargo xtask login   # Phase 4 acceptance: a real login against dex-test
 cargo xtask docs    # openapi spec + regenerate the TS client
 ```
 

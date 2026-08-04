@@ -15,7 +15,7 @@
 //! *metadata versus payloads*. That is a matrix with two columns, and it is
 //! hand-rolled here on purpose — a policy engine is the part of an auth system
 //! that most looks like it wants a framework and least needs one. See
-//! `docs/05-phase-4-auth.md`.
+//! `docs/11-built.md`, under Phase 4.
 //!
 //! # Nothing here knows about a provider
 //!

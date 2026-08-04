@@ -1,0 +1,83 @@
+# The authenticated registry, for `cargo xtask live --config config.live-auth.yaml`.
+#
+# `config.dev.yaml` runs unauthenticated and that is the default the project
+# defends. This file exists for the one thing that default cannot show: the
+# login flow, and the grant boundary behind it. It is not a development
+# configuration and nothing serves a person from it.
+#
+# The provider is `dex-test` in this cluster — ClusterIP, no public surface,
+# two static-password users. See `apps/dex-test/` in Woestebanaan/k3s-cluster
+# for why it is a Deployment rather than a container in CI.
+
+server:
+  # The port `xtask live` starts on, and the one `dex-test` has in its
+  # `redirectURIs`. Changing either without the other fails as an
+  # `invalid_redirect_uri` from Dex rather than as anything about kaas-ui.
+  listen: "127.0.0.1:18099"
+
+# No `dex` block. kaas-ui proxies `/dex` in the deployed shape so a browser
+# can reach the provider over one hostname; here the acceptance client is not
+# a browser and can dial the Service directly, so the proxy would be a hop
+# that tests nothing. `Config::auth_warning` stays quiet for the same reason.
+auth:
+  # Public and internal are the same address here — there is no tunnel, so
+  # nothing routes this hostname back to kaas-ui and there is no cycle to
+  # break. `internal_url` is deliberately unset: this run should exercise the
+  # plain discovery path, and the deployed configuration exercises the other.
+  issuer: http://dex-test.dex-test.svc.cluster.local:5556/dex
+  client_id: kaas-ui-test
+  redirect_url: http://127.0.0.1:18099/auth/callback
+  # Short, so a run that somehow left a session behind cannot lend it to the
+  # next one.
+  session_ttl: 5m
+
+# Two roles for two users, and the difference between them is the whole point.
+#
+# `admin` holds `all` on `topic`, which expands to View + MessagesRead.
+# `viewer` holds `view` only — it can see that a topic exists and read its
+# description, and the four payload routes must refuse it. That boundary is
+# unit-tested against a constructed `Access`; what has never happened is a
+# real session proving it, which is what this file is for.
+#
+# Subjects are emails. `Principal::identifiers` carries the `email` claim, and
+# unlike `preferred_username` it does not depend on how Dex's password
+# connector chooses to populate a claim.
+roles:
+  - name: acceptance-admin
+    subjects: ["admin@kaas-ui.test"]
+    clusters: ["*"]
+    permissions:
+      - resource: cluster_config
+        actions: [all]
+      - resource: topic
+        actions: [all]
+      - resource: consumer
+        actions: [all]
+
+  - name: acceptance-viewer
+    subjects: ["viewer@kaas-ui.test"]
+    clusters: ["*"]
+    permissions:
+      - resource: cluster_config
+        actions: [view]
+      - resource: topic
+        actions: [view]
+      - resource: consumer
+        actions: [view]
+
+clusters:
+  - id: kaas
+    name: kaas
+    bootstrap: ["kaas.kaas.svc.cluster.local:9092"]
+    labels:
+      env: dev
+      kind: kaas
+    refresh_interval: 30s
+
+  - id: strimzi
+    name: kafka-cluster
+    bootstrap: ["kafka-cluster-kafka-bootstrap.strimzi.svc.cluster.local:9092"]
+    labels:
+      env: dev
+      kind: strimzi
+    refresh_interval: 30s

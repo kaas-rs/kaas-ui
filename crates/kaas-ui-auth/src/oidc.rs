@@ -23,7 +23,7 @@
 //! browser tool people keep open for twenty minutes, and a refresh token is a
 //! long-lived credential to store, protect and revoke in exchange for saving
 //! them one redirect a day. Decided rather than drifted into, which is what
-//! `docs/05-phase-4-auth.md` asks for.
+//! `docs/11-built.md` records under Phase 4.
 
 use std::sync::Arc;
 use std::time::Duration;

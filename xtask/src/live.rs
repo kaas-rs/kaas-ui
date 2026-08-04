@@ -15,15 +15,15 @@ use serde_json::Value;
 
 use crate::{Task, root};
 
-const PORT: u16 = 18099;
+pub(crate) const PORT: u16 = 18099;
 
-struct Acceptance {
-    passed: usize,
-    failures: Vec<String>,
+pub(crate) struct Acceptance {
+    pub(crate) passed: usize,
+    pub(crate) failures: Vec<String>,
 }
 
 impl Acceptance {
-    fn check(&mut self, name: &str, outcome: Result<String, String>) {
+    pub(crate) fn check(&mut self, name: &str, outcome: Result<String, String>) {
         match outcome {
             Ok(detail) => {
                 self.passed += 1;
@@ -46,7 +46,7 @@ fn suffix(detail: &str) -> String {
 }
 
 /// A server started for the duration of the run, and stopped after it.
-struct Server(Child);
+pub(crate) struct Server(Child);
 
 impl Server {
     fn pid(&self) -> u32 {
@@ -72,16 +72,17 @@ impl Drop for Server {
     }
 }
 
-pub fn run(args: &[String]) -> Task {
-    let mut config = "config.dev.yaml".to_owned();
-    let mut iter = args.iter();
-    while let Some(arg) = iter.next() {
-        if arg == "--config" {
-            config = iter.next().cloned().ok_or("--config needs a path")?;
-        }
-    }
-
-    let config_path = root().join(&config);
+/// Build the server and start it on [`PORT`] with `config`.
+///
+/// The real binary and the real configuration, as the module header says —
+/// shared with the login run so the two cannot diverge in how they launch it.
+///
+/// # Errors
+///
+/// If the config file is missing, the build fails, or the process will not
+/// spawn.
+pub(crate) fn start(config: &str) -> Result<Server, String> {
+    let config_path = root().join(config);
     if !config_path.exists() {
         return Err(format!("{} does not exist", config_path.display()));
     }
@@ -99,7 +100,31 @@ pub fn run(args: &[String]) -> Task {
         .stderr(Stdio::inherit())
         .spawn()
         .map_err(|error| format!("could not start kaas-ui: {error}"))?;
-    let mut server = Server(child);
+    Ok(Server(child))
+}
+
+/// Poll `/health` until the process answers, or give up after ten seconds.
+pub(crate) async fn wait_ready(client: &reqwest::Client) -> bool {
+    let started = Instant::now();
+    while started.elapsed() < Duration::from_secs(10) {
+        if client.get(url("/health")).send().await.is_ok() {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    false
+}
+
+pub fn run(args: &[String]) -> Task {
+    let mut config = "config.dev.yaml".to_owned();
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--config" {
+            config = iter.next().cloned().ok_or("--config needs a path")?;
+        }
+    }
+
+    let mut server = start(&config)?;
 
     let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
     let mut outcome = runtime.block_on(assertions());
@@ -205,7 +230,7 @@ async fn drains_with_streams_open(acceptance: &mut Acceptance, server: &mut Serv
     );
 }
 
-fn url(path: &str) -> String {
+pub(crate) fn url(path: &str) -> String {
     format!("http://127.0.0.1:{PORT}{path}")
 }
 
@@ -239,15 +264,7 @@ async fn assertions() -> Result<Acceptance, String> {
 
     // --- the process serves before it has connected to anything -------------
     let started = Instant::now();
-    let mut ready = false;
-    while started.elapsed() < Duration::from_secs(10) {
-        if client.get(url("/health")).send().await.is_ok() {
-            ready = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    if !ready {
+    if !wait_ready(&client).await {
         return Err("the server never started listening".into());
     }
     let boot = started.elapsed();
