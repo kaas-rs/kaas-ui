@@ -36,7 +36,7 @@ use openidconnect::reqwest;
 use openidconnect::{
     AuthorizationCode, ClaimsVerificationError, ClientId, CsrfToken, EmptyAdditionalClaims,
     IdTokenClaims, IssuerUrl, JsonWebKeySetUrl, Nonce, PkceCodeChallenge, PkceCodeVerifier,
-    RedirectUrl, Scope, TokenUrl,
+    RedirectUrl, Scope, TokenUrl, UserInfoUrl,
 };
 use serde::{Deserialize, Serialize};
 
@@ -168,6 +168,20 @@ impl Provider {
         RedirectUrl::new(config.redirect_url.clone()).map_err(|error| {
             OidcError::Config(format!("auth.redirect_url is not a URL: {error}"))
         })?;
+        // Parsed here so the third address in the block is checked like the
+        // other two, and so everything downstream can join and rewrite against
+        // something that is already known to be a URL. `IssuerUrl` is the right
+        // type despite the name: it is a bare `Url::parse` with a `join` that
+        // gets the trailing slash right.
+        let internal = config
+            .internal_url
+            .clone()
+            .map(|url| {
+                IssuerUrl::new(url).map_err(|error| {
+                    OidcError::Config(format!("auth.internal_url is not a URL: {error}"))
+                })
+            })
+            .transpose()?;
 
         let http = reqwest::ClientBuilder::new()
             .timeout(HTTP_TIMEOUT)
@@ -178,7 +192,7 @@ impl Provider {
             .build()
             .map_err(|error| OidcError::Discovery(error.to_string()))?;
 
-        let metadata = match config.internal_url.as_deref() {
+        let metadata = match &internal {
             Some(internal) => discover_internally(&http, &config.issuer, internal).await?,
             None => CoreProviderMetadata::discover_async(issuer, &http)
                 .await
@@ -187,7 +201,9 @@ impl Provider {
 
         tracing::info!(
             issuer = %config.issuer,
-            over = config.internal_url.as_deref().unwrap_or("the issuer"),
+            // Always an address, never prose: this field answers "which one did
+            // we dial", and a query over it should not have to know two shapes.
+            over = config.internal_url.as_deref().unwrap_or(&config.issuer),
             client_id = %config.client_id,
             "login provider discovered"
         );
@@ -220,9 +236,7 @@ impl Provider {
     /// leave this with none.
     pub async fn refresh_keys(&self) -> Result<(), OidcError> {
         let current = self.metadata.load();
-        let jwks = CoreJsonWebKeySet::fetch_async(current.jwks_uri(), &self.http)
-            .await
-            .map_err(|error| OidcError::Discovery(error.to_string()))?;
+        let jwks = fetch_keys(&self.http, current.jwks_uri()).await?;
 
         let refreshed = current.as_ref().clone().set_jwks(jwks);
         self.metadata.store(Arc::new(refreshed));
@@ -387,20 +401,23 @@ impl Provider {
 /// # Errors
 ///
 /// [`OidcError::Discovery`] if the address cannot be reached, answers anything
-/// but `200`, serves something that is not a discovery document, or serves one
-/// belonging to a different issuer.
+/// but a success status, serves something that is not a discovery document, or
+/// serves one belonging to a different issuer.
 async fn discover_internally(
     http: &reqwest::Client,
     issuer: &str,
-    internal: &str,
+    internal: &IssuerUrl,
 ) -> Result<CoreProviderMetadata, OidcError> {
-    let issuer = issuer.trim_end_matches('/');
-    let internal = internal.trim_end_matches('/');
-    let url = format!("{internal}/.well-known/openid-configuration");
+    let url = internal
+        .join(".well-known/openid-configuration")
+        .map_err(|error| OidcError::Config(format!("auth.internal_url is not a URL: {error}")))?;
 
     let response = http
-        .get(&url)
-        .header(reqwest::header::ACCEPT, "application/json")
+        .get(url.clone())
+        .header(
+            reqwest::header::ACCEPT,
+            reqwest::header::HeaderValue::from_static("application/json"),
+        )
         .send()
         .await
         .map_err(|error| OidcError::Discovery(format!("{url}: {error}")))?;
@@ -413,59 +430,97 @@ async fn discover_internally(
     }
 
     let body = response
-        .text()
+        .bytes()
         .await
         .map_err(|error| OidcError::Discovery(format!("{url}: {error}")))?;
 
-    let metadata: CoreProviderMetadata = serde_json::from_str(&body).map_err(|error| {
+    let metadata: CoreProviderMetadata = serde_json::from_slice(&body).map_err(|error| {
         OidcError::Discovery(format!("{url} is not a discovery document: {error}"))
     })?;
 
     // The check `discover_async` would have made, and what keeps this
     // discovery rather than assertion: whatever answered privately has to be
     // the provider whose name the tokens will carry.
-    if metadata.issuer().as_str().trim_end_matches('/') != issuer {
+    if metadata.issuer().as_str().trim_end_matches('/') != issuer.trim_end_matches('/') {
         return Err(OidcError::Discovery(format!(
             "unexpected issuer URI `{}` (expected `{issuer}`) at {url}",
             metadata.issuer().as_str()
         )));
     }
 
-    let metadata = internalise(metadata, issuer, internal)?;
+    let metadata = internalise(metadata, issuer, internal.as_str())?;
 
     // `jwks` is `#[serde(skip)]`: a document that was parsed rather than
     // discovered arrives with an empty key set, and every signature check
     // would fail against it. `discover_async` does this second fetch too.
-    let jwks = CoreJsonWebKeySet::fetch_async(metadata.jwks_uri(), http)
-        .await
-        .map_err(|error| OidcError::Discovery(error.to_string()))?;
+    let jwks = fetch_keys(http, metadata.jwks_uri()).await?;
 
     Ok(metadata.set_jwks(jwks))
 }
 
-/// Point the endpoints *this process* calls at the in-cluster address.
+/// Read a provider's signing keys.
 ///
-/// Dex builds every URL it advertises from the issuer, so a document fetched
-/// privately still reads `https://kaas.smeding.cloud/dex/token`. Two of those
-/// endpoints are dialled by kaas-ui — the token exchange and the key set — and
-/// they are rewritten here.
-///
-/// **`authorization_endpoint` is deliberately left public.** The party that
-/// fetches it is the browser, and no browser resolves
-/// `dex.dex.svc.cluster.local`. Rewriting all four endpoints uniformly is the
-/// tempting simplification and it breaks login in a way no test that does not
-/// drive a browser would notice: the redirect goes out to a name only the
-/// cluster can resolve. `issuer` is left alone for the same class of reason —
-/// it is an identity that is compared, not an address that is dialled.
+/// Shared by startup and by [`Provider::refresh_keys`], so the two cannot drift
+/// in how they treat a provider that will not hand its keys over.
 ///
 /// # Errors
 ///
-/// [`OidcError::Discovery`] if a rewritten endpoint stops being a URL.
+/// [`OidcError::Discovery`] if the key set could not be fetched.
+async fn fetch_keys(
+    http: &reqwest::Client,
+    uri: &JsonWebKeySetUrl,
+) -> Result<CoreJsonWebKeySet, OidcError> {
+    CoreJsonWebKeySet::fetch_async(uri, http)
+        .await
+        .map_err(|error| OidcError::Discovery(error.to_string()))
+}
+
+/// Point the endpoints *this process* dials at the in-cluster address.
+///
+/// Dex builds every URL it advertises from the issuer, so a document fetched
+/// privately still reads `https://kaas.smeding.cloud/dex/token`. The rule is
+/// **who dials it**, and `CoreProviderMetadata` has a closed set of five
+/// endpoints to apply it to:
+///
+/// | endpoint | dialled by | |
+/// |---|---|---|
+/// | `token_endpoint` | this process | rewritten |
+/// | `jwks_uri` | this process | rewritten |
+/// | `userinfo_endpoint` | this process, if ever | rewritten |
+/// | `authorization_endpoint` | **the browser** | left public |
+/// | `registration_endpoint` | nobody | left public |
+///
+/// `userinfo_endpoint` is rewritten although nothing calls it yet. It is the
+/// natural next call the first time Dex holds a claim that is not in the
+/// `id_token`, and an allowlist of the two endpoints in use today would send
+/// that one out through the tunnel and back — the same latent shape the token
+/// exchange had for months, minus the boot deadlock. `registration_endpoint`
+/// stays put because a public client with a static `client_id` never registers.
+///
+/// **`authorization_endpoint` must stay public.** The party that fetches it is
+/// the browser, and no browser resolves `dex.dex.svc.cluster.local`. Rewriting
+/// every endpoint uniformly is the tempting simplification and it breaks login
+/// in a way no test that does not drive a browser would notice: the redirect
+/// goes out to a name only the cluster can resolve. `issuer` is left alone for
+/// a related reason — it is an identity that `iss` is compared against, not an
+/// address that anything dials.
+///
+/// # Errors
+///
+/// [`OidcError::Discovery`] if a rewritten endpoint stops being a URL. Both
+/// inputs are parsed URLs by here, so this is a guard rather than a path with
+/// a known trigger.
 fn internalise(
     metadata: CoreProviderMetadata,
     issuer: &str,
     internal: &str,
 ) -> Result<CoreProviderMetadata, OidcError> {
+    // Normalised here rather than at the call site so the two functions below
+    // cannot be handed something they quietly mishandle: `.../dex/` against
+    // `.../dex` would otherwise strip to `/token` and rejoin as `//token`.
+    let issuer = issuer.trim_end_matches('/');
+    let internal = internal.trim_end_matches('/');
+
     let jwks_uri =
         JsonWebKeySetUrl::new(swap_prefix(metadata.jwks_uri().as_str(), issuer, internal))
             .map_err(|error| OidcError::Discovery(format!("jwks_uri is not a URL: {error}")))?;
@@ -479,12 +534,25 @@ fn internalise(
         })
         .transpose()?;
 
+    let userinfo_endpoint = metadata
+        .userinfo_endpoint()
+        .map(|endpoint| {
+            UserInfoUrl::new(swap_prefix(endpoint.as_str(), issuer, internal)).map_err(|error| {
+                OidcError::Discovery(format!("userinfo_endpoint is not a URL: {error}"))
+            })
+        })
+        .transpose()?;
+
     Ok(metadata
         .set_jwks_uri(jwks_uri)
-        .set_token_endpoint(token_endpoint))
+        .set_token_endpoint(token_endpoint)
+        .set_userinfo_endpoint(userinfo_endpoint))
 }
 
 /// `endpoint` with the issuer swapped for the in-cluster address.
+///
+/// Both arguments arrive without a trailing slash — [`internalise`] is the only
+/// caller and normalises them.
 ///
 /// Unchanged, and said out loud, if it does not begin with the issuer. Dex
 /// serves everything under its issuer's path so in practice every endpoint
@@ -733,20 +801,41 @@ mod tests {
         );
         // An identity, not an address. It is what `iss` is checked against.
         assert_eq!(metadata.issuer().as_str(), ISSUER);
-    }
 
-    #[test]
-    fn a_login_started_over_the_internal_address_still_redirects_publicly() {
-        // The property above, asserted where it actually bites: the URL handed
-        // to the browser.
-        let metadata =
-            internalise(recorded_metadata(), ISSUER, INTERNAL).expect("the fixture internalises");
+        // And the same property where it actually bites: the URL handed to the
+        // browser, built through the client rather than read off the metadata.
         let provider = Provider::from_metadata(metadata, recorded_config());
-
         let (url, _) = provider.start_login().expect("the fixture is valid");
         assert!(
             url.starts_with("https://kaas.smeding.cloud/dex/auth?"),
             "{url}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_plain_http_internal_address_is_accepted() {
+        // `internal_url` is parsed with `IssuerUrl`, whose own documentation
+        // says "URL using the `https` scheme" — but its constructor is a bare
+        // `Url::parse`, and the in-cluster address is `http://` because the
+        // hop does not leave the cluster. If an openidconnect bump ever makes
+        // that doc comment true, this fails here instead of in the cluster.
+        //
+        // Port 1 refuses immediately, so reaching `Discovery` at all is the
+        // assertion: the address got past parsing.
+        let config = OidcConfig {
+            issuer: ISSUER.to_owned(),
+            internal_url: Some("http://127.0.0.1:1/dex".to_owned()),
+            client_id: "kaas-ui".to_owned(),
+            redirect_url: "https://kaas.smeding.cloud/auth/callback".to_owned(),
+            scopes: default_scopes(),
+            session_ttl: default_session_ttl(),
+        };
+        let error = Provider::discover(config)
+            .await
+            .expect_err("nothing is listening on port 1");
+        assert!(
+            matches!(error, OidcError::Discovery(_)),
+            "a plain-HTTP internal address must not be a config error: {error}"
         );
     }
 
@@ -761,16 +850,31 @@ mod tests {
     }
 
     #[test]
-    fn a_trailing_slash_on_either_address_does_not_double_up() {
+    fn a_trailing_slash_on_one_address_but_not_the_other_still_joins_cleanly() {
         // Both strings are hand-written in a ConfigMap, and `.../dex/` is the
-        // spelling somebody eventually uses.
-        assert_eq!(
-            swap_prefix(
-                "https://kaas.smeding.cloud/dex/token",
-                ISSUER.trim_end_matches('/'),
-                "http://dex.dex.svc.cluster.local:5556/dex/".trim_end_matches('/')
-            ),
-            "http://dex.dex.svc.cluster.local:5556/dex/token"
-        );
+        // spelling somebody eventually uses. A matched pair is not the hazard —
+        // it comes out right with or without normalisation. A *mismatched* pair
+        // is: trimming only one side yields `/dex//token` (404 from Dex) or
+        // `/dextoken` (nonsense), depending on which side carries the slash.
+        // Both directions, because only testing one leaves half the guard
+        // uncovered.
+        for (issuer, internal) in [
+            ("https://kaas.smeding.cloud/dex/", INTERNAL),
+            (ISSUER, "http://dex.dex.svc.cluster.local:5556/dex/"),
+        ] {
+            let metadata = internalise(recorded_metadata(), issuer, internal)
+                .expect("a trailing slash is still a URL");
+
+            assert_eq!(
+                metadata.token_endpoint().map(|url| url.as_str()),
+                Some("http://dex.dex.svc.cluster.local:5556/dex/token"),
+                "issuer={issuer} internal={internal}"
+            );
+            assert_eq!(
+                metadata.jwks_uri().as_str(),
+                "http://dex.dex.svc.cluster.local:5556/dex/keys",
+                "issuer={issuer} internal={internal}"
+            );
+        }
     }
 }
