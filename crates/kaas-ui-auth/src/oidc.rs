@@ -61,17 +61,22 @@ pub struct OidcConfig {
     /// The same provider, addressed from inside the cluster, as in
     /// `http://dex.dex.svc.cluster.local:5556/dex`.
     ///
-    /// **Set this whenever the issuer's hostname resolves back to kaas-ui.**
-    /// It is what ArgoCD does with `--dex-server`: the browser hops of a login
-    /// go to the public issuer, and the calls this process makes on its own —
-    /// discovery, the token exchange, the key set — go straight to the Service.
+    /// **Usually nothing needs to set this.** With a `dex` block configured it
+    /// is defaulted from `dex.upstream` — see
+    /// [`default_internal_url_from`](Self::default_internal_url_from), which is
+    /// also where the reasoning lives. Set it by hand only to point somewhere
+    /// other than the Dex this deployment proxies.
     ///
-    /// Absent, every one of those leaves the cluster and comes back through
-    /// whatever fronts kaas-ui. Where that front routes the issuer's hostname
-    /// *to kaas-ui*, and kaas-ui proxies `/dex`, discovery at startup is then a
-    /// request to a server that is not listening yet, and the process cannot
-    /// boot at all — it needs a running instance of itself to answer. The
-    /// deployment in `Woestebanaan/k3s-cluster` is exactly that shape.
+    /// What it buys: the browser hops of a login go to the public issuer, and
+    /// the calls this process makes on its own — discovery, the token exchange,
+    /// the key set — go straight to the Service. ArgoCD draws the same line
+    /// between `server.dex.server` and `/api/dex`.
+    ///
+    /// Absent *and* undefaulted, every one of those leaves the cluster and
+    /// comes back through whatever fronts kaas-ui. Where that front routes the
+    /// issuer's hostname *to kaas-ui*, discovery at startup is a request to a
+    /// server that is not listening yet, and the process cannot boot at all —
+    /// it needs a running instance of itself to answer.
     ///
     /// Only the address changes. The document served here has to name [the
     /// issuer above](Self::issuer), or discovery fails, and `iss` is still
@@ -89,6 +94,42 @@ pub struct OidcConfig {
     /// How long a session lasts before a login is asked for again.
     #[serde(default = "default_session_ttl", with = "humantime_serde")]
     pub session_ttl: Duration,
+}
+
+impl OidcConfig {
+    /// Point [`internal_url`](Self::internal_url) at the Dex this deployment
+    /// proxies, unless it was set explicitly.
+    ///
+    /// **ArgoCD's arrangement, and the reason it has never had our deadlock.**
+    /// `argocd-server` reaches its Dex at `server.dex.server`, which ships
+    /// unset — `argocd-cmd-params-cm` has no `data:` at all — and defaults in
+    /// the binary to `http://argocd-dex-server:5556`. The address is a fixed
+    /// property of the Dex that ships alongside it, with no relationship to
+    /// `url:` in `argocd-cm`. So no value of the public URL can put it on the
+    /// boot path.
+    ///
+    /// kaas-ui's equivalent is `dex.upstream`: configuring a `dex` block *is*
+    /// the statement that there is a local Dex, and the one this deployment
+    /// proxies is necessarily the one it should talk to. The issuer's path is
+    /// appended because kaas-ui lets Dex live under one — ArgoCD fixes that at
+    /// `/api/dex` and has nothing to compute.
+    ///
+    /// A deployment authenticating against somebody else's IdP has no `dex`
+    /// block, so this is never reached and nothing is assumed on its behalf.
+    ///
+    /// Silent when the issuer is not a URL: [`Provider::discover`] rejects
+    /// that by name a moment later, and guessing here would replace a precise
+    /// message with a confusing one.
+    pub fn default_internal_url_from(&mut self, upstream: &str) {
+        if self.internal_url.is_some() {
+            return;
+        }
+        let Ok(issuer) = IssuerUrl::new(self.issuer.clone()) else {
+            return;
+        };
+        let path = issuer.url().path().trim_end_matches('/');
+        self.internal_url = Some(format!("{}{path}", upstream.trim_end_matches('/')));
+    }
 }
 
 fn default_scopes() -> Vec<String> {

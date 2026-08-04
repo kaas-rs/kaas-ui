@@ -187,9 +187,6 @@ async fn serve(config_path: PathBuf, config: Config) -> Result<(), Box<dyn std::
     if let Some(warning) = config.role_warning() {
         tracing::warn!("{warning}");
     }
-    if let Some(warning) = config.auth_warning() {
-        tracing::warn!("{warning}");
-    }
 
     let mut state = AppState::new(Arc::clone(&registry), policy);
 
@@ -199,8 +196,9 @@ async fn serve(config_path: PathBuf, config: Config) -> Result<(), Box<dyn std::
     // out, which is the trade for having no session store and no key to keep.
     //
     // Failing fast is only safe because `auth.internal_url` keeps this hop
-    // inside the cluster — see its documentation for what discovering over the
-    // public issuer costs, and `Config::auth_warning` above for the warning.
+    // inside the cluster, and it is defaulted from `dex.upstream` rather than
+    // remembered — see `OidcConfig::default_internal_url_from` for what
+    // discovering over the public issuer costs.
     if let Some(auth) = config.auth.clone() {
         let provider = Provider::discover(auth)
             .await

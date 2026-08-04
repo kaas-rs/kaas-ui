@@ -260,7 +260,8 @@ it is the single `Admin::connect_read_only` construction site, and nothing
 reachable through the proxy has an admin client at all.
 
 **The hops kaas-ui makes itself go to the Service, not the hostname**
-(`auth.internal_url`, since 0.7.5). Discovery, the token exchange and the key
+(`auth.internal_url`, since 0.7.5; defaulted rather than remembered since
+0.7.7). Discovery, the token exchange and the key
 set are dialled in-cluster; only `authorization_endpoint` and the GitHub
 connector's `redirectURI` — the two hops a *browser* makes — stay on the public
 issuer. ArgoCD splits in the same place, between `--dex-server` and `/api/dex`.
@@ -274,6 +275,26 @@ discovery; a node restart on 2026-08-04 removed the predecessor and turned a
 latent cycle into a permanent crash loop. The trap in fixing it is rewriting
 the endpoints uniformly — no browser resolves `dex.dex.svc.cluster.local`, and
 a uniform rewrite breaks login at the first redirect, on the cluster only.
+
+**And it is a default, not a field to remember — which is what ArgoCD does.**
+0.7.5 shipped `auth.internal_url` as an explicit setting with a startup warning
+when it was missing, which left the outage one forgotten line away and made the
+warning read out a derivation the program could have performed. Reading
+ArgoCD's own manifests settled it: `argocd-cmd-params-cm` ships with **no
+`data:` block at all**, every dex key is wired `optional: true`, and
+`server.dex.server` defaults in the binary to `http://argocd-dex-server:5556`.
+The server-side address is a fixed property of the Dex shipped alongside, with
+no relationship to `url:` in `argocd-cm` — so no value of the public URL can
+put it on the boot path. That is why ArgoCD never had this bug.
+
+kaas-ui's equivalent is `dex.upstream`: configuring a `dex` block *is* the
+statement that there is a local Dex, and the one this deployment proxies is
+the one it should talk to. The issuer's path is appended only because kaas-ui
+lets Dex live under one, where ArgoCD fixes it at `/api/dex`. A deployment
+authenticating against somebody else's IdP has no `dex` block, so nothing is
+assumed on its behalf — which is the case that made deriving from the *public
+URL* the wrong shape, and it needs no origin-matching predicate to avoid.
+`Config::auth_warning` is gone; there is nothing left to warn about.
 
 **Two exit criteria were retired rather than met.** The Vault client secret,
 above. And "no provider-specific code anywhere", which was true and never
