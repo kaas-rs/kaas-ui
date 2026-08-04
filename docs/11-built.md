@@ -25,17 +25,18 @@ Still open: [Phase 6](07-phase-6-schema-registry.md),
 ## Acceptance, as it stands
 
 ```sh
-cargo xtask ci      # green: fmt, clippy, 135 unit tests, three invariant greps
+cargo xtask ci      # green: fmt, clippy, 136 unit tests, four invariant greps
 cargo xtask live    # green: 49 assertions against kaas, strimzi and dead
-cargo xtask login   # green: 9 assertions, a real login against dex-test
+cargo xtask login   # green: 11 assertions, a real login against dex-test
 ```
 
 The invariant greps are the ones that matter, because they are what keeps the
 architecture from being edited away: exactly one `Admin::connect_read_only`
 (today at `crates/kaas-ui-core/src/registry.rs:200`), no Kafka version literal
-anywhere, no committed `xtask link` fence.
+anywhere, no committed `xtask link` fence, and sign-in being an `<a href>`
+rather than a `fetch` — see Phase 4.
 
-Unit tests: 55 in `kaas-ui-api`, 40 in `kaas-ui-core`, 30 in `kaas-ui-auth`,
+Unit tests: 56 in `kaas-ui-api`, 40 in `kaas-ui-core`, 30 in `kaas-ui-auth`,
 10 in `kaas-ui-server`.
 
 ## Measured
@@ -364,21 +365,28 @@ otherwise assume was covered:
   namespace remains the cheapest way to get a real `Unrecognized` group, and
   it is worth doing: that variant is the one most likely to be wrong and least
   likely to be exercised by accident.
-- **No *automated* test drives a browser through a login.** The flow itself is
-  confirmed: a browser completed it against production on 2026-08-04 — name in
-  the sidebar, both clusters listed — so the cookie attributes, the GitHub
-  consent leg and the authenticated render are known to work. What is missing
-  is a regression guard. `cargo xtask login` is an HTTP client with a
-  hand-rolled cookie map that ignores attributes entirely, so it would stay
-  green if `Secure`, `SameSite` or the sign-in anchor broke.
+- **No *automated* test drives a browser through a login**, though the parts a
+  browser would catch are now guarded three ways. The flow itself is
+  confirmed — a browser completed it against production on 2026-08-04, name in
+  the sidebar and both clusters listed.
 
-  The preconditions for that leg *are* checked by hand and worth writing down,
-  because each is a way it silently breaks: every hop from `/auth/login` to
-  GitHub is https, so `Secure` is satisfiable; the return from GitHub is a
-  cross-site top-level GET navigation, which `Lax` permits and `Strict` would
-  strip; and sign-in is an `<a href>` (`sign-in.tsx:67`, `nav-user.tsx:145`)
-  rather than a `fetch`, without which that `Lax` reasoning does not hold at
-  all. `Max-Age=600` puts a ten-minute clock on the human part.
+  The guards, because the gap they close is invisible from Rust: a unit test on
+  the cookie builder (`session.rs`), the same four attributes asserted on the
+  wire in `cargo xtask login` so a middleware rewriting `Set-Cookie` cannot
+  slip past the unit test, and the fourth invariant grep, which requires
+  sign-in to be an `<a href>` and logout a `method="post"` form. Each was
+  mutation-tested rather than assumed: flipping `Secure`, `HttpOnly` and
+  `SameSite`, and turning the anchor into a `fetch`, each fails the guard that
+  claims to cover it.
+
+  The wire check reads the cookie *as issued*, not as deleted — the pending
+  cookie is always cleared at the callback and a deletion `Set-Cookie` carries
+  only what a deletion needs, which is a false failure the first version of it
+  produced.
+
+  What remains genuinely uncovered is everything only a browser does: that it
+  honours those attributes, GitHub's consent-and-return leg, the authenticated
+  render, and the ten-minute clock `Max-Age=600` puts on the human part.
 - **Tab sets differing between the two clusters is asserted at the API**, not in
   a browser. The live run shows `kaas` projecting 7 available features against
   Strimzi's 16; that the rendered tab sets differ accordingly has been seen but

@@ -13,6 +13,7 @@ pub fn all() -> Task {
     one_construction_site()?;
     no_kafka_version_literal()?;
     no_committed_link_fence()?;
+    login_is_a_navigation()?;
     Ok(())
 }
 
@@ -197,5 +198,94 @@ fn no_committed_link_fence() -> Task {
         );
     }
     println!("  ok  no local kaas-lib override");
+    Ok(())
+}
+
+/// Every `.ts` and `.tsx` file under `web/src/`.
+fn web_sources() -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    collect_web(&root().join("web").join("src"), &mut files);
+    files
+}
+
+fn collect_web(directory: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_web(&path, out);
+        } else if path
+            .extension()
+            .is_some_and(|extension| extension == "ts" || extension == "tsx")
+        {
+            out.push(path);
+        }
+    }
+}
+
+/// **4. Signing in is a navigation, and signing out is a form.**
+///
+/// `SameSite=Lax` is what lets the pending-login cookie survive the provider's
+/// redirect back to `/auth/callback`, and `Lax` sends a cookie on exactly one
+/// kind of cross-site request: a **top-level GET navigation**. An `<a href>`
+/// is one. A `fetch("/auth/login")` is not — the browser would drop the
+/// cookie, the callback would take its "you never started a login" branch, and
+/// the user would be bounced back to the sign-in page with no error anywhere.
+///
+/// Nothing in Rust can see that regression: the server behaves identically
+/// either way, and `cargo xtask login` is not a browser. A person found it
+/// once, by hand, and this is the only thing standing between that and the
+/// next person.
+///
+/// Logout is the mirror image. It is a `POST` so that a link on another site
+/// cannot sign somebody out by being loaded — precisely because `Lax` *would*
+/// send the cookie on a top-level GET.
+fn login_is_a_navigation() -> Task {
+    let mut wrong = Vec::new();
+    let mut logins = 0usize;
+    let mut logouts = 0usize;
+
+    for path in web_sources() {
+        let Ok(source) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        for (number, line) in source.lines().enumerate() {
+            if is_comment(line) {
+                continue;
+            }
+            let where_ = format!("{}:{}", path.display(), number + 1);
+            if line.contains("/auth/login") {
+                logins += 1;
+                if !line.contains("href") {
+                    wrong.push(format!("{where_}: /auth/login is not an href"));
+                }
+            }
+            if line.contains("/auth/logout") {
+                logouts += 1;
+                if !(line.contains("action") && line.contains("method=\"post\"")) {
+                    wrong.push(format!(
+                        "{where_}: /auth/logout is not a form with method=\"post\""
+                    ));
+                }
+            }
+        }
+    }
+
+    if !wrong.is_empty() {
+        return Err(format!(
+            "the login flow depends on how the browser is asked:\n  {}",
+            wrong.join("\n  ")
+        ));
+    }
+    if logins == 0 || logouts == 0 {
+        return Err(format!(
+            "expected the frontend to reference both routes, found {logins} login and \
+             {logouts} logout references — has this check been outrun by a rename?"
+        ));
+    }
+
+    println!("  ok  login is a navigation ({logins} href, {logouts} form post)");
     Ok(())
 }

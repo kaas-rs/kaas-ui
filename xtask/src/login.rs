@@ -71,8 +71,17 @@ pub fn run() -> Task {
 }
 
 /// Cookies, per host, with no opinion about `Secure`.
+///
+/// Ignoring attributes is what lets this run at all over a loopback port — and
+/// it is also a blind spot, because a browser enforces every one of them.
+/// [`attributes`] keeps the raw `Set-Cookie` line beside the value so the run
+/// can assert on what a browser would act on.
 #[derive(Default)]
-struct Jar(HashMap<String, HashMap<String, String>>);
+struct Jar {
+    values: HashMap<String, HashMap<String, String>>,
+    /// The full `Set-Cookie` line each cookie last arrived on, by name.
+    raw: HashMap<String, String>,
+}
 
 impl Jar {
     /// Take whatever the response set.
@@ -82,23 +91,29 @@ impl Jar {
     /// `kaas-ui-session=` on every later request.
     fn absorb(&mut self, at: &Url, response: &reqwest::Response) {
         let host = at.host_str().unwrap_or_default().to_owned();
-        let jar = self.0.entry(host).or_default();
+        let jar = self.values.entry(host).or_default();
         for value in response.headers().get_all(reqwest::header::SET_COOKIE) {
             let Ok(text) = value.to_str() else { continue };
             let Some((name, value)) = text.split(';').next().and_then(|pair| pair.split_once('='))
             else {
                 continue;
             };
+            let name = name.trim().to_owned();
             if value.is_empty() {
-                jar.remove(name.trim());
+                // A deletion, and its `Set-Cookie` carries only what a
+                // deletion needs — recording it here would have the attribute
+                // check assert against the wrong line. The pending cookie is
+                // always deleted at the callback, so this is not an edge case.
+                jar.remove(&name);
             } else {
-                jar.insert(name.trim().to_owned(), value.to_owned());
+                self.raw.insert(name.clone(), text.to_owned());
+                jar.insert(name, value.to_owned());
             }
         }
     }
 
     fn header(&self, at: &Url) -> Option<String> {
-        let jar = self.0.get(at.host_str()?)?;
+        let jar = self.values.get(at.host_str()?)?;
         if jar.is_empty() {
             return None;
         }
@@ -111,9 +126,47 @@ impl Jar {
     }
 
     fn holds(&self, at: &Url, name: &str) -> bool {
-        self.0
+        self.values
             .get(at.host_str().unwrap_or_default())
             .is_some_and(|jar| jar.contains_key(name))
+    }
+
+    /// The `Set-Cookie` line `name` last arrived on, verbatim.
+    fn attributes(&self, name: &str) -> Option<&str> {
+        self.raw.get(name).map(String::as_str)
+    }
+}
+
+/// The attributes a browser enforces, checked on the wire.
+///
+/// `session.rs` unit-tests the builder; this checks what a real response
+/// carried, which is the same claim one layer further out — a middleware that
+/// rewrote `Set-Cookie` would pass the unit test and fail here.
+///
+/// Each has a distinct browser-only failure. Without `HttpOnly` script can
+/// read a session. Without `Secure` it travels in clear. `SameSite=Strict`
+/// strips the cookie from the provider's top-level GET back to
+/// `/auth/callback`, so the login fails and reads as a broken provider. A
+/// `Path` narrower than `/` hides it from the callback.
+fn browser_attributes(line: &str) -> Result<String, String> {
+    let lower = line.to_ascii_lowercase();
+    let mut missing = Vec::new();
+    if !lower.contains("httponly") {
+        missing.push("HttpOnly");
+    }
+    if !lower.contains("secure") {
+        missing.push("Secure");
+    }
+    if !lower.contains("samesite=lax") {
+        missing.push("SameSite=Lax");
+    }
+    if !lower.contains("path=/") {
+        missing.push("Path=/");
+    }
+    if missing.is_empty() {
+        Ok("HttpOnly, Secure, SameSite=Lax, Path=/".to_owned())
+    } else {
+        Err(format!("missing {}", missing.join(", ")))
     }
 }
 
@@ -321,6 +374,20 @@ async fn assertions() -> Result<Acceptance, String> {
         // Everything below needs a session. Failing them all individually
         // would bury the one failure that matters under six identical ones.
         return Ok(acceptance);
+    }
+
+    // Both cookies, as they arrived. This run's jar deliberately ignores
+    // attributes — that is the only way it works over a loopback port — so
+    // without these two checks a `Secure` or `SameSite` regression would leave
+    // every assertion here green and break login in every browser.
+    for name in ["kaas-ui-login", "kaas-ui-session"] {
+        acceptance.check(
+            &format!("{name} carries the attributes a browser enforces"),
+            admin.attributes(name).map_or_else(
+                || Err("never seen on the wire".to_owned()),
+                browser_attributes,
+            ),
+        );
     }
 
     let (status, body) = api(&client, &mut admin, "/api/clusters").await?;

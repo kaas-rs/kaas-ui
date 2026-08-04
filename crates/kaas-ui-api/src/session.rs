@@ -166,6 +166,47 @@ mod tests {
         PrivateCookieJar::new(Key::generate())
     }
 
+    /// **The four attributes a browser enforces and no Rust caller can see.**
+    ///
+    /// Everything else in this module is verified by reading the value back
+    /// out, which works exactly as well with every attribute stripped. These
+    /// only ever matter to a browser, and each has a distinct failure:
+    ///
+    /// * without `HttpOnly`, script can read a session;
+    /// * without `Secure`, it travels in clear over any http hop;
+    /// * with `SameSite=Strict` instead of `Lax`, the cookie is stripped from
+    ///   the provider's top-level GET back to `/auth/callback`, and the login
+    ///   fails in a way that reads as a broken provider;
+    /// * with a `Path` narrower than `/`, the callback at `/auth/callback`
+    ///   cannot see a cookie set from anywhere else.
+    ///
+    /// `cargo xtask login` cannot catch any of the four — its cookie map
+    /// ignores attributes — and a browser catches all of them, once, by hand.
+    /// This is the guard in between.
+    #[test]
+    fn every_cookie_carries_the_attributes_a_browser_needs() {
+        for (name, built) in [
+            (
+                SESSION_COOKIE,
+                cookie(SESSION_COOKIE, "value".to_owned(), Duration::from_secs(60)),
+            ),
+            (
+                PENDING_COOKIE,
+                cookie(PENDING_COOKIE, "value".to_owned(), PENDING_TTL),
+            ),
+        ] {
+            assert!(built.http_only().unwrap_or(false), "{name} is not HttpOnly");
+            assert!(built.secure().unwrap_or(false), "{name} is not Secure");
+            assert_eq!(
+                built.same_site(),
+                Some(SameSite::Lax),
+                "{name}: Strict strips the cookie from the provider's callback, \
+                 None needs a reason"
+            );
+            assert_eq!(built.path(), Some("/"), "{name} is not scoped to the root");
+        }
+    }
+
     #[test]
     fn a_session_survives_the_round_trip() {
         let jar = issue(

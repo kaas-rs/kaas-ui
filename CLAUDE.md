@@ -84,7 +84,8 @@ fills them, not up front.
 **7. Conventional commits, work lands on `main`.**
 
 Rules 1 and 2 are enforced by greps in `cargo xtask ci`, not by good intentions
-— alongside the committed-`link`-fence check.
+— alongside the committed-`link`-fence check and the sign-in-is-a-navigation
+check that keeps `SameSite=Lax` working.
 
 ## The development environment
 

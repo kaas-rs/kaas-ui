@@ -15,9 +15,9 @@ in [11-built.md](11-built.md).
 The workspace is four crates, a frontend and an xtask.
 
 ```sh
-cargo xtask ci      # green: fmt, clippy, 127 unit tests, three invariant greps
+cargo xtask ci      # green: fmt, clippy, 136 unit tests, four invariant greps
 cargo xtask live    # green: 49 assertions against kaas, strimzi and a dead cluster
-cargo xtask login   # green: 9 assertions, a real login against dex-test
+cargo xtask login   # green: 11 assertions, a real login against dex-test
 ```
 
 | phase | state |
