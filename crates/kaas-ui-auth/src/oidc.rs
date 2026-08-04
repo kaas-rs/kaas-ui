@@ -35,7 +35,8 @@ use openidconnect::core::{
 use openidconnect::reqwest;
 use openidconnect::{
     AuthorizationCode, ClaimsVerificationError, ClientId, CsrfToken, EmptyAdditionalClaims,
-    IdTokenClaims, IssuerUrl, Nonce, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, Scope,
+    IdTokenClaims, IssuerUrl, JsonWebKeySetUrl, Nonce, PkceCodeChallenge, PkceCodeVerifier,
+    RedirectUrl, Scope, TokenUrl,
 };
 use serde::{Deserialize, Serialize};
 
@@ -57,6 +58,26 @@ pub struct OidcConfig {
     /// Service one network hop away, because this string is compared against
     /// the token's claim and advertised to the browser.
     pub issuer: String,
+    /// The same provider, addressed from inside the cluster, as in
+    /// `http://dex.dex.svc.cluster.local:5556/dex`.
+    ///
+    /// **Set this whenever the issuer's hostname resolves back to kaas-ui.**
+    /// It is what ArgoCD does with `--dex-server`: the browser hops of a login
+    /// go to the public issuer, and the calls this process makes on its own —
+    /// discovery, the token exchange, the key set — go straight to the Service.
+    ///
+    /// Absent, every one of those leaves the cluster and comes back through
+    /// whatever fronts kaas-ui. Where that front routes the issuer's hostname
+    /// *to kaas-ui*, and kaas-ui proxies `/dex`, discovery at startup is then a
+    /// request to a server that is not listening yet, and the process cannot
+    /// boot at all — it needs a running instance of itself to answer. The
+    /// deployment in `Woestebanaan/k3s-cluster` is exactly that shape.
+    ///
+    /// Only the address changes. The document served here has to name [the
+    /// issuer above](Self::issuer), or discovery fails, and `iss` is still
+    /// checked against that public string on every login.
+    #[serde(default)]
+    pub internal_url: Option<String>,
     /// The client id registered with the provider. `kaas-ui`.
     pub client_id: String,
     /// Where the provider sends the browser back. Must match the provider's
@@ -133,6 +154,9 @@ impl Provider {
     /// than a failure at somebody's first login, and so the JWKS is in hand
     /// before it is needed.
     ///
+    /// Over [`internal_url`](OidcConfig::internal_url) when it is set, and over
+    /// the issuer itself when it is not.
+    ///
     /// # Errors
     ///
     /// If the issuer is not a URL, or the provider cannot be reached, or its
@@ -154,12 +178,16 @@ impl Provider {
             .build()
             .map_err(|error| OidcError::Discovery(error.to_string()))?;
 
-        let metadata = CoreProviderMetadata::discover_async(issuer, &http)
-            .await
-            .map_err(|error| OidcError::Discovery(error.to_string()))?;
+        let metadata = match config.internal_url.as_deref() {
+            Some(internal) => discover_internally(&http, &config.issuer, internal).await?,
+            None => CoreProviderMetadata::discover_async(issuer, &http)
+                .await
+                .map_err(|error| OidcError::Discovery(error.to_string()))?,
+        };
 
         tracing::info!(
             issuer = %config.issuer,
+            over = config.internal_url.as_deref().unwrap_or("the issuer"),
             client_id = %config.client_id,
             "login provider discovered"
         );
@@ -346,6 +374,136 @@ impl Provider {
     }
 }
 
+/// Read the discovery document over the in-cluster address.
+///
+/// [`CoreProviderMetadata::discover_async`] cannot be pointed here: it fetches
+/// `{url}/.well-known/openid-configuration` and then requires the document to
+/// name `url` as its issuer. Dex names the *public* issuer, as it must — that
+/// string ends up in `iss` — so discovery over any other address is a
+/// validation failure by construction. Hence the fetch by hand, with the same
+/// check made against the issuer that was configured rather than the address
+/// that served it.
+///
+/// # Errors
+///
+/// [`OidcError::Discovery`] if the address cannot be reached, answers anything
+/// but `200`, serves something that is not a discovery document, or serves one
+/// belonging to a different issuer.
+async fn discover_internally(
+    http: &reqwest::Client,
+    issuer: &str,
+    internal: &str,
+) -> Result<CoreProviderMetadata, OidcError> {
+    let issuer = issuer.trim_end_matches('/');
+    let internal = internal.trim_end_matches('/');
+    let url = format!("{internal}/.well-known/openid-configuration");
+
+    let response = http
+        .get(&url)
+        .header(reqwest::header::ACCEPT, "application/json")
+        .send()
+        .await
+        .map_err(|error| OidcError::Discovery(format!("{url}: {error}")))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        return Err(OidcError::Discovery(format!(
+            "HTTP status code {status} at {url}"
+        )));
+    }
+
+    let body = response
+        .text()
+        .await
+        .map_err(|error| OidcError::Discovery(format!("{url}: {error}")))?;
+
+    let metadata: CoreProviderMetadata = serde_json::from_str(&body).map_err(|error| {
+        OidcError::Discovery(format!("{url} is not a discovery document: {error}"))
+    })?;
+
+    // The check `discover_async` would have made, and what keeps this
+    // discovery rather than assertion: whatever answered privately has to be
+    // the provider whose name the tokens will carry.
+    if metadata.issuer().as_str().trim_end_matches('/') != issuer {
+        return Err(OidcError::Discovery(format!(
+            "unexpected issuer URI `{}` (expected `{issuer}`) at {url}",
+            metadata.issuer().as_str()
+        )));
+    }
+
+    let metadata = internalise(metadata, issuer, internal)?;
+
+    // `jwks` is `#[serde(skip)]`: a document that was parsed rather than
+    // discovered arrives with an empty key set, and every signature check
+    // would fail against it. `discover_async` does this second fetch too.
+    let jwks = CoreJsonWebKeySet::fetch_async(metadata.jwks_uri(), http)
+        .await
+        .map_err(|error| OidcError::Discovery(error.to_string()))?;
+
+    Ok(metadata.set_jwks(jwks))
+}
+
+/// Point the endpoints *this process* calls at the in-cluster address.
+///
+/// Dex builds every URL it advertises from the issuer, so a document fetched
+/// privately still reads `https://kaas.smeding.cloud/dex/token`. Two of those
+/// endpoints are dialled by kaas-ui — the token exchange and the key set — and
+/// they are rewritten here.
+///
+/// **`authorization_endpoint` is deliberately left public.** The party that
+/// fetches it is the browser, and no browser resolves
+/// `dex.dex.svc.cluster.local`. Rewriting all four endpoints uniformly is the
+/// tempting simplification and it breaks login in a way no test that does not
+/// drive a browser would notice: the redirect goes out to a name only the
+/// cluster can resolve. `issuer` is left alone for the same class of reason —
+/// it is an identity that is compared, not an address that is dialled.
+///
+/// # Errors
+///
+/// [`OidcError::Discovery`] if a rewritten endpoint stops being a URL.
+fn internalise(
+    metadata: CoreProviderMetadata,
+    issuer: &str,
+    internal: &str,
+) -> Result<CoreProviderMetadata, OidcError> {
+    let jwks_uri =
+        JsonWebKeySetUrl::new(swap_prefix(metadata.jwks_uri().as_str(), issuer, internal))
+            .map_err(|error| OidcError::Discovery(format!("jwks_uri is not a URL: {error}")))?;
+
+    let token_endpoint = metadata
+        .token_endpoint()
+        .map(|endpoint| {
+            TokenUrl::new(swap_prefix(endpoint.as_str(), issuer, internal)).map_err(|error| {
+                OidcError::Discovery(format!("token_endpoint is not a URL: {error}"))
+            })
+        })
+        .transpose()?;
+
+    Ok(metadata
+        .set_jwks_uri(jwks_uri)
+        .set_token_endpoint(token_endpoint))
+}
+
+/// `endpoint` with the issuer swapped for the in-cluster address.
+///
+/// Unchanged, and said out loud, if it does not begin with the issuer. Dex
+/// serves everything under its issuer's path so in practice every endpoint
+/// matches; one that does not is somewhere this rewrite has no business
+/// pointing, and guessing would send a token exchange to the wrong host.
+fn swap_prefix(endpoint: &str, issuer: &str, internal: &str) -> String {
+    match endpoint.strip_prefix(issuer) {
+        Some(rest) => format!("{internal}{rest}"),
+        None => {
+            tracing::warn!(
+                %endpoint,
+                %issuer,
+                "the provider advertises an endpoint outside its issuer; leaving it public"
+            );
+            endpoint.to_owned()
+        }
+    }
+}
+
 /// What the claims say, in this workspace's terms.
 ///
 /// The subject is `sub` — Dex's opaque `(connector, user id)` pair, stable and
@@ -422,6 +580,7 @@ mod tests {
     fn recorded_config() -> OidcConfig {
         OidcConfig {
             issuer: "https://kaas.smeding.cloud/dex".to_owned(),
+            internal_url: None,
             client_id: "kaas-ui".to_owned(),
             redirect_url: "https://kaas.smeding.cloud/auth/callback".to_owned(),
             scopes: default_scopes(),
@@ -516,6 +675,7 @@ mod tests {
     async fn an_issuer_that_is_not_a_url_fails_at_startup() {
         let config = OidcConfig {
             issuer: "not a url".to_owned(),
+            internal_url: None,
             client_id: "kaas-ui".to_owned(),
             redirect_url: "https://example.test/auth/callback".to_owned(),
             scopes: default_scopes(),
@@ -533,6 +693,7 @@ mod tests {
         // long gone and the symptom is a provider-side error page.
         let config = OidcConfig {
             issuer: "https://example.test/dex".to_owned(),
+            internal_url: None,
             client_id: "kaas-ui".to_owned(),
             redirect_url: "/auth/callback".to_owned(),
             scopes: default_scopes(),
@@ -542,5 +703,74 @@ mod tests {
             .await
             .expect_err("a relative path is not a redirect URL");
         assert!(matches!(error, OidcError::Config(_)), "{error}");
+    }
+
+    const INTERNAL: &str = "http://dex.dex.svc.cluster.local:5556/dex";
+    const ISSUER: &str = "https://kaas.smeding.cloud/dex";
+
+    #[test]
+    fn the_browser_hop_stays_public_while_the_server_hops_go_in_cluster() {
+        // The whole point of the split, and the one way to get it wrong that
+        // no test short of driving a browser would catch: rewriting the
+        // authorization endpoint too sends the *user* to a name only the
+        // cluster can resolve. Login would fail at the first redirect, on the
+        // deployed instance only.
+        let metadata = internalise(recorded_metadata(), ISSUER, INTERNAL)
+            .expect("the fixture's endpoints stay URLs");
+
+        assert_eq!(
+            metadata.authorization_endpoint().as_str(),
+            "https://kaas.smeding.cloud/dex/auth",
+            "the browser cannot resolve a Service DNS name"
+        );
+        assert_eq!(
+            metadata.token_endpoint().map(|url| url.as_str()),
+            Some("http://dex.dex.svc.cluster.local:5556/dex/token")
+        );
+        assert_eq!(
+            metadata.jwks_uri().as_str(),
+            "http://dex.dex.svc.cluster.local:5556/dex/keys"
+        );
+        // An identity, not an address. It is what `iss` is checked against.
+        assert_eq!(metadata.issuer().as_str(), ISSUER);
+    }
+
+    #[test]
+    fn a_login_started_over_the_internal_address_still_redirects_publicly() {
+        // The property above, asserted where it actually bites: the URL handed
+        // to the browser.
+        let metadata =
+            internalise(recorded_metadata(), ISSUER, INTERNAL).expect("the fixture internalises");
+        let provider = Provider::from_metadata(metadata, recorded_config());
+
+        let (url, _) = provider.start_login().expect("the fixture is valid");
+        assert!(
+            url.starts_with("https://kaas.smeding.cloud/dex/auth?"),
+            "{url}"
+        );
+    }
+
+    #[test]
+    fn an_endpoint_outside_the_issuer_is_left_alone() {
+        // Guessing would point a token exchange at a host the provider never
+        // named. Dex does not do this; something else might.
+        assert_eq!(
+            swap_prefix("https://elsewhere.test/token", ISSUER, INTERNAL),
+            "https://elsewhere.test/token"
+        );
+    }
+
+    #[test]
+    fn a_trailing_slash_on_either_address_does_not_double_up() {
+        // Both strings are hand-written in a ConfigMap, and `.../dex/` is the
+        // spelling somebody eventually uses.
+        assert_eq!(
+            swap_prefix(
+                "https://kaas.smeding.cloud/dex/token",
+                ISSUER.trim_end_matches('/'),
+                "http://dex.dex.svc.cluster.local:5556/dex/".trim_end_matches('/')
+            ),
+            "http://dex.dex.svc.cluster.local:5556/dex/token"
+        );
     }
 }

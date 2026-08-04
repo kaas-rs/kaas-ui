@@ -35,8 +35,8 @@ parameter; a caller who may not see a cluster gets `404`, not `403`, so ids are
 not enumerable by probing. One lookup site, one place to get it right.
 
 **Authentication**, in `kaas_ui_auth::oidc`. `openidconnect` 4.0 against the
-discovery document, read once at startup so a broken `issuer` fails the boot
-rather than somebody's first login. PKCE with `S256`, `state` and `nonce` are
+discovery document, read once at startup — over `auth.internal_url` where there
+is one — so a broken `issuer` fails the boot rather than somebody's first login. PKCE with `S256`, `state` and `nonce` are
 mandatory and generated with the request, so no path through the module omits
 one. The `id_token`'s signature is verified against the provider's JWKS — the
 whole reason Dex is in front of GitHub, which signs nothing.
@@ -75,6 +75,31 @@ route is a `GET`" check — see [00-foundations.md](00-foundations.md). The
 read-only guarantee never depended on it: it is the single
 `Admin::connect_read_only` construction site, and nothing reachable through the
 proxy has an admin client at all.
+
+**The hops kaas-ui makes itself go to the Service, not to the hostname.**
+`auth.internal_url` is the same Dex addressed in-cluster, and when it is set,
+discovery, the token exchange and the key set are dialled there. Only the two
+hops made by a *browser* — `authorization_endpoint`, and the GitHub connector's
+`redirectURI` back to `/dex/callback` — stay on the public issuer. ArgoCD splits
+in exactly this place: `--dex-server` in-cluster for its own calls, `/api/dex`
+for the browser's.
+
+Without the split the deployment cannot cold-start, and 0.7.4 could not. The
+tunnel routes `kaas.smeding.cloud` to kaas-ui and kaas-ui proxies `/dex`, so
+startup discovery is a request to a process that is not listening yet: it
+answers `502` and the process exits, forever. It went unnoticed for months
+because a rolling deploy always left the previous pod Ready to answer the new
+pod's discovery; the node restart on 2026-08-04 removed the predecessor and
+turned a latent cycle into a permanent crash loop. `Config::auth_warning` now
+says so at startup for any config still in that shape.
+
+The trap in implementing it is rewriting the endpoints uniformly. Dex builds
+every URL in its document from the issuer, so all of them come back public and
+it looks like they should all be swapped — but no browser resolves
+`dex.dex.svc.cluster.local`, and a uniform rewrite breaks login at the first
+redirect, on the deployed instance only, in a way no test that does not drive a
+browser would catch. `issuer` itself is left alone for a related reason: it is
+an identity that `iss` is compared against, not an address anything dials.
 
 **Authentication stays optional, and that is a requirement rather than a
 transitional state.** kaas-ui is developed behind code-server, where there is no

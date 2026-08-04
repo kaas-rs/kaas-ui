@@ -187,6 +187,9 @@ async fn serve(config_path: PathBuf, config: Config) -> Result<(), Box<dyn std::
     if let Some(warning) = config.role_warning() {
         tracing::warn!("{warning}");
     }
+    if let Some(warning) = config.auth_warning() {
+        tracing::warn!("{warning}");
+    }
 
     let mut state = AppState::new(Arc::clone(&registry), policy);
 
@@ -194,6 +197,12 @@ async fn serve(config_path: PathBuf, config: Config) -> Result<(), Box<dyn std::
     // boot rather than a failure at somebody's first login. Sessions are
     // encrypted with a key generated per process: restarting signs everyone
     // out, which is the trade for having no session store and no key to keep.
+    //
+    // Failing fast is only safe because `auth.internal_url` keeps this hop
+    // inside the cluster. Discovering over the public issuer instead means
+    // booting depends on whatever fronts kaas-ui, and — where that front
+    // routes the issuer back here — on kaas-ui already running, which it is
+    // not. `Config::auth_warning` says so when the config has that shape.
     if let Some(auth) = config.auth.clone() {
         let provider = Provider::discover(auth)
             .await

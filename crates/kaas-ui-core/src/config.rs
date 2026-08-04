@@ -284,6 +284,35 @@ impl Config {
         ))
     }
 
+    /// What to say at startup about a login provider reached the long way
+    /// round.
+    ///
+    /// `None` unless kaas-ui both proxies Dex and discovers it over a public
+    /// URL. That pair is how a deployment locks itself out: whatever fronts
+    /// kaas-ui routes the issuer's hostname back to kaas-ui, so discovery at
+    /// startup asks a process that is not listening yet to describe its own
+    /// provider. It answers `502`, the process exits, and no amount of
+    /// restarting helps — the thing it is waiting for is itself.
+    ///
+    /// Not an error, because the issuer may legitimately be somewhere else
+    /// entirely. A warning, because when it is not, the failure is a crash
+    /// loop that reads like a network problem.
+    #[must_use]
+    pub fn auth_warning(&self) -> Option<String> {
+        let auth = self.auth.as_ref()?;
+        if self.dex.is_none() || auth.internal_url.is_some() {
+            return None;
+        }
+        Some(format!(
+            "`dex` is proxied here but `auth.internal_url` is unset, so discovery, the token \
+             exchange and the key set all go out to {} and come back. If that hostname routes to \
+             kaas-ui, this process cannot start without another one already running. Set \
+             `auth.internal_url` to the same Dex addressed in-cluster — `dex.upstream` followed \
+             by the issuer's path, as in `http://dex.dex.svc.cluster.local:5556/dex`.",
+            auth.issuer
+        ))
+    }
+
     /// Reject configurations that parse but cannot work.
     fn validate(&self) -> Result<(), ConfigError> {
         if self.clusters.is_empty() {
@@ -597,6 +626,65 @@ clusters:
         )
         .unwrap_err();
         assert!(format!("{err}").contains("go together"), "{err}");
+    }
+
+    /// The deployed shape: Dex proxied here, issuer on kaas-ui's own hostname.
+    const PROXIED_DEX: &str = r#"
+clusters:
+  - id: kaas
+    bootstrap: ["a:9092"]
+dex:
+  upstream: http://dex.dex.svc.cluster.local:5556
+auth:
+  issuer: https://kaas.smeding.cloud/dex
+  client_id: kaas-ui
+  redirect_url: https://kaas.smeding.cloud/auth/callback
+"#;
+
+    #[test]
+    fn proxying_dex_and_discovering_it_publicly_is_warned_about() {
+        // The configuration that cannot cold-start: discovery goes to a
+        // hostname the tunnel routes back to this process, which is not
+        // listening yet. It ran for months because a rolling deploy always
+        // left the previous pod up to answer.
+        let config = Config::from_yaml(PROXIED_DEX).unwrap();
+        let warning = config.auth_warning().expect("this shape deadlocks");
+        assert!(warning.contains("auth.internal_url"), "{warning}");
+        assert!(
+            warning.contains("https://kaas.smeding.cloud/dex"),
+            "{warning}"
+        );
+    }
+
+    #[test]
+    fn an_internal_url_parses_and_silences_the_warning() {
+        let yaml =
+            format!("{PROXIED_DEX}  internal_url: http://dex.dex.svc.cluster.local:5556/dex\n");
+        let config = Config::from_yaml(&yaml).unwrap();
+        assert_eq!(
+            config.auth.as_ref().unwrap().internal_url.as_deref(),
+            Some("http://dex.dex.svc.cluster.local:5556/dex")
+        );
+        assert_eq!(config.auth_warning(), None);
+    }
+
+    #[test]
+    fn an_external_provider_is_not_warned_about() {
+        // No `dex` block: nothing is proxied here, so the issuer resolves to
+        // somebody else and there is no cycle to fall into.
+        let config = Config::from_yaml(
+            r#"
+clusters:
+  - id: kaas
+    bootstrap: ["a:9092"]
+auth:
+  issuer: https://accounts.example.test
+  client_id: kaas-ui
+  redirect_url: https://kaas.smeding.cloud/auth/callback
+"#,
+        )
+        .unwrap();
+        assert_eq!(config.auth_warning(), None);
     }
 }
 
