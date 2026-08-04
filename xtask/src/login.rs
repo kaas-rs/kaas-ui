@@ -33,12 +33,19 @@ use std::time::Duration;
 use reqwest::{Method, Url};
 use serde_json::Value;
 
-use crate::Task;
 use crate::live::{Acceptance, PORT, start, url, wait_ready};
+use crate::{Task, root};
 
 /// The configuration whose provider is `dex-test`, and whose two roles differ
 /// in exactly one permission.
 const CONFIG: &str = "config.live-auth.yaml";
+
+/// The provider that configuration points at, character for character.
+///
+/// Written out here as well as in the config so this check can run *before*
+/// the server does — and [`fixture_is_reachable`] refuses to run at all if the
+/// two ever stop agreeing, which is the only way a duplicated address is safe.
+const PROVIDER: &str = "http://dex-test.dex-test.svc.cluster.local:5556/dex";
 
 /// Fixture credentials. They authenticate to a Dex that vouches for nothing
 /// but a kaas-ui on a loopback port — see `apps/dex-test/` in the cluster repo.
@@ -48,12 +55,63 @@ const VIEWER: (&str, &str) = ("viewer@kaas-ui.test", "kaas-ui-acceptance-viewer"
 /// A redirect chain longer than this is a loop, not a login.
 const MAX_HOPS: usize = 10;
 
+/// Fail on the fixture rather than on its symptom.
+///
+/// `auth.issuer` in [`CONFIG`] *is* `dex-test`, so a missing fixture makes
+/// `Provider::discover` fail at startup and kaas-ui exit before it binds. What
+/// that looks like from here is `the server never started listening` — true,
+/// three layers from the cause, and identical to what a genuine crash would
+/// print.
+///
+/// A `GET` rather than a socket connect, so a Dex that is listening but not
+/// serving its discovery document fails here too, with its status.
+///
+/// # Errors
+///
+/// If the config has stopped naming [`PROVIDER`], or the provider does not
+/// answer.
+async fn fixture_is_reachable() -> Result<(), String> {
+    let config = std::fs::read_to_string(root().join(CONFIG))
+        .map_err(|error| format!("{CONFIG}: {error}"))?;
+    if !config.contains(PROVIDER) {
+        return Err(format!(
+            "{CONFIG} no longer points at {PROVIDER}. This check duplicates that address to \
+             run before the server does, and the two have drifted — reconcile them rather \
+             than deleting this."
+        ));
+    }
+
+    let url = format!("{PROVIDER}/.well-known/openid-configuration");
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .map_err(|error| error.to_string())?;
+
+    match client.get(&url).send().await {
+        Ok(response) if response.status().is_success() => Ok(()),
+        Ok(response) => Err(format!(
+            "the login fixture answered {} at {url}. Dex is listening but not serving its \
+             discovery document — check the dex-test pod's logs.",
+            response.status()
+        )),
+        Err(error) => Err(format!(
+            "the login fixture is not reachable at {url}: {error}\n  \
+             `cargo xtask login` needs the dex-test app synced in this cluster, and runs from \
+             inside it. See apps/dex-test/ in Woestebanaan/k3s-cluster."
+        )),
+    }
+}
+
 pub fn run() -> Task {
+    let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+
+    // Before the build and before the server: this is the failure most likely
+    // to greet somebody running the command for the first time.
+    runtime.block_on(fixture_is_reachable())?;
+
     // Held to the end of the function: dropping it kills the process, and
     // every assertion below needs it listening.
     let _server = start(CONFIG)?;
-
-    let runtime = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
 
     match runtime.block_on(assertions()) {
         Ok(acceptance) if acceptance.failures.is_empty() => {

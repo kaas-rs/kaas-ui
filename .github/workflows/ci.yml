@@ -189,17 +189,10 @@ jobs:
       # container: the provider is a Deployment in this cluster, so the run
       # needs exactly what the job above needs — a pod that can resolve
       # service DNS. See apps/dex-test/ in Woestebanaan/k3s-cluster.
-      - name: The login fixture must be reachable
-        run: |
-          set -euo pipefail
-          target=dex-test.dex-test.svc.cluster.local:5556
-          host=${target%:*}; port=${target#*:}
-          if timeout 5 bash -c "cat < /dev/null > /dev/tcp/${host}/${port}"; then
-            echo "$target reachable"
-          else
-            echo "::error::$target is not reachable — is the dex-test app synced?"
-            exit 1
-          fi
-
+      #
+      # No reachability precheck step: `cargo xtask login` makes that check
+      # itself, so a missing fixture says the same thing here and on a
+      # development box. It used to be a step here and nowhere else, which
+      # left the local run reporting only that the server never started.
       - name: cargo xtask login
         run: cargo xtask login
