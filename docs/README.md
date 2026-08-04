@@ -17,7 +17,9 @@ The workspace is four crates, a frontend and an xtask.
 ```sh
 cargo xtask ci      # green: fmt, clippy, 136 unit tests, four invariant greps
 cargo xtask live    # green: 49 assertions against kaas, strimzi and a dead cluster
-cargo xtask login   # green: 11 assertions, a real login against dex-test
+cargo xtask login   # 11 assertions, a real login. Needs the dex-test app
+                    # synced; it is currently out of the cluster, so this
+                    # command reports that and does nothing.
 ```
 
 | phase | state |

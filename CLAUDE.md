@@ -117,7 +117,7 @@ what it reports.
 ```sh
 cargo xtask ci      # fmt + clippy + unit tests + the invariant greps. No cluster.
 cargo xtask live    # phase acceptance, against both clusters
-cargo xtask login   # Phase 4 acceptance: a real login against dex-test
+cargo xtask login   # Phase 4 acceptance. Needs the dex-test app synced
 cargo xtask docs    # openapi spec + regenerate the TS client
 ```
 

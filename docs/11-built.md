@@ -27,7 +27,7 @@ Still open: [Phase 6](07-phase-6-schema-registry.md),
 ```sh
 cargo xtask ci      # green: fmt, clippy, 136 unit tests, four invariant greps
 cargo xtask live    # green: 49 assertions against kaas, strimzi and dead
-cargo xtask login   # green: 11 assertions, a real login against dex-test
+cargo xtask login   # 11 assertions, a real login. Dormant — see below.
 ```
 
 The invariant greps are the ones that matter, because they are what keeps the
@@ -327,6 +327,15 @@ Two users, because one can show that a permission works and never that its
 absence bites. That is what finally proved the grant boundary: same fleet for
 both, `200` from `/messages/tail` for `acceptance-admin`, `403` for
 `acceptance-viewer`.
+
+**The fixture is currently out of the cluster**, removed on 2026-08-04 after
+the run above went green. Nothing about the acceptance was deleted — the
+command, the config and the eleven assertions are all still here, and
+re-syncing `apps/dex-test/` from the cluster repo's history brings them back
+in a minute. What that costs meanwhile is the *regression* value: the login
+flow and the grant boundary are proven as of today and unguarded from
+tomorrow. `cargo xtask login` says so rather than failing obscurely, which is
+the only reason leaving it in place is honest.
 
 **The harness passed twice while proving nothing**, which is the most useful
 thing this phase produced. kaas-ui's cookies are `Secure` — correct, the
