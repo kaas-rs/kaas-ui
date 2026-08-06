@@ -178,6 +178,7 @@ export function MessageBrowser({
         progress={stream.progress}
         resolved={stream.resolved}
         error={stream.error}
+        phase={stream.phase}
       />
 
       <ResizablePanelGroup
@@ -335,13 +336,24 @@ function Notices({
   progress,
   resolved,
   error,
+  phase,
 }: {
   dropped: number;
   progress: StreamProgress | null;
   resolved: ResolvedSeek | null;
   error: { message: string } | null;
+  phase: string | null;
 }) {
-  const showBar = progress?.fraction !== null && progress?.fraction !== undefined;
+  // The bar is an in-flight indicator, not a result, so it goes when the scan
+  // does. A window that has been read already says so twice — the "window
+  // read" badge and the terminal row — and a bar left sitting underneath them
+  // reads as a control that stopped working rather than one that finished.
+  //
+  // That is not hypothetical: the last frame of a bounded scan is always
+  // `1.0`, and on the default 500-record window it is the *only* frame, so
+  // this element's whole visible life was a full bar under a finished list.
+  const showBar =
+    phase === "streaming" && progress?.fraction !== null && progress?.fraction !== undefined;
   const noticeCount =
     (dropped > 0 ? 1 : 0) +
     (error ? 1 : 0) +
