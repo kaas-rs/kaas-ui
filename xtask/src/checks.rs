@@ -14,6 +14,7 @@ pub fn all() -> Task {
     no_kafka_version_literal()?;
     no_committed_link_fence()?;
     login_is_a_navigation()?;
+    consuming_builders_are_withers()?;
     Ok(())
 }
 
@@ -287,5 +288,105 @@ fn login_is_a_navigation() -> Task {
     }
 
     println!("  ok  login is a navigation ({logins} href, {logouts} form post)");
+    Ok(())
+}
+
+/// **5. Every consuming builder is a `#[must_use] with_*`.**
+///
+/// STYLE.md, shared with kaas-lib. Two mechanical properties, and the reason
+/// they are checked rather than reviewed is that both fail silently.
+///
+/// `#[must_use]` is the one that bites. The single failure mode of a builder
+/// that takes `mut self` is
+///
+/// ```ignore
+/// let mut envelope = Envelope::new(rows);
+/// envelope.with_total(count);   // compiles, does nothing, loses the total
+/// ```
+///
+/// which is a dropped setting with no warning anywhere. Upstream found this on
+/// `ConnectionConfig::read_only` — the one setting in that crate that exists as
+/// a safety gate — and it is why kaas-lib 0.4.0 annotated all 58 of its own.
+///
+/// The prefix is the cheaper half: it costs nothing to hold and is expensive to
+/// introduce late, because renaming a published setter breaks every caller.
+/// A caller should never have to know which of our crates a type came from to
+/// guess what its setters are called.
+fn consuming_builders_are_withers() -> Task {
+    let mut builders = 0usize;
+    let mut wrong = Vec::new();
+
+    for path in sources() {
+        let Ok(source) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let lines: Vec<&str> = source.lines().collect();
+
+        for (number, line) in lines.iter().enumerate() {
+            if is_comment(line) || !line.contains("(mut self") {
+                continue;
+            }
+            let Some(rest) = line.split_once("fn ") else {
+                continue;
+            };
+            let Some(name) = rest.1.split_once("(mut self") else {
+                continue;
+            };
+            let name = name.0.trim();
+
+            // A consuming builder returns Self. The signature may wrap, so look
+            // ahead a few lines for the return type before the body opens.
+            let returns_self = lines
+                .iter()
+                .skip(number)
+                .take(6)
+                .take_while(|l| !l.contains(';'))
+                .any(|l| l.contains("-> Self"));
+            if !returns_self {
+                continue;
+            }
+
+            builders += 1;
+            let where_ = format!("{}:{}", path.display(), number + 1);
+
+            if !name.starts_with("with_") {
+                wrong.push(format!(
+                    "{where_}: `{name}` consumes self and returns Self, so it is a builder \
+                     and must be `with_{name}`"
+                ));
+            }
+
+            // Walk back over the doc comment and any other attributes.
+            let annotated = lines
+                .iter()
+                .take(number)
+                .rev()
+                .take_while(|l| {
+                    let t = l.trim_start();
+                    t.starts_with("///") || t.starts_with("#[") || t.starts_with("//")
+                })
+                .any(|l| l.trim_start().starts_with("#[must_use]"));
+            if !annotated {
+                wrong.push(format!(
+                    "{where_}: `{name}` has no #[must_use], so dropping its result silently \
+                     loses the setting"
+                ));
+            }
+        }
+    }
+
+    if !wrong.is_empty() {
+        return Err(format!(
+            "STYLE.md: consuming builders are `#[must_use] pub fn with_x(mut self, …) -> Self`:\n  {}",
+            wrong.join("\n  ")
+        ));
+    }
+    if builders == 0 {
+        return Err(
+            "found no consuming builders at all — has this check been outrun by a refactor?".into(),
+        );
+    }
+
+    println!("  ok  {builders} consuming builders, all `#[must_use] with_*`");
     Ok(())
 }

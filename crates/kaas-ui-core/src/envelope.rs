@@ -93,6 +93,7 @@ impl<T> Envelope<T> {
     }
 
     /// Attach the age of the snapshot the answer came from.
+    #[must_use]
     pub fn with_snapshot_age(mut self, age: std::time::Duration) -> Self {
         // `u64::try_from` rather than `as`: a duration wider than u64
         // milliseconds is not something to silently wrap.
@@ -101,6 +102,7 @@ impl<T> Envelope<T> {
     }
 
     /// Record how many resources matched before paging.
+    #[must_use]
     pub fn with_total(mut self, total: usize) -> Self {
         self.total = Some(total);
         self
@@ -108,6 +110,14 @@ impl<T> Envelope<T> {
 
     /// Attach failures that were not per-item — an enrichment call that did
     /// not answer, say.
+    ///
+    /// **Additive**, unlike every other setter here: two calls give the union,
+    /// and a handler that enriches in stages appends each stage's failures as
+    /// it learns them. STYLE.md reads a plural as the whole set, so the
+    /// exception is stated rather than left to be discovered — there is no
+    /// replacing sibling, because dropping an error already recorded is not
+    /// something a handler has any reason to do.
+    #[must_use]
     pub fn with_errors(mut self, errors: impl IntoIterator<Item = ResourceError>) -> Self {
         self.errors.extend(errors);
         self

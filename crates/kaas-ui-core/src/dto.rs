@@ -389,6 +389,7 @@ impl TopicSummary {
     }
 
     /// Attach sizes from `topic_sizes()`.
+    #[must_use]
     pub fn with_size(mut self, size: &TopicSize) -> Self {
         self.logical_bytes = Some(size.logical_bytes);
         self.replicated_bytes = Some(size.replicated_bytes);

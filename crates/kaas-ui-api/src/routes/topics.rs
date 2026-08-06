@@ -195,7 +195,7 @@ pub async fn detail(
             .collect();
 
         let (latest, earliest, errors) = offset_ends(&admin, &keys).await;
-        envelope.errors.extend(errors);
+        envelope = envelope.with_errors(errors);
 
         for detail in &mut envelope.items {
             for partition in &mut detail.partitions {

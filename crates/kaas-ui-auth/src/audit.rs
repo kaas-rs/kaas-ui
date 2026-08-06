@@ -144,7 +144,7 @@ impl Read {
 
     /// One record, named exactly.
     #[must_use]
-    pub fn at_record(mut self, partition: i32, offset: i64) -> Self {
+    pub fn with_record(mut self, partition: i32, offset: i64) -> Self {
         self.partition = Some(partition);
         self.first_offset = Some(offset);
         self.last_offset = Some(offset);
@@ -292,7 +292,7 @@ mod tests {
         audit
             .record(
                 &Read::new("sub-1", "Woestebanaan", "kaas", "orders", Kind::Record)
-                    .at_record(3, 4_797_046),
+                    .with_record(3, 4_797_046),
             )
             .expect("a working writer");
 

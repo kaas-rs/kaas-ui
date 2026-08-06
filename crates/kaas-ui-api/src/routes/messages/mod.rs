@@ -145,7 +145,7 @@ pub async fn tail(
         // A batch that would not decode at the protocol level is a fact about
         // the topic, not a failed request. It is reported and the rest of the
         // tail still renders.
-        envelope.errors.push(kaas_ui_core::ResourceError {
+        envelope = envelope.with_errors([kaas_ui_core::ResourceError {
             resource: topic,
             kind: kaas_ui_core::ErrorKind::Decode,
             code: None,
@@ -153,7 +153,7 @@ pub async fn tail(
             message: format!("{malformed} batch(es) could not be decoded and were skipped"),
             unsupported_api: None,
             retriable: false,
-        });
+        }]);
     }
 
     Ok(Json(envelope))
@@ -411,7 +411,7 @@ pub async fn one(
                 state.record_read(
                     &caller
                         .reading(&id, &topic, Kind::Record)
-                        .at_record(partition, offset),
+                        .with_record(partition, offset),
                 )?;
                 return Ok(Json(MessageDetail::of(&record)));
             }
@@ -429,7 +429,7 @@ pub async fn one(
                 state.record_read(
                     &caller
                         .reading(&id, &topic, Kind::Record)
-                        .at_record(partition, offset),
+                        .with_record(partition, offset),
                 )?;
                 return Ok(Json(MessageDetail::Malformed(MalformedDetail {
                     partition,

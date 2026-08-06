@@ -83,9 +83,17 @@ fills them, not up front.
 
 **7. Conventional commits, work lands on `main`.**
 
-Rules 1 and 2 are enforced by greps in `cargo xtask ci`, not by good intentions
-— alongside the committed-`link`-fence check and the sign-in-is-a-navigation
-check that keeps `SameSite=Lax` working.
+**8. Optional configuration is a consuming `with_*` builder.** Every setter is
+`#[must_use] pub fn with_x(mut self, …) -> Self`; required data goes in `new()`.
+The prefix has no exceptions, booleans included, so a caller never has to know
+which crate a type came from to guess what its setters are called. `STYLE.md`
+is the whole rule, the three sanctioned exceptions, and why `#[must_use]` is
+the half that matters — the convention is shared with kaas-lib, which found the
+failure mode on the one setting in that workspace that exists as a safety gate.
+
+Rules 1, 2 and 8 are enforced by greps in `cargo xtask ci`, not by good
+intentions — alongside the committed-`link`-fence check and the
+sign-in-is-a-navigation check that keeps `SameSite=Lax` working.
 
 ## The development environment
 
