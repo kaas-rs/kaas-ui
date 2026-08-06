@@ -97,6 +97,25 @@ export const SEEK_MODES: Record<SeekMode, SeekModeConfig> = {
 export const SEEK_MODE_NAMES = Object.keys(SEEK_MODES) as SeekMode[];
 
 /**
+ * What a URL that does not name a mode gets.
+ *
+ * `newest` rather than `live`, and the reason is not only that the newest
+ * records are what someone opening a topic wants to see. A live tail is the
+ * one mode that never ends, and kaas-lib keeps **one connection per broker**
+ * shared by every caller — so defaulting to it meant that merely opening a
+ * topic page started a long poll that sits at the head of that queue and slows
+ * every other view of the cluster. See ask 11 in
+ * `docs/reference/upstream-asks.md`, where that cost is measured.
+ *
+ * Live is still one click away, and now it is a thing someone asks for rather
+ * than a thing they get by arriving.
+ *
+ * Mirrored by `Plan::build` in `routes/messages/seek.rs`, which answers the
+ * same question for a caller that is not this app.
+ */
+export const DEFAULT_SEEK_MODE: SeekMode = "newest";
+
+/**
  * Whether arriving rows go on the top of the list rather than the bottom.
  *
  * The one derived fact the scroll compensation is allowed to depend on.

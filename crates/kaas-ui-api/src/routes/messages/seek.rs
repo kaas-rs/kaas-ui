@@ -168,7 +168,12 @@ impl Plan {
 
     /// Validate a query into a plan, or say exactly what is missing.
     pub fn build(topic: &str, query: &SeekQuery) -> ApiResult<(SeekMode, Self)> {
-        let mode = query.mode.unwrap_or(SeekMode::Live);
+        // `newest`, not `live`. A caller that names no mode is asking for a
+        // look at the topic, and answering with the one mode that never ends
+        // hands them an open long poll — which, on a shared broker connection,
+        // is a cost to every other reader of that cluster. The web app's
+        // `DEFAULT_SEEK_MODE` says the same thing on its own side.
+        let mode = query.mode.unwrap_or(SeekMode::Newest);
 
         if let Some(needed) = mode.requires() {
             let present = match needed {

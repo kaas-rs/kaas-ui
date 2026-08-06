@@ -17,12 +17,12 @@
 import type { SearchSchemaInput } from "@tanstack/react-router";
 import { z } from "zod";
 
-import { SEEK_MODE_NAMES, type SeekMode } from "./seek-modes";
+import { DEFAULT_SEEK_MODE, SEEK_MODE_NAMES, type SeekMode } from "./seek-modes";
 
 const modes = SEEK_MODE_NAMES as [SeekMode, ...SeekMode[]];
 
 const fields = z.object({
-  mode: z.enum(modes).default("live"),
+  mode: z.enum(modes).default(DEFAULT_SEEK_MODE),
   offset: z.coerce.number().int().nonnegative().optional(),
   /** Epoch milliseconds, which is what the wire and `ListOffsets` take. */
   timestamp: z.coerce.number().int().optional(),
@@ -46,8 +46,12 @@ type Fields = z.infer<typeof fields>;
 function usable(search: Fields): Fields {
   const needsOffset = search.mode === "fromOffset" || search.mode === "toOffset";
   const needsTime = search.mode === "sinceTime" || search.mode === "toTime";
-  if (needsOffset && search.offset === undefined) return { ...search, mode: "live" };
-  if (needsTime && search.timestamp === undefined) return { ...search, mode: "live" };
+  if (needsOffset && search.offset === undefined) {
+    return { ...search, mode: DEFAULT_SEEK_MODE };
+  }
+  if (needsTime && search.timestamp === undefined) {
+    return { ...search, mode: DEFAULT_SEEK_MODE };
+  }
   return search;
 }
 
