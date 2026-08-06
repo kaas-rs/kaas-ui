@@ -33,7 +33,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { PageTitle } from "@/shell";
+import { PageTitle } from "@/components/page-title";
 import { ConfigTable } from "./cluster";
 
 const PAGE = 50;

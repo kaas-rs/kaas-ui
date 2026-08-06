@@ -27,7 +27,7 @@ use kafka_admin::{Admin, ClusterConfig};
 use kafka_conn::{ConnectionConfig, Error, SaslConfig, SaslMechanism, TlsConfig};
 use tokio::sync::Notify;
 
-use crate::config::{ClusterEntry, Config, SaslMechanismName};
+use crate::config::{ClusterEntry, Config, EnvironmentEntry, ResourceEntry, SaslMechanismName};
 use crate::error::ErrorKind;
 use crate::health::ClusterHealth;
 
@@ -284,10 +284,15 @@ fn read_pem(path: &std::path::Path) -> Result<Vec<u8>, Error> {
     })
 }
 
-/// Every configured cluster.
+/// Every configured cluster, and the fleet it is arranged into.
 #[derive(Debug)]
 pub struct Registry {
     clusters: BTreeMap<String, Arc<ClusterHandle>>,
+    /// Declared environments, in declaration order — which is display order.
+    environments: Vec<EnvironmentEntry>,
+    /// The non-cluster inventory. Held here rather than beside the config so
+    /// that a reload swaps the fleet and its sections together.
+    resources: Vec<ResourceEntry>,
 }
 
 impl Registry {
@@ -298,7 +303,36 @@ impl Registry {
             .iter()
             .map(|entry| (entry.id.clone(), Arc::new(ClusterHandle::new(entry))))
             .collect();
-        Self { clusters }
+        Self {
+            clusters,
+            environments: config.environments.clone(),
+            resources: config.resources.clone(),
+        }
+    }
+
+    /// The declared environments, in the order they were declared.
+    ///
+    /// Not every section comes from here: an `env` label nobody declared still
+    /// gets one. This is the part of the order that was chosen.
+    pub fn environments(&self) -> &[EnvironmentEntry] {
+        &self.environments
+    }
+
+    /// Every non-cluster resource this caller can see, in configured order.
+    ///
+    /// The same visibility test as a cluster, against the same selectors —
+    /// [`ResourceEntry::effective_labels`] is what makes `env: prod` mean the
+    /// same thing for a schema registry as for a broker. A resource nobody's
+    /// role selects is absent, not greyed: this is the [`Registry::visible`]
+    /// rule, and a fleet that hides a prod cluster while naming the registry
+    /// beside it has leaked the environment it was hiding.
+    pub fn resources_visible<'a>(
+        &'a self,
+        who: &'a Access,
+    ) -> impl Iterator<Item = &'a ResourceEntry> {
+        self.resources
+            .iter()
+            .filter(|resource| who.sees(&resource.id, &resource.effective_labels()))
     }
 
     /// Look up a cluster **as somebody**.
@@ -390,7 +424,13 @@ impl Registry {
             }
         }
 
-        Self { clusters }
+        // Sections and inventory hold no connection, so they are simply taken
+        // from the new configuration: nothing to reuse, nothing to retire.
+        Self {
+            clusters,
+            environments: config.environments.clone(),
+            resources: config.resources.clone(),
+        }
     }
 }
 

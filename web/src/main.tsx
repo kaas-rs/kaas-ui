@@ -13,18 +13,21 @@ import {
 } from "@tanstack/react-router";
 
 import "./styles.css";
-import { PageTitle, Shell } from "@/shell";
+import { AppLayout } from "@/layout";
+import { PageTitle } from "@/components/page-title";
 import { Empty } from "@/components/domain";
 import { BASE_PATH } from "@/api/base";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { installTheme } from "@/lib/settings";
 import { Fleet } from "@/pages/fleet";
 import { Account } from "@/pages/account";
+import { Settings } from "@/pages/settings";
 import { CapabilitiesPage, ClusterConfigs, ClusterOverview } from "@/pages/cluster";
 import { TopicDetail, Topics } from "@/pages/topics";
 import { GroupDetail, Groups } from "@/pages/groups";
 import { messageSearchSchema, topicSearchSchema } from "@/features/messages/search";
 
-const rootRoute = createRootRoute({ component: Shell });
+const rootRoute = createRootRoute({ component: AppLayout });
 
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -38,6 +41,14 @@ const accountRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/account",
   component: Account,
+});
+
+/** What this browser does with kaas-ui, as opposed to what this session is.
+    Not under a cluster either: none of it is a property of one. */
+const settingsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/settings",
+  component: Settings,
 });
 
 /** Everything under a cluster. Navigation lives in the sidebar, not in tabs. */
@@ -147,6 +158,7 @@ const capabilitiesRoute = createRoute({
 const routeTree = rootRoute.addChildren([
   indexRoute,
   accountRoute,
+  settingsRoute,
   clusterRoute.addChildren([
     overviewRoute,
     topicsRoute,
@@ -211,6 +223,12 @@ const queryClient = new QueryClient({
     },
   },
 });
+
+// Keep the document's theme in step with the stored choice, from here on. The
+// inline script in `index.html` already resolved it before first paint; this
+// picks the same key up and keeps following the OS — outside React, because a
+// listener that lives in a component stops at the first navigation away from it.
+installTheme();
 
 const container = document.getElementById("root");
 if (container) {

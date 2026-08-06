@@ -20,8 +20,9 @@ use utoipa::ToSchema;
 
 use kaas_ui_auth::{Access, Action, Principal, Resource};
 
+use crate::config::{ResourceEntry, ResourceKind};
 use crate::health::{ClusterHealth, ClusterStatus};
-use crate::registry::ClusterHandle;
+use crate::registry::{ClusterHandle, Registry};
 
 /// The caller, for the header and for deciding what to offer them.
 ///
@@ -175,6 +176,11 @@ impl ClusterCard {
         card
     }
 
+    /// The environment this card belongs in, `None` when it is in none.
+    fn environment(&self) -> Option<&str> {
+        self.labels.get("env").map(String::as_str)
+    }
+
     fn absorb(&mut self, snapshot: &MetadataSnapshot) {
         self.cluster_id = snapshot.cluster_id().map(str::to_owned);
         self.controller_id = snapshot.controller_id();
@@ -194,6 +200,147 @@ impl ClusterCard {
                 }
             }
         }
+    }
+}
+
+/// One thing in an environment that is not a Kafka cluster.
+///
+/// **There is no status field, and that is the design.** kaas-ui dials none of
+/// these: it knows a schema registry is configured, not that it is up. A card
+/// carrying `status: "ready"` because a URL was typed correctly would be the
+/// one thing a fleet view must never do — see [`ClusterStatus`], whose
+/// `Connecting` exists so that unknown is not rendered as healthy. The UI says
+/// "not probed" because that is the whole truth kaas-ui has.
+///
+/// Phase 6 connects to the schema registry, and *that* is when this type earns
+/// a health field — one filled in from an attempt, on the one kind that makes
+/// attempts.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceCard {
+    /// The configured id.
+    pub id: String,
+    /// The name to render.
+    pub name: String,
+    /// What it is: the icon and the wording, nothing else.
+    pub kind: ResourceKind,
+    /// Where it is, when the configuration says.
+    pub endpoint: Option<String>,
+    /// One line of context.
+    pub note: Option<String>,
+    /// Labels, including the `env` its section is keyed by.
+    pub labels: BTreeMap<String, String>,
+}
+
+impl From<&ResourceEntry> for ResourceCard {
+    fn from(entry: &ResourceEntry) -> Self {
+        Self {
+            id: entry.id.clone(),
+            name: entry.display_name().to_owned(),
+            kind: entry.kind,
+            endpoint: entry.endpoint.clone(),
+            note: entry.note.clone(),
+            labels: entry.effective_labels(),
+        }
+    }
+}
+
+/// One section of the fleet: an environment and everything in it.
+///
+/// Assembled on the server rather than grouped in the browser, because the
+/// order is configuration — declared environments run in declared order, and
+/// nothing else can recover "dev before staging before prod" from three
+/// strings.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentSection {
+    /// The `env` label this section collects, empty for the clusters that
+    /// carry none.
+    pub id: String,
+    /// The name to render.
+    pub name: String,
+    /// The declared description, where there is one.
+    pub description: Option<String>,
+    /// Whether the environment was declared, or discovered from a label.
+    pub declared: bool,
+    /// The Kafka clusters, in the order the registry lists them.
+    pub clusters: Vec<ClusterCard>,
+    /// Everything else, in configured order.
+    pub resources: Vec<ResourceCard>,
+}
+
+impl EnvironmentSection {
+    /// Arrange already-built cards into sections.
+    ///
+    /// Takes the cards rather than the handles because building one nudges an
+    /// unreachable cluster to retry, and a function that decides page layout
+    /// should not also be poking connectors.
+    ///
+    /// **An empty section is dropped**, which is a visibility property and not
+    /// tidiness: rendering "Production" with nothing under it tells a caller
+    /// who may not see prod that prod exists, and the 404-not-403 rule that
+    /// keeps cluster ids unenumerable would have been undone one heading up.
+    pub fn arrange(cards: Vec<ClusterCard>, registry: &Registry, who: &Access) -> Vec<Self> {
+        let mut clusters: BTreeMap<String, Vec<ClusterCard>> = BTreeMap::new();
+        for card in cards {
+            let key = card.environment().unwrap_or_default().to_owned();
+            clusters.entry(key).or_default().push(card);
+        }
+
+        let mut resources: BTreeMap<String, Vec<ResourceCard>> = BTreeMap::new();
+        for entry in registry.resources_visible(who) {
+            resources
+                .entry(entry.environment.clone())
+                .or_default()
+                .push(ResourceCard::from(entry));
+        }
+
+        // Declared first, in declaration order; then whatever `env` labels
+        // turned up, alphabetically; then the unlabelled, last, because a
+        // section with no name is a loose end rather than an environment.
+        let declared: Vec<String> = registry
+            .environments()
+            .iter()
+            .map(|environment| environment.id.clone())
+            .collect();
+        let mut order: Vec<String> = declared.clone();
+        let mut discovered: Vec<String> = clusters
+            .keys()
+            .chain(resources.keys())
+            .filter(|id| !id.is_empty() && !declared.contains(id))
+            .cloned()
+            .collect();
+        discovered.sort();
+        discovered.dedup();
+        order.append(&mut discovered);
+        order.push(String::new());
+
+        order
+            .into_iter()
+            .filter_map(|id| {
+                let members = clusters.remove(&id).unwrap_or_default();
+                let inventory = resources.remove(&id).unwrap_or_default();
+                if members.is_empty() && inventory.is_empty() {
+                    return None;
+                }
+                let entry = registry
+                    .environments()
+                    .iter()
+                    .find(|environment| environment.id == id);
+                Some(Self {
+                    name: match entry {
+                        Some(environment) => environment.display_name().to_owned(),
+                        None if id.is_empty() => "no environment".to_owned(),
+                        None => id.clone(),
+                    },
+                    description: entry.and_then(|environment| environment.description.clone()),
+                    declared: entry.is_some(),
+                    id,
+                    clusters: members,
+                    resources: inventory,
+                })
+            })
+            .collect()
     }
 }
 
@@ -1360,6 +1507,158 @@ fn render_topic_id(id: &TopicId) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::config::Config;
+
+    /// A fleet with one declared-but-empty environment, one declared and
+    /// populated, one that exists only as a label, and one loose cluster.
+    fn fleet() -> (Registry, Access) {
+        let config = Config::from_yaml(
+            r#"
+environments:
+  - id: dev
+    name: Development
+  - id: staging
+  - id: prod
+    name: Production
+
+clusters:
+  - id: kaas
+    bootstrap: ["a:9092"]
+    labels: { env: dev }
+  - id: edge-one
+    bootstrap: ["b:9092"]
+    labels: { env: edge }
+  - id: loose
+    bootstrap: ["c:9092"]
+
+resources:
+  - id: apicurio-dev
+    kind: schema_registry
+    environment: dev
+  - id: mosquitto
+    kind: mqtt_broker
+    environment: prod
+"#,
+        )
+        .unwrap();
+        (Registry::from_config(&config), Access::admin())
+    }
+
+    fn arrange(registry: &Registry, who: &Access) -> Vec<EnvironmentSection> {
+        let cards = registry
+            .visible(who)
+            .map(|handle| ClusterCard::of(handle, who))
+            .collect();
+        EnvironmentSection::arrange(cards, registry, who)
+    }
+
+    #[test]
+    fn sections_run_in_declared_order_then_discovered_then_loose() {
+        let (registry, who) = fleet();
+        let sections = arrange(&registry, &who);
+        let ids: Vec<&str> = sections.iter().map(|section| section.id.as_str()).collect();
+        // `staging` is declared and empty, so it is absent; `edge` was never
+        // declared and sorts after everything that was; the unlabelled cluster
+        // lands in the nameless section, last.
+        assert_eq!(ids, ["dev", "prod", "edge", ""]);
+    }
+
+    #[test]
+    fn an_environment_holding_nothing_visible_is_absent_entirely() {
+        // Not cosmetic. A heading over an empty grid tells a caller who cannot
+        // see prod that prod exists, which is the 404-not-403 rule undone one
+        // level up.
+        let (registry, who) = fleet();
+        let sections = arrange(&registry, &who);
+        assert!(sections.iter().all(|section| section.id != "staging"));
+    }
+
+    #[test]
+    fn a_section_carries_both_its_clusters_and_its_other_resources() {
+        let (registry, who) = fleet();
+        let sections = arrange(&registry, &who);
+
+        let dev = sections.iter().find(|s| s.id == "dev").unwrap();
+        assert_eq!(dev.name, "Development");
+        assert_eq!(dev.clusters.len(), 1);
+        assert_eq!(dev.resources.len(), 1);
+        assert!(dev.declared);
+
+        // An environment can hold no cluster at all and still be a section:
+        // prod here is a registry and a broker kaas-ui does not speak.
+        let prod = sections.iter().find(|s| s.id == "prod").unwrap();
+        assert!(prod.clusters.is_empty());
+        assert_eq!(prod.resources[0].kind, ResourceKind::MqttBroker);
+
+        // Discovered from a label: it renders, it just has no chosen name.
+        let edge = sections.iter().find(|s| s.id == "edge").unwrap();
+        assert_eq!(edge.name, "edge");
+        assert!(!edge.declared);
+    }
+
+    #[test]
+    fn a_caller_who_cannot_see_prod_is_not_told_that_prod_exists() {
+        // The leak this ordering exists to prevent: the clusters are hidden by
+        // the label selector, and a schema registry sitting in the same
+        // environment would announce it right back if resources were not
+        // filtered by the same test.
+        let config = Config::from_yaml(
+            r#"
+environments:
+  - id: dev
+  - id: prod
+
+clusters:
+  - id: kaas
+    bootstrap: ["a:9092"]
+    labels: { env: dev }
+  - id: prod-eu
+    bootstrap: ["b:9092"]
+    labels: { env: prod }
+
+resources:
+  - id: apicurio-dev
+    kind: schema_registry
+    environment: dev
+  - id: apicurio-prod
+    kind: schema_registry
+    environment: prod
+
+roles:
+  - name: dev-only
+    subjects: ["dev-team"]
+    cluster_labels: { env: dev }
+    permissions:
+      - resource: topic
+        actions: [view]
+"#,
+        )
+        .unwrap();
+
+        let registry = Registry::from_config(&config);
+        let policy = kaas_ui_auth::Policy::enforcing(config.roles.clone());
+        let who = policy.access(&Principal::new("u", None, ["dev-team".to_owned()]));
+
+        let sections = arrange(&registry, &who);
+        let ids: Vec<&str> = sections.iter().map(|section| section.id.as_str()).collect();
+        assert_eq!(ids, ["dev"]);
+        assert_eq!(sections[0].resources.len(), 1);
+        assert_eq!(sections[0].resources[0].id, "apicurio-dev");
+    }
+
+    #[test]
+    fn a_resource_card_has_no_status_to_render_green() {
+        // kaas-ui dials none of these. The absence of the field is the
+        // guarantee — see `ResourceCard`.
+        let (registry, who) = fleet();
+        let sections = arrange(&registry, &who);
+        let card = &sections.iter().find(|s| s.id == "dev").unwrap().resources[0];
+        let json = serde_json::to_value(card).unwrap();
+        assert!(json.get("status").is_none(), "{json}");
+        assert_eq!(json["kind"], "schema_registry");
+        assert_eq!(json["labels"]["env"], "dev");
+    }
 
     #[test]
     fn lag_has_four_distinguishable_states() {

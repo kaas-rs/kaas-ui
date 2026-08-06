@@ -2,11 +2,14 @@
 
 use axum::Json;
 use axum::extract::{Path, State};
-use kaas_ui_core::dto::{Broker, ClusterCard, ClusterDescriptionDto, ClusterDetail, LogDirDto};
+use kaas_ui_core::dto::{
+    Broker, ClusterCard, ClusterDescriptionDto, ClusterDetail, EnvironmentSection, LogDirDto,
+};
 use kaas_ui_core::envelope::Envelope;
 use kaas_ui_core::health::ClusterStatus;
+use kaas_ui_core::registry::Registry;
 
-use kaas_ui_auth::{Action, Resource};
+use kaas_ui_auth::{Access, Action, Resource};
 
 use crate::{ApiResult, AppState, Caller, call};
 
@@ -27,13 +30,19 @@ use crate::{ApiResult, AppState, Caller, call};
 )]
 pub async fn list(State(state): State<AppState>, caller: Caller) -> Json<Envelope<ClusterCard>> {
     let registry = state.registry();
-    // `visible`, not `all`. The fleet is the caller's fleet: someone in no
-    // matching role gets an empty list, which is a true answer about what they
-    // may see rather than an error about who they are.
-    let cards: Vec<ClusterCard> = registry
-        .visible(caller.access())
+    Json(Envelope::new(cards(&registry, caller.access())))
+}
+
+/// One card per visible cluster, nudging the unreachable ones to retry.
+///
+/// `visible`, not `all`. The fleet is the caller's fleet: someone in no
+/// matching role gets an empty list, which is a true answer about what they
+/// may see rather than an error about who they are.
+fn cards(registry: &Registry, who: &Access) -> Vec<ClusterCard> {
+    registry
+        .visible(who)
         .map(|handle| {
-            let card = ClusterCard::of(handle, caller.access());
+            let card = ClusterCard::of(handle, who);
             if card.status != ClusterStatus::Ready {
                 // Someone is looking at this cluster, so try again now rather
                 // than at the end of the backoff. A side effect of a GET, not
@@ -42,9 +51,38 @@ pub async fn list(State(state): State<AppState>, caller: Caller) -> Json<Envelop
             }
             card
         })
-        .collect();
+        .collect()
+}
 
-    Json(Envelope::new(cards))
+/// `GET /api/fleet`
+///
+/// The same cards, arranged into the sections the landing page renders: one
+/// per environment, each holding its clusters and whatever else was configured
+/// beside them — a schema registry, an MQTT broker.
+///
+/// Sectioned here rather than in the browser because the order is
+/// configuration. Declared environments come in declared order, and no client
+/// can recover "dev, staging, prod" from three strings that sort the other
+/// way. An environment nothing visible lives in is absent from the response,
+/// so a heading never reports the existence of a cluster the caller may not
+/// see.
+#[utoipa::path(
+    get,
+    path = "/api/fleet",
+    responses((status = 200, description = "The fleet, by environment", body = Envelope<EnvironmentSection>)),
+    tag = "clusters",
+)]
+pub async fn fleet(
+    State(state): State<AppState>,
+    caller: Caller,
+) -> Json<Envelope<EnvironmentSection>> {
+    let registry = state.registry();
+    let sections = EnvironmentSection::arrange(
+        cards(&registry, caller.access()),
+        &registry,
+        caller.access(),
+    );
+    Json(Envelope::new(sections))
 }
 
 /// `GET /api/clusters/{id}`

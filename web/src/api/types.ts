@@ -77,6 +77,43 @@ export interface ClusterCard {
   grants: Partial<Record<Resource, Action[]>>;
 }
 
+/** What a non-cluster resource is. Decides the icon and the wording. */
+export type ResourceKind =
+  | "schema_registry"
+  | "mqtt_broker"
+  | "kafka_connect"
+  | "rest_proxy"
+  | "other";
+
+/**
+ * One thing in an environment that is not a Kafka cluster.
+ *
+ * **No status field, deliberately.** kaas-ui dials none of these, so it knows
+ * one is configured and not that it is up. The card says "not probed" because
+ * that is the whole truth — a green badge earned by a correctly typed URL is
+ * the one thing a fleet view must never show.
+ */
+export interface ResourceCard {
+  id: string;
+  name: string;
+  kind: ResourceKind;
+  endpoint: string | null;
+  note: string | null;
+  labels: Record<string, string>;
+}
+
+/** One section of the fleet: an environment and everything in it. */
+export interface EnvironmentSection {
+  /** The `env` label collected here; empty for the clusters carrying none. */
+  id: string;
+  name: string;
+  description: string | null;
+  /** Declared in `environments:`, or discovered from a label. */
+  declared: boolean;
+  clusters: ClusterCard[];
+  resources: ResourceCard[];
+}
+
 /**
  * What a permission is about. Mirrors kafbat-ui's resource list, minus the
  * ones this application has no code for.

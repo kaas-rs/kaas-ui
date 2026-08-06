@@ -25,12 +25,29 @@ rejected rather than ignored:
 server:
   listen: "0.0.0.0:8080"
 
+# Optional: the fleet is sectioned by environment, and declaring one buys a
+# display name and a position. An `env` label alone still makes a section — it
+# just sorts after the declared ones, under its own id.
+environments:
+  - id: dev
+    name: Development
+
 clusters:
   - id: strimzi
     name: kafka-cluster (Strimzi)
     bootstrap: ["kafka-cluster-kafka-bootstrap.strimzi.svc.cluster.local:9092"]
     labels: { env: dev, kind: strimzi }
     refresh_interval: 30s
+
+# Optional: what belongs in an environment beside the brokers. kaas-ui dials
+# none of these, so a card says what is configured and reports no health it
+# never asked about.
+resources:
+  - id: apicurio-dev
+    name: Apicurio (ccompat)
+    kind: schema_registry        # or mqtt_broker, kafka_connect, rest_proxy, other
+    environment: dev
+    endpoint: http://apicurio-registry.apicurio.svc.cluster.local:8080/apis/ccompat/v7
 ```
 
 `--check` loads the configuration and reports what it says without serving.

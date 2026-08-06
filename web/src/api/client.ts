@@ -5,6 +5,7 @@ import type {
   ClusterDetail,
   ConfigResourceEntry,
   Envelope,
+  EnvironmentSection,
   GroupDetail,
   GroupOffset,
   GroupSummary,
@@ -60,6 +61,22 @@ export function useClusters() {
   return useQuery({
     queryKey: ["clusters"],
     queryFn: () => get<Envelope<ClusterCard>>("/api/clusters"),
+    refetchInterval: 5_000,
+  });
+}
+
+/**
+ * The fleet, sectioned by environment.
+ *
+ * The same cards `useClusters` returns, plus whatever else is configured in
+ * each environment, in an order the server chose — declared environments come
+ * in declared order, which no client can recover from the ids. The sidebar
+ * keeps using the flat list: it is a switcher, not a map.
+ */
+export function useFleet() {
+  return useQuery({
+    queryKey: ["fleet"],
+    queryFn: () => get<Envelope<EnvironmentSection>>("/api/fleet"),
     refetchInterval: 5_000,
   });
 }

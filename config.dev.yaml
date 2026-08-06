@@ -23,7 +23,23 @@ server:
   # looks like a broken build rather than a missing setting.
   base_path: "/proxy/8099"
 
+# The fleet is sectioned by environment, and declaring one buys a name and a
+# position — "dev, staging, prod" is an order no sort recovers from the ids.
+# A section can exist without an entry here (any `env` label makes one), but it
+# then sorts after the declared ones with its id for a heading.
+environments:
+  - id: dev
+    name: Development
+    description: The two live clusters this repo is developed against, plus one that is not there on purpose.
+  - id: staging
+    name: Staging
+    description: Placeholders. Nothing here resolves — they exist so the fleet layout can be seen with more than one section in it.
+  - id: prod
+    name: Production
+    description: "Placeholders, and the tone the `env: prod` label forces on a cluster chip."
+
 clusters:
+  # --- dev: the two real ones, and the fixture ----------------------------
   - id: kaas
     name: kaas (dev)
     bootstrap: ["kaas.kaas.svc.cluster.local:9092"]
@@ -47,3 +63,108 @@ clusters:
       env: dev
       kind: none
     connect_timeout: 3s
+
+  # --- staging and prod: fixtures for the fleet layout --------------------
+  #
+  # Every one of these dials a `.invalid` name (RFC 2606), so DNS fails
+  # immediately and no real host is ever contacted. They render as unreachable
+  # cards, which is the honest thing for a cluster that is not there — and it
+  # makes a page with a dozen clusters on it something that can actually be
+  # looked at before there are a dozen clusters.
+  #
+  # A long `refresh_interval` because a fixture that will never connect has no
+  # reason to be the busiest thing in the process.
+  - id: staging-eu
+    name: staging (eu-west)
+    bootstrap: ["kafka.staging-eu.invalid:9092"]
+    labels:
+      env: staging
+      kind: strimzi
+      region: eu-west
+    connect_timeout: 3s
+    refresh_interval: 5m
+
+  - id: staging-us
+    name: staging (us-east)
+    bootstrap: ["kafka.staging-us.invalid:9092"]
+    labels:
+      env: staging
+      kind: strimzi
+      region: us-east
+    connect_timeout: 3s
+    refresh_interval: 5m
+
+  - id: prod-eu
+    name: production (eu-west)
+    bootstrap: ["kafka.prod-eu.invalid:9092"]
+    labels:
+      env: prod
+      kind: strimzi
+      region: eu-west
+    connect_timeout: 3s
+    refresh_interval: 5m
+
+  - id: prod-us
+    name: production (us-east)
+    bootstrap: ["kafka.prod-us.invalid:9092"]
+    labels:
+      env: prod
+      kind: strimzi
+      region: us-east
+    connect_timeout: 3s
+    refresh_interval: 5m
+
+  - id: prod-analytics
+    name: production (analytics)
+    bootstrap: ["kafka.prod-analytics.invalid:9092"]
+    labels:
+      env: prod
+      kind: kaas
+    connect_timeout: 3s
+    refresh_interval: 5m
+
+# Everything in an environment that is not a Kafka cluster.
+#
+# kaas-ui dials none of these: the card says what is configured and where, and
+# says "not probed" rather than inventing a health it never asked about. The
+# schema registry stops being inventory in Phase 6, which is when it gets a
+# status worth rendering — see docs/07-phase-6-schema-registry.md.
+resources:
+  - id: apicurio-dev
+    name: Apicurio (ccompat)
+    kind: schema_registry
+    environment: dev
+    endpoint: http://apicurio-registry.apicurio.svc.cluster.local:8080/apis/ccompat/v7
+    note: Not deployed in this cluster yet — the URL kafbat-ui points at resolves to nothing.
+
+  - id: connect-staging
+    name: Kafka Connect
+    kind: kafka_connect
+    environment: staging
+    endpoint: http://connect.staging.invalid:8083
+
+  - id: apicurio-staging
+    name: Apicurio (ccompat)
+    kind: schema_registry
+    environment: staging
+    endpoint: http://registry.staging.invalid:8080/apis/ccompat/v7
+
+  - id: apicurio-prod
+    name: Apicurio (ccompat)
+    kind: schema_registry
+    environment: prod
+    endpoint: http://registry.prod.invalid:8080/apis/ccompat/v7
+    note: One registry for the environment, shared by every cluster in it.
+
+  - id: mosquitto-prod
+    name: Mosquitto
+    kind: mqtt_broker
+    environment: prod
+    endpoint: mqtts://mqtt.prod.invalid:8883
+    note: Bridged into Kafka by the ingest service.
+
+  - id: rest-proxy-prod
+    name: REST proxy
+    kind: rest_proxy
+    environment: prod
+    endpoint: https://kafka-rest.prod.invalid

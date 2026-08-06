@@ -250,6 +250,9 @@ fn api_router() -> Router<AppState> {
         // Who is asking. Above the clusters because it is the answer that
         // decides which of them exist for this caller.
         .route("/me", get(me::me))
+        // The landing page: the same clusters, sectioned by environment and
+        // holding whatever else was configured beside them.
+        .route("/fleet", get(clusters::fleet))
         .route("/clusters", get(clusters::list))
         .route("/clusters/{id}", get(clusters::detail))
         .route(

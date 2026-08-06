@@ -1,70 +1,135 @@
 import { Link } from "@tanstack/react-router";
 import { ArrowRight, RefreshCw } from "lucide-react";
 
-import { useClusters } from "@/api/client";
-import type { ClusterCard as ClusterCardData } from "@/api/types";
+import { useFleet } from "@/api/client";
+import type {
+  ClusterCard as ClusterCardData,
+  EnvironmentSection,
+  ResourceCard as ResourceCardData,
+} from "@/api/types";
 import {
   ClusterChip,
   ClusterCounts,
+  Empty,
+  RESOURCE_KINDS,
+  byResourceKind,
   SnapshotAge,
   Spinner,
   StatusBadge,
 } from "@/components/domain";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card";
-import { PageTitle } from "@/shell";
+import { PageTitle } from "@/components/page-title";
 
-/** Group by `env`, then `kind` — the two labels the fleet is organised by. */
-function groupKey(card: ClusterCardData): string {
-  const env = card.labels.env ?? "unlabelled";
-  const kind = card.labels.kind;
-  return kind ? `${env} · ${kind}` : env;
-}
-
+/**
+ * The fleet, one section per environment.
+ *
+ * The sections arrive assembled, in order, from `/api/fleet` — declared
+ * environments first, in declared order, because "dev, staging, prod" is not
+ * recoverable from three strings by any sort this page could apply. An
+ * environment holding nothing this caller may see is not in the response at
+ * all, so there is no empty heading here to report that prod exists.
+ */
 export function Fleet() {
-  const clusters = useClusters();
+  const fleet = useFleet();
 
-  if (clusters.isLoading) return <Spinner label="loading the fleet" />;
-  if (clusters.error) {
+  if (fleet.isLoading) return <Spinner label="loading the fleet" />;
+  if (fleet.error) {
     return (
       <Card className="p-5 text-danger">
-        the fleet could not be loaded: {String(clusters.error)}
+        the fleet could not be loaded: {String(fleet.error)}
       </Card>
     );
   }
 
-  const cards = clusters.data?.items ?? [];
-  const groups = new Map<string, ClusterCardData[]>();
-  for (const card of cards) {
-    const key = groupKey(card);
-    groups.set(key, [...(groups.get(key) ?? []), card]);
-  }
+  const sections = fleet.data?.items ?? [];
+  const clusters = sections.reduce((total, section) => total + section.clusters.length, 0);
+  const resources = sections.reduce((total, section) => total + section.resources.length, 0);
 
   return (
     <>
       <PageTitle
         title="Fleet"
-        subtitle={`${cards.length} configured cluster${cards.length === 1 ? "" : "s"}`}
+        subtitle={
+          <>
+            {plural(clusters, "cluster")}
+            {resources > 0 ? ` and ${plural(resources, "other resource")}` : null}
+            {sections.length > 0 ? ` across ${plural(sections.length, "environment")}` : null}
+          </>
+        }
       />
 
-      {[...groups.entries()].map(([group, members]) => (
-        <section key={group} className="mb-8">
-          <h2 className="mb-3 text-[12px] uppercase tracking-wide text-ink-faint">
-            {group}
-          </h2>
-          <div className="grid gap-4 grid-cols-[repeat(auto-fill,minmax(20rem,1fr))]">
-            {members.map((card) => (
-              <FleetCard key={card.id} card={card} />
-            ))}
-          </div>
-        </section>
-      ))}
+      {sections.length === 0 ? (
+        <Empty>nothing configured is visible to you</Empty>
+      ) : (
+        sections.map((section) => <Environment key={section.id} section={section} />)
+      )}
     </>
   );
 }
 
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+/** One environment: its heading, and everything in it. */
+function Environment({ section }: { section: EnvironmentSection }) {
+  // The same string `clusterTone` singles out. prod must not look like
+  // anything else, and a section heading is the first place someone reads.
+  const production = section.id === "prod";
+  const unreachable = section.clusters.filter(
+    (card) => card.status === "unreachable",
+  ).length;
+
+  return (
+    <section className="mb-10">
+      <div
+        className="mb-4 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-b pb-2"
+        style={production ? { borderColor: "var(--danger)" } : undefined}
+      >
+        <div className="min-w-0">
+          <h2
+            className="text-[15px] font-semibold tracking-[-0.01em]"
+            style={production ? { color: "var(--danger)" } : undefined}
+          >
+            {section.name}
+          </h2>
+          {section.description ? (
+            <p className="mt-0.5 text-[12px] text-ink-muted">{section.description}</p>
+          ) : null}
+        </div>
+
+        <div className="flex shrink-0 items-baseline gap-3 text-[12px] text-ink-faint">
+          {unreachable > 0 ? (
+            <span className="text-danger">{unreachable} unreachable</span>
+          ) : null}
+          <span>
+            {plural(section.clusters.length, "cluster")}
+            {section.resources.length > 0 ? ` · ${section.resources.length} other` : null}
+          </span>
+        </div>
+      </div>
+
+      {/*
+        `min(20rem, 100%)` rather than a bare `20rem`: auto-fill would otherwise
+        hold a 320px track on a 300px viewport and push the page into a
+        horizontal scroll. Below that width it is one column, above it as many
+        as fit, with no breakpoint to keep in sync.
+      */}
+      <div className="grid gap-4 grid-cols-[repeat(auto-fill,minmax(min(20rem,100%),1fr))]">
+        {section.clusters.map((card) => (
+          <FleetCard key={card.id} card={card} />
+        ))}
+        {byResourceKind(section.resources).map((card) => (
+          <ResourceTile key={card.id} card={card} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function FleetCard({ card }: { card: ClusterCardData }) {
-  const clusters = useClusters();
+  const fleet = useFleet();
   const unreachable = card.status === "unreachable";
 
   return (
@@ -101,7 +166,7 @@ function FleetCard({ card }: { card: ClusterCardData }) {
             style={{ background: "var(--danger-soft)", borderColor: "var(--danger)" }}
           >
             <p className="break-words font-mono">{card.error}</p>
-            <div className="mt-2 flex items-center justify-between gap-3">
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
               <span className="text-ink-muted">
                 {card.attempts} failed attempt{card.attempts === 1 ? "" : "s"}
               </span>
@@ -111,7 +176,7 @@ function FleetCard({ card }: { card: ClusterCardData }) {
                 // Asking again is a GET. The server nudges its connector to
                 // retry now rather than at the end of the backoff, which is how
                 // a retry button exists in an application with no non-GET route.
-                onClick={() => void clusters.refetch()}
+                onClick={() => void fleet.refetch()}
               >
                 <RefreshCw aria-hidden />
                 retry now
@@ -132,6 +197,49 @@ function FleetCard({ card }: { card: ClusterCardData }) {
           </Link>
         </Button>
       </CardFooter>
+    </Card>
+  );
+}
+
+/**
+ * Something in this environment that is not a Kafka cluster.
+ *
+ * Inventory, not monitoring. kaas-ui dials none of these, so the card carries
+ * no status badge and says so — a green dot earned by a correctly typed URL
+ * would be worse than no dot at all. `self-start` keeps it its own height
+ * rather than stretching to match a cluster card three times as tall.
+ */
+function ResourceTile({ card }: { card: ResourceCardData }) {
+  const kind = RESOURCE_KINDS[card.kind];
+  const Icon = kind.icon;
+
+  return (
+    <Card className="gap-3 self-start py-4">
+      <CardHeader className="gap-2 px-4">
+        <div className="flex items-start justify-between gap-3">
+          <span className="font-semibold">{card.name}</span>
+          <span
+            className="shrink-0 rounded-sm border border-dashed px-1.5 py-0.5 text-[11px] text-ink-faint"
+            title="kaas-ui does not connect to this, so it has no health to report"
+          >
+            not probed
+          </span>
+        </div>
+        <div className="flex items-center gap-1.5 text-[12px] text-ink-muted">
+          <Icon aria-hidden className="size-3.5" />
+          {kind.label}
+          <span className="font-mono text-[11px] text-ink-faint">{card.id}</span>
+        </div>
+      </CardHeader>
+
+      <CardContent className="px-4">
+        {card.endpoint ? (
+          <p className="break-all font-mono text-[12px] text-ink-muted">{card.endpoint}</p>
+        ) : null}
+        {card.note ? (
+          <p className="mt-2 text-[12px] text-ink-muted">{card.note}</p>
+        ) : null}
+      </CardContent>
     </Card>
   );
 }

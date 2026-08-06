@@ -14,6 +14,7 @@ use figment::Figment;
 use figment::providers::{Env, Format, Yaml};
 use kaas_ui_auth::{OidcConfig, Resource, Role};
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 /// Everything kaas-ui reads at startup.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -23,6 +24,16 @@ pub struct Config {
     pub server: ServerConfig,
     /// The cluster registry.
     pub clusters: Vec<ClusterEntry>,
+    /// The environments the fleet is sectioned by.
+    ///
+    /// Optional, and declaring one buys exactly two things: a display name and
+    /// a position. Sections exist without it — a cluster's `env` label is
+    /// enough to make one — but "dev, staging, prod" is an order nobody can
+    /// derive from the strings, so undeclared environments sort after declared
+    /// ones instead of pretending alphabetical was meaningful.
+    pub environments: Vec<EnvironmentEntry>,
+    /// Everything in an environment that is not a Kafka cluster.
+    pub resources: Vec<ResourceEntry>,
     /// Where the login provider is, when kaas-ui serves it under its own
     /// hostname.
     ///
@@ -165,6 +176,111 @@ pub struct ClusterEntry {
     /// SASL credentials.
     #[serde(default)]
     pub sasl: Option<SaslSettings>,
+}
+
+/// One section of the fleet.
+///
+/// The id is what a cluster's `env` label and a resource's `environment` name.
+/// That label is already a policy selector — `cluster_labels: {env: prod}`
+/// selects a role's clusters — so the environment is not a new axis, it is the
+/// one the fleet was always grouped by, given a name and an order.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "snake_case")]
+pub struct EnvironmentEntry {
+    /// Matches a cluster's `env` label, and a resource's `environment`.
+    pub id: String,
+    /// Human-readable name. Defaults to the id.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// One line under the heading, where the id does not say enough.
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+impl EnvironmentEntry {
+    /// The name to render.
+    #[must_use]
+    pub fn display_name(&self) -> &str {
+        self.name.as_deref().unwrap_or(&self.id)
+    }
+}
+
+/// Something in an environment that is not a Kafka cluster.
+///
+/// A schema registry, an MQTT broker, a Connect cluster: the things a team
+/// reaches for beside its brokers and expects to find in the same place. They
+/// are inventory, not monitoring — kaas-ui dials none of them — which is why
+/// [`crate::dto::ResourceCard`] has no status field to render green.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "snake_case")]
+pub struct ResourceEntry {
+    /// Stable identifier, unique among resources.
+    pub id: String,
+    /// Human-readable name. Defaults to the id.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// What it is. Decides the icon and the wording, nothing else.
+    pub kind: ResourceKind,
+    /// Which section it belongs to.
+    ///
+    /// Required, and checked against the environments that actually exist: a
+    /// typo here would otherwise open a section of one nobody meant to create,
+    /// somewhere down the page, looking exactly like a real environment.
+    pub environment: String,
+    /// Where it is, as an address a human can act on.
+    #[serde(default)]
+    pub endpoint: Option<String>,
+    /// One line of context on the card.
+    #[serde(default)]
+    pub note: Option<String>,
+    /// Free-form labels, as on a cluster.
+    ///
+    /// `env` is added from [`Self::environment`] before anything reads these,
+    /// so a role's `cluster_labels: {env: prod}` selector covers a resource the
+    /// same way it covers a broker.
+    #[serde(default)]
+    pub labels: BTreeMap<String, String>,
+}
+
+impl ResourceEntry {
+    /// The name to render.
+    #[must_use]
+    pub fn display_name(&self) -> &str {
+        self.name.as_deref().unwrap_or(&self.id)
+    }
+
+    /// The labels a visibility check sees: the configured ones, plus `env`.
+    ///
+    /// Built rather than stored so the two can never disagree — a resource in
+    /// `prod` labelled `env: dev` would be a hole in exactly the selector
+    /// people write first.
+    #[must_use]
+    pub fn effective_labels(&self) -> BTreeMap<String, String> {
+        let mut labels = self.labels.clone();
+        labels.insert("env".to_owned(), self.environment.clone());
+        labels
+    }
+}
+
+/// What a non-cluster resource is.
+///
+/// A closed set on purpose: each variant is an icon and a word in the UI, and
+/// `Other` is the honest home for anything this list has not learned yet
+/// rather than a reason to accept free text that renders as nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceKind {
+    /// A Confluent-compatible schema registry — Apicurio's `ccompat`, or
+    /// Confluent's own.
+    SchemaRegistry,
+    /// An MQTT broker.
+    MqttBroker,
+    /// A Kafka Connect cluster.
+    KafkaConnect,
+    /// A REST proxy in front of a cluster.
+    RestProxy,
+    /// Anything else worth listing beside the brokers.
+    Other,
 }
 
 /// TLS settings for one cluster.
@@ -354,6 +470,60 @@ impl Config {
             }
         }
 
+        let mut environments: BTreeMap<&str, ()> = BTreeMap::new();
+        for environment in &self.environments {
+            if environment.id.is_empty() {
+                return Err(ConfigError::Invalid(
+                    "an environment has an empty id: it is what a cluster's `env` label names"
+                        .into(),
+                ));
+            }
+            if environments.insert(environment.id.as_str(), ()).is_some() {
+                return Err(ConfigError::Invalid(format!(
+                    "duplicate environment id {:?}",
+                    environment.id
+                )));
+            }
+        }
+
+        // An environment is real if it was declared or if a cluster is in it.
+        // Anything else a resource names is a typo, and the whole point of
+        // saying so here is that the alternative is silent: a lonely section,
+        // rendered like every other one, at the bottom of the fleet.
+        let mut inhabited: BTreeMap<&str, ()> = environments;
+        for cluster in &self.clusters {
+            if let Some(env) = cluster.labels.get("env") {
+                inhabited.insert(env.as_str(), ());
+            }
+        }
+
+        let mut seen_resources: BTreeMap<&str, ()> = BTreeMap::new();
+        for resource in &self.resources {
+            if resource.id.is_empty() {
+                return Err(ConfigError::Invalid("a resource has an empty id".into()));
+            }
+            if seen_resources.insert(resource.id.as_str(), ()).is_some() {
+                return Err(ConfigError::Invalid(format!(
+                    "duplicate resource id {:?}",
+                    resource.id
+                )));
+            }
+            if resource.environment.is_empty() {
+                return Err(ConfigError::Invalid(format!(
+                    "resource {:?} names no environment: there is no section to put it in",
+                    resource.id
+                )));
+            }
+            if !inhabited.contains_key(resource.environment.as_str()) {
+                return Err(ConfigError::Invalid(format!(
+                    "resource {:?} is in environment {:?}, which no cluster labels `env: {}` and \
+                     no `environments:` entry declares — declare it there if the environment holds \
+                     no Kafka cluster",
+                    resource.id, resource.environment, resource.environment
+                )));
+            }
+        }
+
         for role in &self.roles {
             if role.name.is_empty() {
                 return Err(ConfigError::Invalid(
@@ -500,6 +670,97 @@ clusters:
         )
         .unwrap_err();
         assert!(format!("{err}").contains("schema_registry"), "{err}");
+    }
+
+    #[test]
+    fn environments_and_resources_parse() {
+        let config = Config::from_yaml(
+            r#"
+environments:
+  - id: dev
+    name: Development
+  - id: prod
+
+clusters:
+  - id: kaas
+    bootstrap: ["a:9092"]
+    labels: { env: dev }
+
+resources:
+  - id: apicurio-dev
+    kind: schema_registry
+    environment: dev
+    endpoint: http://apicurio:8080/apis/ccompat/v7
+  - id: mosquitto
+    kind: mqtt_broker
+    environment: prod
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.environments[0].display_name(), "Development");
+        // Undeclared name falls back to the id, so a section always has a
+        // heading.
+        assert_eq!(config.environments[1].display_name(), "prod");
+        assert_eq!(config.resources[0].kind, ResourceKind::SchemaRegistry);
+        // `env` is derived, never stored: it cannot disagree with the section.
+        assert_eq!(
+            config.resources[1]
+                .effective_labels()
+                .get("env")
+                .map(String::as_str),
+            Some("prod")
+        );
+    }
+
+    #[test]
+    fn a_resource_in_an_environment_nobody_declared_is_rejected() {
+        // The typo this exists for. Without the check it renders as a section
+        // of one at the bottom of the fleet, looking exactly like a real
+        // environment nobody has any clusters in.
+        let err = Config::from_yaml(
+            r#"
+clusters:
+  - id: kaas
+    bootstrap: ["a:9092"]
+    labels: { env: dev }
+
+resources:
+  - id: apicurio
+    kind: schema_registry
+    environment: dve
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            format!("{err}").contains("no `environments:` entry declares"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn an_environment_of_resources_alone_is_legal_once_declared() {
+        // Declaring it is the opt-in: an environment with no Kafka cluster in
+        // it is a real thing to want, and saying so out loud is what separates
+        // it from the typo above.
+        let config = Config::from_yaml(
+            r#"
+environments:
+  - id: edge
+
+clusters:
+  - id: kaas
+    bootstrap: ["a:9092"]
+    labels: { env: dev }
+
+resources:
+  - id: mosquitto
+    kind: mqtt_broker
+    environment: edge
+"#,
+        )
+        .unwrap();
+        assert_eq!(config.resources.len(), 1);
     }
 
     #[test]

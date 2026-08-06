@@ -18,7 +18,7 @@
 //     that disappears leaves "who am I" unanswerable exactly when it is
 //     least obvious.
 
-import { BadgeCheck, ChevronsUpDown, LogIn, LogOut } from "lucide-react";
+import { BadgeCheck, ChevronsUpDown, LogIn, LogOut, Settings } from "lucide-react";
 import { useRef } from "react";
 import { Link } from "@tanstack/react-router";
 
@@ -128,6 +128,16 @@ export function NavUser({ identity }: { identity: Identity }) {
                 <Link to="/account">
                   <BadgeCheck />
                   Account
+                </Link>
+              </DropdownMenuItem>
+              {/* Next to Account because the pair is one question asked twice
+                  — what is true of *me* here. Account answers the half that
+                  follows the login to any machine; Settings answers the half
+                  that stays in this browser. */}
+              <DropdownMenuItem asChild>
+                <Link to="/settings">
+                  <Settings />
+                  Settings
                 </Link>
               </DropdownMenuItem>
             </DropdownMenuGroup>

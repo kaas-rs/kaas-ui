@@ -27,7 +27,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { PageTitle } from "@/shell";
+import { PageTitle } from "@/components/page-title";
 
 export function ClusterOverview({ clusterId }: { clusterId: string }) {
   const cluster = useCluster(clusterId);

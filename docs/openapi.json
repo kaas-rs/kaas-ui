@@ -931,6 +931,28 @@
         }
       }
     },
+    "/api/fleet": {
+      "get": {
+        "tags": [
+          "clusters"
+        ],
+        "summary": "`GET /api/fleet`",
+        "description": "The same cards, arranged into the sections the landing page renders: one\nper environment, each holding its clusters and whatever else was configured\nbeside them — a schema registry, an MQTT broker.\n\nSectioned here rather than in the browser because the order is\nconfiguration. Declared environments come in declared order, and no client\ncan recover \"dev, staging, prod\" from three strings that sort the other\nway. An environment nothing visible lives in is absent from the response,\nso a heading never reports the existence of a cluster the caller may not\nsee.",
+        "operationId": "fleet",
+        "responses": {
+          "200": {
+            "description": "The fleet, by environment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope_EnvironmentSection"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/me": {
       "get": {
         "tags": [
@@ -1934,6 +1956,90 @@
           }
         }
       },
+      "Envelope_EnvironmentSection": {
+        "type": "object",
+        "description": "What every data endpoint returns.",
+        "required": [
+          "items",
+          "errors"
+        ],
+        "properties": {
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResourceError"
+            },
+            "description": "The resources that did not. Non-empty is still `200 OK`."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One section of the fleet: an environment and everything in it.\n\nAssembled on the server rather than grouped in the browser, because the\norder is configuration — declared environments run in declared order, and\nnothing else can recover \"dev before staging before prod\" from three\nstrings.",
+              "required": [
+                "id",
+                "name",
+                "declared",
+                "clusters",
+                "resources"
+              ],
+              "properties": {
+                "clusters": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ClusterCard"
+                  },
+                  "description": "The Kafka clusters, in the order the registry lists them."
+                },
+                "declared": {
+                  "type": "boolean",
+                  "description": "Whether the environment was declared, or discovered from a label."
+                },
+                "description": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The declared description, where there is one."
+                },
+                "id": {
+                  "type": "string",
+                  "description": "The `env` label this section collects, empty for the clusters that\ncarry none."
+                },
+                "name": {
+                  "type": "string",
+                  "description": "The name to render."
+                },
+                "resources": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ResourceCard"
+                  },
+                  "description": "Everything else, in configured order."
+                }
+              }
+            },
+            "description": "The resources that answered."
+          },
+          "snapshotAgeMs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Age of the metadata snapshot the answer was built from, where one was\ninvolved. This is what makes \"as of 4 seconds ago\" honest.",
+            "minimum": 0
+          },
+          "total": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "How many resources matched before paging or truncation.\n\nPresent only where the endpoint pages. Filtering and sorting happen on\nthe server — a fleet with a five-thousand-topic cluster in it is real —\nso the browser needs to be told what it is looking at a window into.",
+            "minimum": 0
+          }
+        }
+      },
       "Envelope_GroupDetail": {
         "type": "object",
         "description": "What every data endpoint returns.",
@@ -2799,6 +2905,52 @@
             ],
             "description": "How many resources matched before paging or truncation.\n\nPresent only where the endpoint pages. Filtering and sorting happen on\nthe server — a fleet with a five-thousand-topic cluster in it is real —\nso the browser needs to be told what it is looking at a window into.",
             "minimum": 0
+          }
+        }
+      },
+      "EnvironmentSection": {
+        "type": "object",
+        "description": "One section of the fleet: an environment and everything in it.\n\nAssembled on the server rather than grouped in the browser, because the\norder is configuration — declared environments run in declared order, and\nnothing else can recover \"dev before staging before prod\" from three\nstrings.",
+        "required": [
+          "id",
+          "name",
+          "declared",
+          "clusters",
+          "resources"
+        ],
+        "properties": {
+          "clusters": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClusterCard"
+            },
+            "description": "The Kafka clusters, in the order the registry lists them."
+          },
+          "declared": {
+            "type": "boolean",
+            "description": "Whether the environment was declared, or discovered from a label."
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The declared description, where there is one."
+          },
+          "id": {
+            "type": "string",
+            "description": "The `env` label this section collects, empty for the clusters that\ncarry none."
+          },
+          "name": {
+            "type": "string",
+            "description": "The name to render."
+          },
+          "resources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResourceCard"
+            },
+            "description": "Everything else, in configured order."
           }
         }
       },
@@ -3963,6 +4115,54 @@
           "consumer"
         ]
       },
+      "ResourceCard": {
+        "type": "object",
+        "description": "One thing in an environment that is not a Kafka cluster.\n\n**There is no status field, and that is the design.** kaas-ui dials none of\nthese: it knows a schema registry is configured, not that it is up. A card\ncarrying `status: \"ready\"` because a URL was typed correctly would be the\none thing a fleet view must never do — see [`ClusterStatus`], whose\n`Connecting` exists so that unknown is not rendered as healthy. The UI says\n\"not probed\" because that is the whole truth kaas-ui has.\n\nPhase 6 connects to the schema registry, and *that* is when this type earns\na health field — one filled in from an attempt, on the one kind that makes\nattempts.",
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "labels"
+        ],
+        "properties": {
+          "endpoint": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where it is, when the configuration says."
+          },
+          "id": {
+            "type": "string",
+            "description": "The configured id."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ResourceKind",
+            "description": "What it is: the icon and the wording, nothing else."
+          },
+          "labels": {
+            "type": "object",
+            "description": "Labels, including the `env` its section is keyed by.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "name": {
+            "type": "string",
+            "description": "The name to render."
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "One line of context."
+          }
+        }
+      },
       "ResourceError": {
         "type": "object",
         "description": "One resource's failure, named.",
@@ -4016,6 +4216,17 @@
             ]
           }
         }
+      },
+      "ResourceKind": {
+        "type": "string",
+        "description": "What a non-cluster resource is.\n\nA closed set on purpose: each variant is an icon and a word in the UI, and\n`Other` is the honest home for anything this list has not learned yet\nrather than a reason to accept free text that renders as nothing.",
+        "enum": [
+          "schema_registry",
+          "mqtt_broker",
+          "kafka_connect",
+          "rest_proxy",
+          "other"
+        ]
       },
       "SeekMode": {
         "type": "string",

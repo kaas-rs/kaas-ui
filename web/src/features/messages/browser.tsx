@@ -25,6 +25,7 @@ import {
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { count } from "@/components/domain";
+import { displayTimeZone } from "@/lib/settings";
 import { cn } from "@/lib/utils";
 import { downloadBuffer } from "./download";
 import { MessageDetailPanel } from "./message-detail";
@@ -34,18 +35,6 @@ import { SEEK_MODES, type SeekMode } from "./seek-modes";
 import type { MessageSearch } from "./search";
 import { Toolbar } from "./toolbar";
 import { useMessageStream } from "./use-message-stream";
-
-/**
- * The zone times are shown in.
- *
- * One place, so the picker and the list agree. Today it is the browser's; when
- * the app header grows a zone selector this reads from it, and nothing else
- * changes because the picker already converts to an absolute instant before
- * the value leaves it.
- */
-function displayTimeZone(): string {
-  return Intl.DateTimeFormat().resolvedOptions().timeZone;
-}
 
 export interface MessageBrowserProps {
   clusterId: string;

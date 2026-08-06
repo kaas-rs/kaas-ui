@@ -28,7 +28,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { PageTitle } from "@/shell";
+import { PageTitle } from "@/components/page-title";
 
 /** The resources a row reports on, in the order the sidebar uses them. */
 const RESOURCES: { resource: Resource; label: string; what: string }[] = [
