@@ -21,6 +21,7 @@ sequenced entirely on its own merits.
 | 9 | upstream `kafka-protocol` contributions | Phase 5 | low, long lead |
 | 10 | `topic_offset_range` will not compile in an axum handler | Phase 2 | **worked around** |
 | 11 | streaming reads share a connection with everything else | Phase 3 | **high — a live view degrades the whole cluster's UI** |
+| 12 | `ScanProgress::fraction` ignores `spec.limit` | Phase 3 | **worked around** |
 
 ---
 
@@ -245,6 +246,57 @@ This also interacts with the UI's own ceilings: until it lands, "how many live
 views may be open at once" is a question about someone else's latency rather
 than about memory, which is not a trade-off the stream governor can reason
 about.
+
+---
+
+## 12. `ScanProgress::fraction` ignores the limit it was given
+
+**Found by running.** The one that shipped a wrong number to a user rather than
+a slow one.
+
+`fraction()` divides `offsets_consumed` by `offsets_total`, and `plan()` sets
+`offsets_total` from `end_offset = latest` — the whole retained span of every
+partition in the scan. `spec.limit` never enters the calculation, but it is
+what actually ends the scan. So every limited scan reports a fraction against
+a finish line it was never going to reach:
+
+```
+kaas-canary-v1 on the kaas cluster, ScanSpec::new(topic).limit(500)
+
+  offsets_total    = 9181       the whole topic
+  records emitted  = 500        where the scan actually stopped
+  fraction()       = 0.0545     and stays there, complete
+```
+
+Rendered as a progress bar this parks at 5%, and on a topic being produced to
+it *sinks* over time as the denominator grows — which is how it was noticed.
+
+The scan ends at whichever finish line arrives first, so the fraction should
+be the nearer of the two:
+
+```rust
+// on ScanProgress, which would need the limit to be carried onto it
+let by_span  = offsets_consumed / offsets_total;
+let by_limit = records_emitted / limit;
+Some(by_span.max(by_limit))
+```
+
+Both terms are needed. An unfiltered read reaches its limit long before the
+end of the topic; a `RecordFilter` that drops most of what it reads runs out of
+topic while its emitted count crawls. Taking the larger tracks whichever end
+the scan is heading for, and both reach `1.0` exactly when the scan stops.
+
+**kaas-ui computes this itself** in `routes/messages/stream.rs::fraction`,
+because it has both numbers at the call site and the bar was visibly wrong. It
+is written here because the wrongness is not kaas-ui's: any consumer that sets
+`ScanSpec::limit` and reads `fraction()` gets the same bad number, and the fix
+belongs where the limit and the span are both already known.
+
+Related, and much smaller: `progress_every` is hardcoded to `1_000` decoded
+records and is not reachable from `ScanSpec`. A window smaller than that emits
+no `Progress` event at all — only the `Done` one — so kaas-ui's default
+500-record window has a bar with exactly one frame. It reads in ~40 ms, so
+nothing is visibly wrong today, but the cadence should be the caller's to pick.
 
 ---
 

@@ -36,7 +36,7 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use futures::{Stream, StreamExt};
 use kaas_ui_core::ResourceError;
 use kaas_ui_core::dto::{Dropped, ResolvedSeek, StreamPhase, StreamProgress, StreamRow};
-use kafka_read::{ScanEvent, ScanProgress, ScanSpec};
+use kafka_read::{ScanEvent, ScanProgress};
 use serde::Serialize;
 
 use super::seek::{Plan, SeekMode, SeekQuery};
@@ -344,8 +344,13 @@ async fn pump(
 
         Plan::Forward { spec, floor } => {
             let topic = spec.topic.clone();
-            let reorder = reorder_window(&spec);
+            // Read off before the spec moves into the scan. The limit is half
+            // of what makes a fraction mean anything — see `fraction` — and the
+            // buffer ceiling is the numerator of the reorder window.
+            let limit = spec.limit;
+            let budget = spec.max_buffered_records;
             let floor = resume_floor(floor, resume.as_deref(), spec.partitions.as_deref());
+            let asked = spec.partitions.as_ref().map(Vec::len);
 
             let scan = match kafka_read::scan(&cluster, *spec).await {
                 Ok(scan) => scan,
@@ -356,8 +361,19 @@ async fn pump(
                 }
             };
 
+            // How wide the merge is, which is what the reorder window is spread
+            // over. `None` in the spec means "every partition", a count only the
+            // metadata has — and read *after* `scan`, whose planning refreshed
+            // it. The snapshot is cached, so this costs no round trip.
+            let width = asked.unwrap_or_else(|| {
+                cluster
+                    .snapshot()
+                    .topic(&topic)
+                    .map_or(0, |info| info.partitions.len())
+            });
+
             tx.push(Frame::Phase(StreamPhase::Streaming));
-            forward(scan, tx, floor, reorder).await;
+            forward(scan, tx, floor, budget, limit, width).await;
             tx.push(Frame::Phase(StreamPhase::Done));
         }
     }
@@ -368,12 +384,19 @@ async fn forward(
     scan: impl Stream<Item = Result<ScanEvent, kafka_conn::Error>> + Send,
     tx: &streaming::Sender<Frame>,
     floor: Option<i64>,
-    reorder: usize,
+    budget: usize,
+    limit: Option<usize>,
+    width: usize,
 ) {
     let mut scan = Box::pin(scan);
     let mut ticker = tokio::time::interval(FLUSH_INTERVAL);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut batch: Vec<StreamRow> = Vec::new();
+    // The widest the merge ever was. Seeded from the plan because
+    // `partitions_active` counts partitions *still being read* and is forced to
+    // zero on the last event — and on a window shorter than kaas-lib's progress
+    // interval that last event is the only one there is.
+    let mut widest = width;
 
     loop {
         tokio::select! {
@@ -404,11 +427,17 @@ async fn forward(
                 }
                 Some(Ok(ScanEvent::Progress(progress))) => {
                     flush(&mut batch, tx);
-                    tx.push(Frame::Progress(render_progress(&progress, reorder)));
+                    widest = widest.max(progress.partitions_active);
+                    tx.push(Frame::Progress(render_progress(
+                        &progress, budget, widest, limit,
+                    )));
                 }
                 Some(Ok(ScanEvent::Done(progress))) => {
                     flush(&mut batch, tx);
-                    tx.push(Frame::Progress(render_progress(&progress, reorder)));
+                    widest = widest.max(progress.partitions_active);
+                    tx.push(Frame::Progress(render_progress(
+                        &progress, budget, widest, limit,
+                    )));
                     return;
                 }
                 Some(Ok(ScanEvent::PartitionComplete { .. })) => {}
@@ -465,28 +494,75 @@ fn parse_event_id(id: &str) -> Option<(i32, i64)> {
 /// Roughly how far apart two partitions may be reordered.
 ///
 /// The merge emits the oldest record it can see, so what bounds the reorder is
-/// how much it can see at once: the buffer ceiling spread over the partitions
-/// reading from it. A caveat to render beside the list, not a promise.
-fn reorder_window(spec: &ScanSpec) -> usize {
-    let partitions = spec.partitions.as_ref().map_or(1, |list| list.len().max(1));
-    spec.max_buffered_records / partitions.max(1)
+/// how much it can see at once: the buffer ceiling (`budget`) spread over the
+/// partitions reading into it (`width`). A caveat to render beside the list,
+/// not a promise.
+///
+/// The divisor used to come from `ScanSpec::partitions`, which is `None` for
+/// "every partition" — so the common case divided by one and overstated the
+/// window by the partition count. It is now the merge's real width, taken from
+/// the plan.
+fn reorder_window(budget: usize, width: usize) -> usize {
+    if width <= 1 {
+        // Within a partition the order is exact, always. A caveat there would
+        // undersell a guarantee that holds.
+        return 0;
+    }
+    budget / width
 }
 
-fn render_progress(progress: &ScanProgress, reorder: usize) -> StreamProgress {
+/// How far a bounded scan has got, as the nearer of its two finish lines.
+///
+/// A limited scan ends at whichever arrives first: the window running out, or
+/// the limit being reached. [`ScanProgress::fraction`] only knows the first —
+/// it divides by the offset span the plan covers, which for `oldest` is the
+/// whole retained log. So a 500-record window of a 9,181-offset topic reported
+/// 5%, finished, and left the bar parked there; on a topic being produced to
+/// the number *sank* as the denominator grew.
+///
+/// Neither ratio is right alone. An unfiltered read reaches its limit long
+/// before it reaches the end of the topic, so the limit is the real finish
+/// line; a filter that drops most of what it reads runs out of window first
+/// and never approaches its limit at all. Taking the larger tracks whichever
+/// end the scan is actually heading for.
+///
+/// `None` stays `None`: no span means nothing to be a fraction of — an empty
+/// window, or a live tail that has no end — and a bar that cannot fill is
+/// worse than no bar.
+fn fraction(progress: &ScanProgress, limit: Option<usize>) -> Option<f64> {
+    let span = progress.fraction()?;
+    let Some(limit) = limit.filter(|limit| *limit > 0) else {
+        return Some(span);
+    };
+    // The same `u32` narrowing kaas-lib uses on the other ratio: `f64::from`
+    // is lossless where `as` would silently round on a large enough log.
+    let emitted = u32::try_from(progress.records_emitted).unwrap_or(u32::MAX);
+    let ceiling = u32::try_from(limit).unwrap_or(u32::MAX);
+    let by_limit = (f64::from(emitted) / f64::from(ceiling)).clamp(0.0, 1.0);
+    Some(span.max(by_limit))
+}
+
+fn render_progress(
+    progress: &ScanProgress,
+    budget: usize,
+    width: usize,
+    limit: Option<usize>,
+) -> StreamProgress {
+    let window = reorder_window(budget, width);
     StreamProgress {
-        fraction: progress.fraction(),
+        fraction: fraction(progress, limit),
         records_emitted: progress.records_emitted,
         records_scanned: progress.records_scanned,
         malformed_batches: progress.malformed_batches,
         partitions_active: progress.partitions_active,
-        ordering_degraded: progress.ordering_degraded,
-        reorder_window: if progress.partitions_active > 1 {
-            reorder
-        } else {
-            // One partition is exact log order. Reporting a window there would
-            // caveat a guarantee that actually holds.
-            0
-        },
+        // Reported together, because the notice reads the two as one sentence.
+        // kaas-lib raises `ordering_degraded` whenever the buffer hits its
+        // ceiling, which a single-partition scan can do just by being big — and
+        // within a partition the order is exact, so there is nothing to caveat.
+        // Left alone that rendered as "records may be up to 0 apart", which
+        // says a reorder happened and then says it was nothing.
+        ordering_degraded: progress.ordering_degraded && window > 0,
+        reorder_window: window,
     }
 }
 
@@ -556,14 +632,49 @@ mod tests {
 
     #[test]
     fn the_reorder_window_is_the_buffer_spread_over_the_partitions() {
-        let spec = ScanSpec::new("orders").partitions([0, 1, 2, 3]);
-        assert_eq!(reorder_window(&spec), spec.max_buffered_records / 4);
+        assert_eq!(reorder_window(10_000, 4), 2_500);
+        // The case the old spec-derived divisor got wrong: "every partition" is
+        // `None` in the spec, which divided by one and overstated the window by
+        // the partition count.
+        assert_eq!(reorder_window(10_000, 16), 625);
     }
 
     #[test]
     fn a_single_partition_stream_reports_no_reorder_window() {
         // Within a partition the order is exact, always. A caveat there would
         // undersell a guarantee that holds.
+        assert_eq!(reorder_window(10_000, 1), 0);
+        assert_eq!(reorder_window(10_000, 0), 0);
+    }
+
+    /// The frame that reached a user reading `kperf-bench`.
+    ///
+    /// kaas-lib raises `ordering_degraded` when the buffer hits its ceiling and
+    /// zeroes `partitions_active` on the last event. Reading the width from the
+    /// latter turned a 16-partition scan into "records may be up to 0 apart" —
+    /// a caveat that contradicts itself in its own sentence.
+    #[test]
+    fn a_finished_scan_keeps_the_width_it_was_merged_at() {
+        let done = ScanProgress {
+            records_emitted: 500,
+            records_scanned: 500,
+            malformed_batches: 0,
+            offsets_consumed: 500,
+            offsets_total: 9_181,
+            // Every partition has finished. Not "one partition".
+            partitions_active: 0,
+            ordering_degraded: true,
+        };
+        let rendered = render_progress(&done, 10_000, 16, Some(500));
+        assert_eq!(rendered.reorder_window, 625);
+        assert!(rendered.ordering_degraded);
+    }
+
+    #[test]
+    fn a_degraded_flag_without_a_window_is_not_reported_as_ordering_loss() {
+        // One partition can hit the buffer ceiling just by being big, which
+        // raises the flag upstream. There is no cross-partition reorder to
+        // warn about, so the two must not disagree on the wire.
         let progress = ScanProgress {
             records_emitted: 10,
             records_scanned: 10,
@@ -571,9 +682,11 @@ mod tests {
             offsets_consumed: 10,
             offsets_total: 100,
             partitions_active: 1,
-            ordering_degraded: false,
+            ordering_degraded: true,
         };
-        assert_eq!(render_progress(&progress, 512).reorder_window, 0);
+        let rendered = render_progress(&progress, 10_000, 1, None);
+        assert_eq!(rendered.reorder_window, 0);
+        assert!(!rendered.ordering_degraded);
     }
 
     #[test]
@@ -589,8 +702,84 @@ mod tests {
             partitions_active: 3,
             ordering_degraded: false,
         };
-        assert_eq!(render_progress(&progress, 128).fraction, None);
-        assert_eq!(render_progress(&progress, 128).reorder_window, 128);
+        // A live tail carries no limit either, so neither ratio exists.
+        assert_eq!(render_progress(&progress, 384, 3, None).fraction, None);
+        assert_eq!(render_progress(&progress, 384, 3, None).reorder_window, 128);
+    }
+
+    /// `oldest` on a topic much larger than the window.
+    ///
+    /// The regression this pair exists for: measured against the live `kaas`
+    /// cluster, `kaas-canary-v1` held 9,181 offsets and the default window is
+    /// 500, so the bar reported 5% and stopped there — and sank as the canary
+    /// produced more.
+    #[test]
+    fn a_limited_window_fills_as_it_approaches_its_limit() {
+        let at = |emitted: u64, consumed: i64| ScanProgress {
+            records_emitted: emitted,
+            records_scanned: emitted,
+            malformed_batches: 0,
+            offsets_consumed: consumed,
+            offsets_total: 9_181,
+            partitions_active: 1,
+            ordering_degraded: false,
+        };
+
+        assert_eq!(fraction(&at(0, 0), Some(500)), Some(0.0));
+        assert_eq!(fraction(&at(250, 250), Some(500)), Some(0.5));
+        // The one that was broken: the scan is over, so the bar is full.
+        assert_eq!(fraction(&at(500, 500), Some(500)), Some(1.0));
+    }
+
+    #[test]
+    fn a_filtered_window_fills_on_the_span_it_walks_instead() {
+        // A filter that drops almost everything runs out of topic long before
+        // it runs out of limit, so the limit ratio would crawl and stall. The
+        // span is the honest finish line here, and taking the larger picks it.
+        let progress = ScanProgress {
+            records_emitted: 12,
+            records_scanned: 9_181,
+            malformed_batches: 0,
+            offsets_consumed: 9_181,
+            offsets_total: 9_181,
+            partitions_active: 1,
+            ordering_degraded: false,
+        };
+        assert_eq!(fraction(&progress, Some(500)), Some(1.0));
+    }
+
+    #[test]
+    fn an_empty_window_reports_no_fraction_rather_than_a_bar_stuck_at_zero() {
+        // `offsets_total` of 0 is "nothing to read", not "no progress". Left to
+        // the limit ratio alone this would be 0/500 and render a bar that never
+        // moves, which reads as a hang on a topic that simply has no records.
+        let progress = ScanProgress {
+            records_emitted: 0,
+            records_scanned: 0,
+            malformed_batches: 0,
+            offsets_consumed: 0,
+            offsets_total: 0,
+            partitions_active: 1,
+            ordering_degraded: false,
+        };
+        assert_eq!(fraction(&progress, Some(500)), None);
+    }
+
+    #[test]
+    fn an_unlimited_forward_read_still_reports_its_span() {
+        let progress = ScanProgress {
+            records_emitted: 50,
+            records_scanned: 50,
+            malformed_batches: 0,
+            offsets_consumed: 50,
+            offsets_total: 200,
+            partitions_active: 1,
+            ordering_degraded: false,
+        };
+        assert_eq!(fraction(&progress, None), Some(0.25));
+        // A zero limit cannot be a denominator. `limit_for` rejects one, so
+        // this is the guard holding rather than a case anyone can reach.
+        assert_eq!(fraction(&progress, Some(0)), Some(0.25));
     }
 
     #[test]
