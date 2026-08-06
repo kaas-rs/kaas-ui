@@ -556,7 +556,7 @@ mod tests {
 
     #[test]
     fn the_reorder_window_is_the_buffer_spread_over_the_partitions() {
-        let spec = ScanSpec::new("orders").with_partitions([0, 1, 2, 3]);
+        let spec = ScanSpec::new("orders").partitions([0, 1, 2, 3]);
         assert_eq!(reorder_window(&spec), spec.max_buffered_records / 4);
     }
 

@@ -79,8 +79,9 @@ Three things were established before writing this plan, by running code rather
 than by reading docs, and they shape everything above:
 
 1. **kaas-lib is on crates.io** — 0.1.0 when this plan was written, 0.2.0 since
-   Phase 3 — and connects read-only to both target clusters from this
-   workspace. No local path dependency is required to start.
+   Phase 3, 0.4.0 since its builder convention settled — and connects read-only
+   to both target clusters from this workspace. No local path dependency is
+   required to start.
 2. **Development happens inside the Kubernetes cluster.** Both Kafka clusters
    are dialable by service DNS from here; Docker is *not* available. So the
    acceptance commands run against real brokers, not containers — see

@@ -109,7 +109,7 @@ pub async fn tail(
         if partitions.is_empty() {
             return Err(ApiError::bad_request("?partitions= was empty"));
         }
-        spec = spec.with_partitions(partitions);
+        spec = spec.partitions(partitions);
     }
 
     let tails = crate::call("tail", kafka_read::tail(admin.cluster(), &spec)).await?;
@@ -391,9 +391,9 @@ pub async fn one(
     }
 
     let spec = ScanSpec::new(topic.clone())
-        .with_partitions([partition])
+        .partitions([partition])
         .from(StartPosition::Offset(offset))
-        .with_limit(1);
+        .limit(1);
     let scan = crate::call("scan", kafka_read::scan(admin.cluster(), spec)).await?;
     let mut stream = Box::pin(scan);
 

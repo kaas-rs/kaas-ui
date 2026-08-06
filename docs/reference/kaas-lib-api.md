@@ -165,10 +165,10 @@ too old to report a type — so it takes the classic path.
 ## The read path
 
 ```rust
-let spec = TailSpec::new("orders", 500).with_partitions([0, 1]).with_filter(f);
+let spec = TailSpec::new("orders", 500).partitions([0, 1]).filter(f);
 let tails: Vec<PartitionTail> = kafka_read::tail(cluster, &spec).await?;
 
-let spec = ScanSpec::new("orders").from(StartPosition::Earliest).with_limit(10_000);
+let spec = ScanSpec::new("orders").from(StartPosition::Earliest).limit(10_000);
 let mut stream = Box::pin(kafka_read::scan(cluster, spec).await?);
 ```
 

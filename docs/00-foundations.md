@@ -21,19 +21,27 @@ Edition 2024, matching kaas-lib.
 ## How kaas-lib is consumed
 
 **Depend on crates.io.** `kafka-admin`, `kafka-read`, `kafka-meta` and
-`kafka-conn` are published at `0.2.0` and verified to work against both target
+`kafka-conn` are published at `0.4.0` and verified to work against both target
 clusters from this workspace. A path dependency on a sibling checkout would make
 the repository unbuildable for anyone who does not have one.
 
 ```toml
 [workspace.dependencies]
-kafka-admin = "0.2"
-kafka-read  = "0.2"
-kafka-meta  = "0.2"
-kafka-conn  = "0.2"
+kafka-admin = "0.4"
+kafka-read  = "0.4"
+kafka-meta  = "0.4"
+kafka-conn  = "0.4"
 ```
 
 The four release in lockstep and must be pulled at the same version.
+
+0.4.0 rather than 0.2.x because kaas-lib settled its builder convention: every
+consuming builder is `#[must_use]`, and `ScanSpec`/`TailSpec` — which mixed
+prefixed and bare setters within one type — dropped their `with_` prefixes to
+`partitions`, `limit`, `filter` and `visibility`. Nothing kaas-ui asked for; the
+bump is a rename at eleven call sites in the message routes. The `must_use` half
+is the one that matters, because `ConnectionConfig::read_only` used to compile
+clean when its return value was dropped and hand back a *writable* connection.
 
 0.2.0 rather than 0.1.x because Phase 3 needed three things from the library
 and two of them add public fields to structs that are not `#[non_exhaustive]`

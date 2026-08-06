@@ -21,10 +21,10 @@ rust-version = "1.97"
 # `cargo xtask link` writes a fenced [patch.crates-io] block for local
 # iteration against ../kaas-lib; `cargo xtask ci` fails if that fence was
 # committed.
-kafka-admin = "0.2"
-kafka-conn  = "0.2"
-kafka-meta  = "0.2"
-kafka-read  = "0.2"
+kafka-admin = "0.4"
+kafka-conn  = "0.4"
+kafka-meta  = "0.4"
+kafka-read  = "0.4"
 
 # HTTP
 axum       = { version = "0.8", features = ["macros", "http2"] }

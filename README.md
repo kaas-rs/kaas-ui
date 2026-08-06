@@ -127,7 +127,7 @@ Not built yet: OIDC/Dex and roles, schema registry, the read-only admin views
 (ACLs, quotas, SCRAM, reassignments, transactions) and the cross-cluster views.
 See [`docs/README.md`](docs/README.md) for what each phase covers.
 
-The message viewer runs on **kaas-lib 0.2.0**. Three things it needed went in
+The message viewer runs on **kaas-lib 0.4.0**. Three things it needed went in
 there rather than here, because version and implementation knowledge belongs in
 the library: the anchored backward walk, `ScanSpec::following`, and a fix for
 `scan` emitting records before its start offset. See
