@@ -34,13 +34,13 @@ case on `kaas`.
 
 ## Codecs
 
-| format | crate | notes |
-|---|---|---|
-| raw / hex / string / JSON | — | Phase 3, no dependencies |
-| Avro | `apache-avro` 0.21 + `schema_registry_converter` 4.10 | Confluent wire format: magic byte, 4-byte schema id, payload |
-| Protobuf | `prost-reflect` 0.16 | dynamic decode from a `FileDescriptorSet`, no codegen |
-| JSON Schema | `jsonschema` 0.49 | display-time validation, not decoding |
-| `__consumer_offsets` | hand-rolled | **display only** — group views still go through `OffsetFetch` |
+| format                    | crate                                                 | notes                                                         |
+|---------------------------|-------------------------------------------------------|---------------------------------------------------------------|
+| raw / hex / string / JSON | —                                                     | Phase 3, no dependencies                                      |
+| Avro                      | `apache-avro` 0.21 + `schema_registry_converter` 4.10 | Confluent wire format: magic byte, 4-byte schema id, payload  |
+| Protobuf                  | `prost-reflect` 0.16                                  | dynamic decode from a `FileDescriptorSet`, no codegen         |
+| JSON Schema               | `jsonschema` 0.49                                     | display-time validation, not decoding                         |
+| `__consumer_offsets`      | hand-rolled                                           | **display only** — group views still go through `OffsetFetch` |
 
 Sniff the Confluent magic byte first, fall back to per-topic config, then raw.
 **Always show what was chosen and let the user override it.** Auto-detection
