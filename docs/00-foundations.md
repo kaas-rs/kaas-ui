@@ -134,8 +134,9 @@ frontend gained `@tanstack/react-virtual`, `zod`, `react-day-picker`,
 
 Later phases add:
 `openidconnect` 4.0, `tower-sessions` 0.15, `sqlx` 0.9 (Phase 4),
-`apache-avro` 0.21, `prost-reflect` 0.16, `schema_registry_converter` 4.10,
-`jsonschema` 0.49 (Phase 6), `rquickjs` 0.12 (Phase 6, JS predicates),
+`schema_registry_converter` 4.10 — the serde library for all three registry
+formats, bringing the per-format crates with it — and `jsonschema` 0.49 for
+display-time conformance (Phase 6), `rquickjs` 0.12 (Phase 6, JS predicates),
 `notify` 8.2 (config reload; 9.0 is still a release candidate).
 
 ### Frontend
