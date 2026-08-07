@@ -337,6 +337,33 @@ flow and the grant boundary are proven as of today and unguarded from
 tomorrow. `cargo xtask login` says so rather than failing obscurely, which is
 the only reason leaving it in place is honest.
 
+**kaas-ui draws the connector chooser, not Dex** — added 2026-08-07, after the
+second connector made the omission visible. Dex with more than one connector
+serves an interstitial page listing them, and it is the one screen of a login a
+deployment cannot style. `auth.connectors` is a list of `{id, name}`; the
+sign-in screen and the user menu draw a button each, and
+`/auth/login?connector=<id>` forwards it as Dex's `connector_id`, which is read
+off the authorization request and turned into a redirect straight to that
+connector.
+
+Measured against the deployed Dex v2.45.1 rather than reasoned about: with
+`connector_id=microsoft` the authorization endpoint answers `302` to
+`/dex/auth/microsoft`, PKCE, `state` and `nonce` intact; with an id it does not
+know, `400`. The full chain through kaas-ui was walked the same way.
+
+Two things this costs, both deliberate. The ids now live in two config files
+that have to agree, and nothing checks that at startup — reading Dex's
+configuration would put a second service on the boot path for a cosmetic
+feature, so an unknown id is instead a `400` from *us*, with the id in the
+message, before anything is sent to the provider. And an empty `connectors:`
+had to keep meaning "one unnamed button, let the provider ask" rather than "no
+way to sign in", because that is what every deployment predating this has.
+
+The rule it does *not* break is `kaas-ui-auth` being provider-blind: a
+`Connector` is a label and an opaque string, and no code in the workspace
+branches on which one it is. Adding a third is still a config change rather
+than a release.
+
 **The harness passed twice while proving nothing**, which is the most useful
 thing this phase produced. kaas-ui's cookies are `Secure` — correct, the
 browser is on https — so a loopback acceptance run's RFC-6265 cookie jar drops
