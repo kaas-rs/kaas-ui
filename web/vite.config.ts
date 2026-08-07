@@ -1,7 +1,7 @@
-import { fileURLToPath, URL } from "node:url";
-import { defineConfig } from "vite";
-import react from "@vitejs/plugin-react";
-import tailwindcss from "@tailwindcss/vite";
+import { fileURLToPath, URL } from "node:url"
+import { defineConfig } from "vite"
+import react from "@vitejs/plugin-react"
+import tailwindcss from "@tailwindcss/vite"
 
 // The dev server proxies the API to a locally running `kaas-ui` so the
 // frontend can be developed without rebuilding the Rust binary on every
@@ -33,4 +33,4 @@ export default defineConfig({
     assetsDir: "assets",
     sourcemap: false,
   },
-});
+})

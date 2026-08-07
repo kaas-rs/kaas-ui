@@ -11,15 +11,18 @@
       // stored or inferred, so the CSS has exactly one thing to look at — and
       // the `.dark` class alongside it, because that is what a copied-in
       // shadcn component expects.
-      (function () {
-        var stored = localStorage.getItem("kaas-ui-theme");
+      ;(function () {
+        var stored = localStorage.getItem("kaas-ui-theme")
         var dark =
           stored === "dark" ||
           (stored !== "light" &&
-            window.matchMedia("(prefers-color-scheme: dark)").matches);
-        document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
-        document.documentElement.classList.toggle("dark", dark);
-      })();
+            window.matchMedia("(prefers-color-scheme: dark)").matches)
+        document.documentElement.setAttribute(
+          "data-theme",
+          dark ? "dark" : "light"
+        )
+        document.documentElement.classList.toggle("dark", dark)
+      })()
     </script>
   </head>
   <body>

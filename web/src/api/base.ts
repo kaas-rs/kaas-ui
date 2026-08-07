@@ -24,21 +24,21 @@
 function detect(): string {
   // The element the server injected. Absolute, so it survives a deep link:
   // resolving it against the origin gives the prefix whatever page we are on.
-  const injected = document.querySelector("base")?.getAttribute("href");
+  const injected = document.querySelector("base")?.getAttribute("href")
   if (injected) {
     try {
-      return new URL(injected, window.location.origin).pathname;
+      return new URL(injected, window.location.origin).pathname
     } catch {
       // A malformed href is not worth breaking the application over; fall
       // through to the build-time value, which is `/` in every normal build.
     }
   }
   // No server in front: `npm run dev`, where Vite's own `base` is the answer.
-  return import.meta.env.BASE_URL;
+  return import.meta.env.BASE_URL
 }
 
 /** The prefix, without its trailing slash. `""` when hosted at the root. */
-export const BASE_PATH = detect().replace(/\/+$/, "");
+export const BASE_PATH = detect().replace(/\/+$/, "")
 
 /**
  * Put an absolute application path under the prefix.
@@ -47,5 +47,5 @@ export const BASE_PATH = detect().replace(/\/+$/, "");
  * which is why adding it to an existing call site is safe.
  */
 export function withBase(path: string): string {
-  return `${BASE_PATH}${path}`;
+  return `${BASE_PATH}${path}`
 }

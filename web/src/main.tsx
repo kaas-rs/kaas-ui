@@ -1,6 +1,6 @@
-import { StrictMode } from "react";
-import { createRoot } from "react-dom/client";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { StrictMode } from "react"
+import { createRoot } from "react-dom/client"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import {
   Link,
   Outlet,
@@ -10,30 +10,37 @@ import {
   createRouter,
   redirect,
   useParams,
-} from "@tanstack/react-router";
+} from "@tanstack/react-router"
 
-import "./styles.css";
-import { AppLayout } from "@/layout";
-import { PageTitle } from "@/components/page-title";
-import { Empty } from "@/components/domain";
-import { BASE_PATH } from "@/api/base";
-import { TooltipProvider } from "@/components/ui/tooltip";
-import { installTheme } from "@/lib/settings";
-import { Fleet } from "@/pages/fleet";
-import { Account } from "@/pages/account";
-import { Settings } from "@/pages/settings";
-import { CapabilitiesPage, ClusterConfigs, ClusterOverview } from "@/pages/cluster";
-import { TopicDetail, Topics } from "@/pages/topics";
-import { GroupDetail, Groups } from "@/pages/groups";
-import { messageSearchSchema, topicSearchSchema } from "@/features/messages/search";
+import "./styles.css"
+import { AppLayout } from "@/layout"
+import { PageTitle } from "@/components/page-title"
+import { Empty } from "@/components/domain"
+import { BASE_PATH } from "@/api/base"
+import { TooltipProvider } from "@/components/ui/tooltip"
+import { installTheme } from "@/lib/settings"
+import { Fleet } from "@/pages/fleet"
+import { Account } from "@/pages/account"
+import { Settings } from "@/pages/settings"
+import {
+  CapabilitiesPage,
+  ClusterConfigs,
+  ClusterOverview,
+} from "@/pages/cluster"
+import { TopicDetail, Topics } from "@/pages/topics"
+import { GroupDetail, Groups } from "@/pages/groups"
+import {
+  messageSearchSchema,
+  topicSearchSchema,
+} from "@/features/messages/search"
 
-const rootRoute = createRootRoute({ component: AppLayout });
+const rootRoute = createRootRoute({ component: AppLayout })
 
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
   component: Fleet,
-});
+})
 
 /** Who this session is, and what it reaches. Not under a cluster: the answer
     spans all of them. */
@@ -41,7 +48,7 @@ const accountRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/account",
   component: Account,
-});
+})
 
 /** What this browser does with kaas-ui, as opposed to what this session is.
     Not under a cluster either: none of it is a property of one. */
@@ -49,32 +56,32 @@ const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/settings",
   component: Settings,
-});
+})
 
 /** Everything under a cluster. Navigation lives in the sidebar, not in tabs. */
 const clusterRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/clusters/$clusterId",
   component: Outlet,
-});
+})
 
 const overviewRoute = createRoute({
   getParentRoute: () => clusterRoute,
   path: "/",
   component: function Overview() {
-    const { clusterId } = useParams({ from: "/clusters/$clusterId" });
-    return <ClusterOverview clusterId={clusterId} />;
+    const { clusterId } = useParams({ from: "/clusters/$clusterId" })
+    return <ClusterOverview clusterId={clusterId} />
   },
-});
+})
 
 const topicsRoute = createRoute({
   getParentRoute: () => clusterRoute,
   path: "topics",
   component: function TopicsPage() {
-    const { clusterId } = useParams({ from: "/clusters/$clusterId" });
-    return <Topics clusterId={clusterId} />;
+    const { clusterId } = useParams({ from: "/clusters/$clusterId" })
+    return <Topics clusterId={clusterId} />
   },
-});
+})
 
 /**
  * The topic, and the message browser in a tab on it.
@@ -91,10 +98,10 @@ const topicRoute = createRoute({
   component: function TopicPage() {
     const { clusterId, topic } = useParams({
       from: "/clusters/$clusterId/topics/$topic",
-    });
-    return <TopicDetail clusterId={clusterId} topic={topic} />;
+    })
+    return <TopicDetail clusterId={clusterId} topic={topic} />
   },
-});
+})
 
 /**
  * Where the message browser used to live.
@@ -113,18 +120,18 @@ const messagesRoute = createRoute({
       params,
       search: { ...search, tab: "messages" as const },
       replace: true,
-    });
+    })
   },
-});
+})
 
 const groupsRoute = createRoute({
   getParentRoute: () => clusterRoute,
   path: "groups",
   component: function GroupsPage() {
-    const { clusterId } = useParams({ from: "/clusters/$clusterId" });
-    return <Groups clusterId={clusterId} />;
+    const { clusterId } = useParams({ from: "/clusters/$clusterId" })
+    return <Groups clusterId={clusterId} />
   },
-});
+})
 
 const groupRoute = createRoute({
   getParentRoute: () => clusterRoute,
@@ -132,28 +139,28 @@ const groupRoute = createRoute({
   component: function GroupPage() {
     const { clusterId, groupId } = useParams({
       from: "/clusters/$clusterId/groups/$groupId",
-    });
-    return <GroupDetail clusterId={clusterId} groupId={groupId} />;
+    })
+    return <GroupDetail clusterId={clusterId} groupId={groupId} />
   },
-});
+})
 
 const configsRoute = createRoute({
   getParentRoute: () => clusterRoute,
   path: "configs",
   component: function ConfigsPage() {
-    const { clusterId } = useParams({ from: "/clusters/$clusterId" });
-    return <ClusterConfigs clusterId={clusterId} />;
+    const { clusterId } = useParams({ from: "/clusters/$clusterId" })
+    return <ClusterConfigs clusterId={clusterId} />
   },
-});
+})
 
 const capabilitiesRoute = createRoute({
   getParentRoute: () => clusterRoute,
   path: "capabilities",
   component: function CapabilitiesRoute() {
-    const { clusterId } = useParams({ from: "/clusters/$clusterId" });
-    return <CapabilitiesPage clusterId={clusterId} />;
+    const { clusterId } = useParams({ from: "/clusters/$clusterId" })
+    return <CapabilitiesPage clusterId={clusterId} />
   },
-});
+})
 
 const routeTree = rootRoute.addChildren([
   indexRoute,
@@ -169,7 +176,7 @@ const routeTree = rootRoute.addChildren([
     configsRoute,
     capabilitiesRoute,
   ]),
-]);
+])
 
 /**
  * What an unknown path renders.
@@ -193,7 +200,7 @@ function NotFound() {
         </Link>
       </Empty>
     </div>
-  );
+  )
 }
 
 const router = createRouter({
@@ -205,11 +212,11 @@ const router = createRouter({
   // and lands on the domain root — which looks like the app working until you
   // click something, and is the confusing half of a base-path problem.
   basepath: BASE_PATH || "/",
-});
+})
 
 declare module "@tanstack/react-router" {
   interface Register {
-    router: typeof router;
+    router: typeof router
   }
 }
 
@@ -222,15 +229,15 @@ const queryClient = new QueryClient({
       refetchOnWindowFocus: false,
     },
   },
-});
+})
 
 // Keep the document's theme in step with the stored choice, from here on. The
 // inline script in `index.html` already resolved it before first paint; this
 // picks the same key up and keeps following the OS — outside React, because a
 // listener that lives in a component stops at the first navigation away from it.
-installTheme();
+installTheme()
 
-const container = document.getElementById("root");
+const container = document.getElementById("root")
 if (container) {
   createRoot(container).render(
     <StrictMode>
@@ -239,6 +246,6 @@ if (container) {
           <RouterProvider router={router} />
         </TooltipProvider>
       </QueryClientProvider>
-    </StrictMode>,
-  );
+    </StrictMode>
+  )
 }

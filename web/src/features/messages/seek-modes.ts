@@ -17,23 +17,27 @@ export type SeekMode =
   | "fromOffset"
   | "toOffset"
   | "sinceTime"
-  | "toTime";
+  | "toTime"
 
-export type SeekGroup = "Streaming" | "Snapshot" | "Seek";
+export type SeekGroup = "Streaming" | "Snapshot" | "Seek"
 
 export interface SeekModeConfig {
-  label: string;
-  group: SeekGroup;
+  label: string
+  group: SeekGroup
   /** Whether the stream stays open. Only `live` does. */
-  live: boolean;
+  live: boolean
   /** Which end new rows arrive at. `desc` is newest-first. */
-  sort: "asc" | "desc";
+  sort: "asc" | "desc"
   /** The extra control the toolbar shows beside the selector. */
-  input: "none" | "offset" | "datetime";
-  hint: string;
+  input: "none" | "offset" | "datetime"
+  hint: string
 }
 
-export const SEEK_GROUPS: readonly SeekGroup[] = ["Streaming", "Snapshot", "Seek"];
+export const SEEK_GROUPS: readonly SeekGroup[] = [
+  "Streaming",
+  "Snapshot",
+  "Seek",
+]
 
 export const SEEK_MODES: Record<SeekMode, SeekModeConfig> = {
   live: {
@@ -92,9 +96,9 @@ export const SEEK_MODES: Record<SeekMode, SeekModeConfig> = {
     input: "datetime",
     hint: "Reads backward from this moment, which is included",
   },
-};
+}
 
-export const SEEK_MODE_NAMES = Object.keys(SEEK_MODES) as SeekMode[];
+export const SEEK_MODE_NAMES = Object.keys(SEEK_MODES) as SeekMode[]
 
 /**
  * What a URL that does not name a mode gets.
@@ -113,7 +117,7 @@ export const SEEK_MODE_NAMES = Object.keys(SEEK_MODES) as SeekMode[];
  * Mirrored by `Plan::build` in `routes/messages/seek.rs`, which answers the
  * same question for a caller that is not this app.
  */
-export const DEFAULT_SEEK_MODE: SeekMode = "newest";
+export const DEFAULT_SEEK_MODE: SeekMode = "newest"
 
 /**
  * Whether arriving rows go on the top of the list rather than the bottom.
@@ -124,18 +128,18 @@ export const DEFAULT_SEEK_MODE: SeekMode = "newest";
  * prepending correction visibly drags the list under the reader's cursor.
  */
 export function insertsAtTop(mode: SeekMode): boolean {
-  const config = SEEK_MODES[mode];
-  return config.sort === "desc" && config.live;
+  const config = SEEK_MODES[mode]
+  return config.sort === "desc" && config.live
 }
 
 /** Whether this mode needs a companion parameter to be a valid query. */
 export function needs(mode: SeekMode): "offset" | "timestamp" | null {
   switch (SEEK_MODES[mode].input) {
     case "offset":
-      return "offset";
+      return "offset"
     case "datetime":
-      return "timestamp";
+      return "timestamp"
     default:
-      return null;
+      return null
   }
 }

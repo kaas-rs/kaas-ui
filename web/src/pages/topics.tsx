@@ -1,11 +1,11 @@
-import { Link, useNavigate, useSearch } from "@tanstack/react-router";
-import { useCallback, useState } from "react";
-import { ArrowLeft } from "lucide-react";
+import { Link, useNavigate, useSearch } from "@tanstack/react-router"
+import { useCallback, useState } from "react"
+import { ArrowLeft } from "lucide-react"
 
-import { useClusters, useTopic, useTopicConfigs, useTopics } from "@/api/client";
-import type { Partition } from "@/api/types";
-import { MessageBrowser } from "@/features/messages/browser";
-import type { TopicSearch, TopicTab } from "@/features/messages/search";
+import { useClusters, useTopic, useTopicConfigs, useTopics } from "@/api/client"
+import type { Partition } from "@/api/types"
+import { MessageBrowser } from "@/features/messages/browser"
+import type { TopicSearch, TopicTab } from "@/features/messages/search"
 import {
   Empty,
   ErrorChips,
@@ -16,14 +16,18 @@ import {
   Spinner,
   bytes,
   count,
-} from "@/components/domain";
-import type { ReactNode } from "react";
-import { cn } from "@/lib/utils";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+} from "@/components/domain"
+import type { ReactNode } from "react"
+import { cn } from "@/lib/utils"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
+import { Button } from "@/components/ui/button"
+import { Card } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import {
   Table,
   TableBody,
@@ -31,20 +35,20 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from "@/components/ui/table";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { PageTitle } from "@/components/page-title";
-import { ConfigTable } from "./cluster";
+} from "@/components/ui/table"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { PageTitle } from "@/components/page-title"
+import { ConfigTable } from "./cluster"
 
-const PAGE = 50;
+const PAGE = 50
 
 export function Topics({ clusterId }: { clusterId: string }) {
-  const [search, setSearch] = useState("");
-  const [internal, setInternal] = useState(false);
-  const [sizes, setSizes] = useState(false);
-  const [sort, setSort] = useState("name");
-  const [order, setOrder] = useState<"asc" | "desc">("asc");
-  const [offset, setOffset] = useState(0);
+  const [search, setSearch] = useState("")
+  const [internal, setInternal] = useState(false)
+  const [sizes, setSizes] = useState(false)
+  const [sort, setSort] = useState("name")
+  const [order, setOrder] = useState<"asc" | "desc">("asc")
+  const [offset, setOffset] = useState(0)
 
   const topics = useTopics(clusterId, {
     search,
@@ -54,30 +58,34 @@ export function Topics({ clusterId }: { clusterId: string }) {
     order,
     limit: PAGE,
     offset,
-  });
+  })
 
-  const total = topics.data?.total ?? 0;
-  const items = topics.data?.items ?? [];
-  const showIds = items.some((topic) => topic.topicId !== null);
+  const total = topics.data?.total ?? 0
+  const items = topics.data?.items ?? []
+  const showIds = items.some((topic) => topic.topicId !== null)
 
   const sortBy = (column: string) => {
     if (sort === column) {
-      setOrder(order === "asc" ? "desc" : "asc");
+      setOrder(order === "asc" ? "desc" : "asc")
     } else {
-      setSort(column);
-      setOrder("asc");
+      setSort(column)
+      setOrder("asc")
     }
-    setOffset(0);
-  };
+    setOffset(0)
+  }
 
   const heading = (label: string, column: string, right?: boolean) => (
     <TableHead className={right ? "text-right" : undefined}>
-      <button type="button" onClick={() => sortBy(column)} className="hover:underline">
+      <button
+        type="button"
+        onClick={() => sortBy(column)}
+        className="hover:underline"
+      >
         {label}
         {sort === column ? (order === "asc" ? " ↑" : " ↓") : ""}
       </button>
     </TableHead>
-  );
+  )
 
   return (
     <>
@@ -91,8 +99,8 @@ export function Topics({ clusterId }: { clusterId: string }) {
         <Input
           value={search}
           onChange={(event) => {
-            setSearch(event.target.value);
-            setOffset(0);
+            setSearch(event.target.value)
+            setOffset(0)
           }}
           placeholder="filter by name"
           className="h-8 max-w-xs"
@@ -102,8 +110,8 @@ export function Topics({ clusterId }: { clusterId: string }) {
             type="checkbox"
             checked={internal}
             onChange={(event) => {
-              setInternal(event.target.checked);
-              setOffset(0);
+              setInternal(event.target.checked)
+              setOffset(0)
             }}
           />
           internal topics
@@ -158,7 +166,9 @@ export function Topics({ clusterId }: { clusterId: string }) {
                         {topic.name}
                       </Link>
                       {topic.internal ? (
-                        <span className="ml-2 text-[11px] text-ink-faint">internal</span>
+                        <span className="ml-2 text-[11px] text-ink-faint">
+                          internal
+                        </span>
                       ) : null}
                     </TableCell>
                     {showIds ? (
@@ -227,27 +237,30 @@ export function Topics({ clusterId }: { clusterId: string }) {
         </>
       )}
     </>
-  );
+  )
 }
 
 export function TopicDetail({
   clusterId,
   topic,
 }: {
-  clusterId: string;
-  topic: string;
+  clusterId: string
+  topic: string
 }) {
-  const detail = useTopic(clusterId, topic);
-  const search = useSearch({ from: "/clusters/$clusterId/topics/$topic" });
+  const detail = useTopic(clusterId, topic)
+  const search = useSearch({ from: "/clusters/$clusterId/topics/$topic" })
   // What this caller may do here, from the cluster's own card. A messages tab
   // that 403s on click is worse than no messages tab — the same reasoning the
   // sidebar applies to a capability the *broker* does not have. Until the
   // answer arrives, show it: a tab that appears under the cursor is worse than
   // one that errors once, and an open deployment always grants both.
-  const clusters = useClusters();
-  const grants = clusters.data?.items.find((card) => card.id === clusterId)?.grants;
-  const mayReadMessages = grants === undefined || !!grants.topic?.includes("messages_read");
-  const navigate = useNavigate();
+  const clusters = useClusters()
+  const grants = clusters.data?.items.find(
+    (card) => card.id === clusterId
+  )?.grants
+  const mayReadMessages =
+    grants === undefined || !!grants.topic?.includes("messages_read")
+  const navigate = useNavigate()
 
   /**
    * Every write to this page's URL, including the message browser's.
@@ -264,15 +277,15 @@ export function TopicDetail({
         params: { clusterId, topic },
         search: (previous) => ({ ...previous, ...next }),
         replace,
-      });
+      })
     },
-    [navigate, clusterId, topic],
-  );
+    [navigate, clusterId, topic]
+  )
 
-  if (detail.isLoading) return <Spinner label={`describing ${topic}`} />;
+  if (detail.isLoading) return <Spinner label={`describing ${topic}`} />
 
-  const info = detail.data?.items[0];
-  const errors = detail.data?.errors ?? [];
+  const info = detail.data?.items[0]
+  const errors = detail.data?.errors ?? []
 
   if (!info) {
     return (
@@ -283,7 +296,7 @@ export function TopicDetail({
           {errors[0]?.message ?? "the cluster did not describe this topic"}
         </Card>
       </>
-    );
+    )
   }
 
   return (
@@ -293,7 +306,9 @@ export function TopicDetail({
         subtitle={
           <span className="flex flex-wrap items-center gap-3">
             <span>{info.partitions.length} partitions</span>
-            {info.internal ? <span className="text-warn-ink">internal</span> : null}
+            {info.internal ? (
+              <span className="text-warn-ink">internal</span>
+            ) : null}
             {info.topicId ? <Mono>{info.topicId}</Mono> : null}
           </span>
         }
@@ -347,7 +362,7 @@ export function TopicDetail({
         </TabsContent>
       </Tabs>
     </>
-  );
+  )
 }
 
 /**
@@ -364,10 +379,10 @@ function Head({
   right,
   className,
 }: {
-  label: ReactNode;
-  hint: string;
-  right?: boolean;
-  className?: string;
+  label: ReactNode
+  hint: string
+  right?: boolean
+  className?: string
 }) {
   return (
     <TableHead className={cn(right && "text-right", className)}>
@@ -380,7 +395,7 @@ function Head({
         <TooltipContent>{hint}</TooltipContent>
       </Tooltip>
     </TableHead>
-  );
+  )
 }
 
 /**
@@ -401,8 +416,8 @@ function Partitions({
   partitions,
   brokerIds,
 }: {
-  partitions: Partition[];
-  brokerIds: number[];
+  partitions: Partition[]
+  brokerIds: number[]
 }) {
   return (
     <div className="space-y-3">
@@ -421,7 +436,7 @@ function Partitions({
                   className={cn(
                     "px-1 text-center font-mono font-normal",
                     index === 0 && "border-line border-l",
-                    index === brokerIds.length - 1 && "border-line border-r",
+                    index === brokerIds.length - 1 && "border-line border-r"
                   )}
                 />
               ))}
@@ -430,8 +445,16 @@ function Partitions({
                 hint="leader epoch — it bumps on every leadership change"
                 right
               />
-              <Head label="earliest" hint="the oldest offset still retained" right />
-              <Head label="latest" hint="the offset the next record will get" right />
+              <Head
+                label="earliest"
+                hint="the oldest offset still retained"
+                right
+              />
+              <Head
+                label="latest"
+                hint="the offset the next record will get"
+                right
+              />
               <Head
                 label="records"
                 hint="latest − earliest: what is retained, not what was ever written"
@@ -442,9 +465,10 @@ function Partitions({
           <TableBody>
             {partitions.map((partition) => {
               const records =
-                partition.earliestOffset !== null && partition.latestOffset !== null
+                partition.earliestOffset !== null &&
+                partition.latestOffset !== null
                   ? partition.latestOffset - partition.earliestOffset
-                  : null;
+                  : null
               return (
                 <TableRow key={partition.partition}>
                   <TableCell className="text-right font-mono whitespace-nowrap">
@@ -461,15 +485,16 @@ function Partitions({
                   {brokerIds.map((broker, index) => {
                     const { label, style, title, preferred } = placementCell(
                       partition,
-                      broker,
-                    );
+                      broker
+                    )
                     return (
                       <TableCell
                         key={broker}
                         className={cn(
                           "px-1 py-0.5",
                           index === 0 && "border-line border-l",
-                          index === brokerIds.length - 1 && "border-line border-r",
+                          index === brokerIds.length - 1 &&
+                            "border-line border-r"
                         )}
                       >
                         <div
@@ -477,13 +502,14 @@ function Partitions({
                           style={style}
                           className={cn(
                             "mx-auto grid h-5 w-6 place-items-center rounded-[2px] font-mono text-[12px]",
-                            preferred && "outline-ink-muted outline-2 -outline-offset-1",
+                            preferred &&
+                              "outline-ink-muted outline-2 -outline-offset-1"
                           )}
                         >
                           {label}
                         </div>
                       </TableCell>
-                    );
+                    )
                   })}
                   <TableCell className="text-ink-faint text-right font-mono">
                     {partition.leaderEpoch}
@@ -494,25 +520,34 @@ function Partitions({
                   <TableCell className="text-right font-mono">
                     {count(partition.latestOffset)}
                   </TableCell>
-                  <TableCell className="text-right font-mono">{count(records)}</TableCell>
+                  <TableCell className="text-right font-mono">
+                    {count(records)}
+                  </TableCell>
                 </TableRow>
-              );
+              )
             })}
           </TableBody>
         </Table>
       </div>
       {brokerIds.length > 0 ? <PlacementLegend /> : null}
     </div>
-  );
+  )
 }
 
+function TopicConfigs({
+  clusterId,
+  topic,
+}: {
+  clusterId: string
+  topic: string
+}) {
+  const configs = useTopicConfigs(clusterId, topic)
+  const [onlyExplicit, setOnlyExplicit] = useState(true)
 
-function TopicConfigs({ clusterId, topic }: { clusterId: string; topic: string }) {
-  const configs = useTopicConfigs(clusterId, topic);
-  const [onlyExplicit, setOnlyExplicit] = useState(true);
-
-  const entries = configs.data?.items[0]?.entries ?? [];
-  const shown = onlyExplicit ? entries.filter((entry) => entry.isExplicit) : entries;
+  const entries = configs.data?.items[0]?.entries ?? []
+  const shown = onlyExplicit
+    ? entries.filter((entry) => entry.isExplicit)
+    : entries
 
   return (
     <>
@@ -533,5 +568,5 @@ function TopicConfigs({ clusterId, topic }: { clusterId: string; topic: string }
         <ConfigTable entries={shown} total={entries.length} />
       )}
     </>
-  );
+  )
 }

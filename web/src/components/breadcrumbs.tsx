@@ -11,34 +11,36 @@
 // breadcrumb is uniquely placed to offer — you are already reading the row
 // that says which one you are in.
 
-import { Link } from "@tanstack/react-router";
-import { ChevronDown } from "lucide-react";
+import { Link } from "@tanstack/react-router"
+import { ChevronDown } from "lucide-react"
 
-import { useFleet } from "@/api/client";
-import type { EnvironmentSection } from "@/api/types";
+import { useFleet } from "@/api/client"
+import type { EnvironmentSection } from "@/api/types"
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { chooseEnvironment } from "@/lib/environment";
+} from "@/components/ui/dropdown-menu"
+import { chooseEnvironment } from "@/lib/environment"
 
 /** The cluster sub-pages a sibling cluster also has a route for. */
-const SECTIONS = new Set(["topics", "groups", "configs", "capabilities"]);
+const SECTIONS = new Set(["topics", "groups", "configs", "capabilities"])
 
 export function Breadcrumbs({ pathname }: { pathname: string }) {
-  const fleet = useFleet();
-  const sections = fleet.data?.items ?? [];
+  const fleet = useFleet()
+  const sections = fleet.data?.items ?? []
 
-  const parts = pathname.split("/").filter(Boolean);
-  const clusterId = parts[0] === "clusters" ? parts[1] : undefined;
+  const parts = pathname.split("/").filter(Boolean)
+  const clusterId = parts[0] === "clusters" ? parts[1] : undefined
   // Everything after the cluster id, or the whole path when this is not a
   // cluster page at all — `/settings` is `Fleet / settings`.
-  const tail = clusterId ? parts.slice(2) : parts;
+  const tail = clusterId ? parts.slice(2) : parts
   const environment = clusterId
-    ? sections.find((section) => section.clusters.some((card) => card.id === clusterId))
-    : undefined;
+    ? sections.find((section) =>
+        section.clusters.some((card) => card.id === clusterId)
+      )
+    : undefined
 
   return (
     <nav
@@ -50,7 +52,10 @@ export function Breadcrumbs({ pathname }: { pathname: string }) {
           Fleet
         </span>
       ) : (
-        <Link to="/" className="shrink-0 text-ink-muted hover:text-ink hover:underline">
+        <Link
+          to="/"
+          className="shrink-0 text-ink-muted hover:text-ink hover:underline"
+        >
           Fleet
         </Link>
       )}
@@ -78,8 +83,8 @@ export function Breadcrumbs({ pathname }: { pathname: string }) {
       ) : null}
 
       {tail.map((part, index) => {
-        const href = `/${parts.slice(0, parts.length - tail.length + index + 1).join("/")}`;
-        const last = index === tail.length - 1;
+        const href = `/${parts.slice(0, parts.length - tail.length + index + 1).join("/")}`
+        const last = index === tail.length - 1
         return (
           <span key={href} className="flex min-w-0 items-center gap-1.5">
             <Separator />
@@ -96,10 +101,10 @@ export function Breadcrumbs({ pathname }: { pathname: string }) {
               </Link>
             )}
           </span>
-        );
+        )
       })}
     </nav>
-  );
+  )
 }
 
 function Separator() {
@@ -107,7 +112,7 @@ function Separator() {
     <span aria-hidden className="shrink-0 text-ink-faint">
       /
     </span>
-  );
+  )
 }
 
 /** A crumb whose name opens a menu of the things beside it. */
@@ -117,10 +122,10 @@ function CrumbMenu({
   current,
   children,
 }: {
-  label: string;
-  mono?: boolean;
-  current?: boolean;
-  children: React.ReactNode;
+  label: string
+  mono?: boolean
+  current?: boolean
+  children: React.ReactNode
 }) {
   return (
     <DropdownMenu>
@@ -139,7 +144,7 @@ function CrumbMenu({
         {children}
       </DropdownMenuContent>
     </DropdownMenu>
-  );
+  )
 }
 
 /**
@@ -156,8 +161,8 @@ function EnvironmentCrumb({
   current,
   sections,
 }: {
-  current: EnvironmentSection;
-  sections: EnvironmentSection[];
+  current: EnvironmentSection
+  sections: EnvironmentSection[]
 }) {
   return (
     <CrumbMenu label={current.name}>
@@ -169,7 +174,7 @@ function EnvironmentCrumb({
         </DropdownMenuItem>
       ))}
     </CrumbMenu>
-  );
+  )
 }
 
 /**
@@ -186,12 +191,12 @@ function ClusterCrumb({
   section,
   last,
 }: {
-  id: string;
-  environment: EnvironmentSection | undefined;
-  section: string | undefined;
-  last: boolean;
+  id: string
+  environment: EnvironmentSection | undefined
+  section: string | undefined
+  last: boolean
 }) {
-  const siblings = environment?.clusters ?? [];
+  const siblings = environment?.clusters ?? []
 
   if (siblings.length < 2) {
     return last ? (
@@ -206,7 +211,7 @@ function ClusterCrumb({
       >
         {id}
       </Link>
-    );
+    )
   }
 
   return (
@@ -229,7 +234,11 @@ function ClusterCrumb({
                 rather than the link, where no class of the menu item's own can
                 out-order it. */}
             <span
-              className={card.status === "unreachable" ? "truncate text-danger" : "truncate"}
+              className={
+                card.status === "unreachable"
+                  ? "truncate text-danger"
+                  : "truncate"
+              }
             >
               {card.id}
             </span>
@@ -237,5 +246,5 @@ function ClusterCrumb({
         </DropdownMenuItem>
       ))}
     </CrumbMenu>
-  );
+  )
 }

@@ -14,24 +14,24 @@
 // you and not about the deployment, and re-picking it after every reload is
 // the kind of small tax that makes a tool feel like it is not paying attention.
 
-import { useSyncExternalStore } from "react";
+import { useSyncExternalStore } from "react"
 
-const KEY = "kaas-ui-environment";
+const KEY = "kaas-ui-environment"
 
-let current: string | null = localStorage.getItem(KEY);
-const listeners = new Set<() => void>();
+let current: string | null = localStorage.getItem(KEY)
+const listeners = new Set<() => void>()
 
 /** Remember an environment as the one being looked at. */
 export function chooseEnvironment(id: string) {
-  if (current === id) return;
-  current = id;
-  localStorage.setItem(KEY, id);
-  for (const listener of listeners) listener();
+  if (current === id) return
+  current = id
+  localStorage.setItem(KEY, id)
+  for (const listener of listeners) listener()
 }
 
 function subscribe(listener: () => void) {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
+  listeners.add(listener)
+  return () => listeners.delete(listener)
 }
 
 /** The remembered id, which may name an environment that no longer exists. */
@@ -39,8 +39,8 @@ export function useChosenEnvironment(): string | null {
   return useSyncExternalStore(
     subscribe,
     () => current,
-    () => current,
-  );
+    () => current
+  )
 }
 
 /**
@@ -51,7 +51,7 @@ export function useChosenEnvironment(): string | null {
  */
 export function pickEnvironment<T extends { id: string }>(
   sections: T[],
-  chosen: string | null,
+  chosen: string | null
 ): T | undefined {
-  return sections.find((section) => section.id === chosen) ?? sections[0];
+  return sections.find((section) => section.id === chosen) ?? sections[0]
 }

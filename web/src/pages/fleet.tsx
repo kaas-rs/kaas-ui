@@ -1,12 +1,12 @@
-import { Link } from "@tanstack/react-router";
-import { ArrowRight, RefreshCw } from "lucide-react";
+import { Link } from "@tanstack/react-router"
+import { ArrowRight, RefreshCw } from "lucide-react"
 
-import { useFleet } from "@/api/client";
+import { useFleet } from "@/api/client"
 import type {
   ClusterCard as ClusterCardData,
   EnvironmentSection,
   ResourceCard as ResourceCardData,
-} from "@/api/types";
+} from "@/api/types"
 import {
   ClusterChip,
   ClusterCounts,
@@ -16,10 +16,10 @@ import {
   SnapshotAge,
   Spinner,
   StatusBadge,
-} from "@/components/domain";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card";
-import { PageTitle } from "@/components/page-title";
+} from "@/components/domain"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card"
+import { PageTitle } from "@/components/page-title"
 
 /**
  * The fleet, one section per environment.
@@ -31,20 +31,26 @@ import { PageTitle } from "@/components/page-title";
  * all, so there is no empty heading here to report that prod exists.
  */
 export function Fleet() {
-  const fleet = useFleet();
+  const fleet = useFleet()
 
-  if (fleet.isLoading) return <Spinner label="loading the fleet" />;
+  if (fleet.isLoading) return <Spinner label="loading the fleet" />
   if (fleet.error) {
     return (
       <Card className="p-5 text-danger">
         the fleet could not be loaded: {String(fleet.error)}
       </Card>
-    );
+    )
   }
 
-  const sections = fleet.data?.items ?? [];
-  const clusters = sections.reduce((total, section) => total + section.clusters.length, 0);
-  const resources = sections.reduce((total, section) => total + section.resources.length, 0);
+  const sections = fleet.data?.items ?? []
+  const clusters = sections.reduce(
+    (total, section) => total + section.clusters.length,
+    0
+  )
+  const resources = sections.reduce(
+    (total, section) => total + section.resources.length,
+    0
+  )
 
   return (
     <>
@@ -53,8 +59,12 @@ export function Fleet() {
         subtitle={
           <>
             {plural(clusters, "cluster")}
-            {resources > 0 ? ` and ${plural(resources, "other resource")}` : null}
-            {sections.length > 0 ? ` across ${plural(sections.length, "environment")}` : null}
+            {resources > 0
+              ? ` and ${plural(resources, "other resource")}`
+              : null}
+            {sections.length > 0
+              ? ` across ${plural(sections.length, "environment")}`
+              : null}
           </>
         }
       />
@@ -62,24 +72,26 @@ export function Fleet() {
       {sections.length === 0 ? (
         <Empty>nothing configured is visible to you</Empty>
       ) : (
-        sections.map((section) => <Environment key={section.id} section={section} />)
+        sections.map((section) => (
+          <Environment key={section.id} section={section} />
+        ))
       )}
     </>
-  );
+  )
 }
 
 function plural(count: number, noun: string): string {
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
+  return `${count} ${noun}${count === 1 ? "" : "s"}`
 }
 
 /** One environment: its heading, and everything in it. */
 function Environment({ section }: { section: EnvironmentSection }) {
   // The same string `clusterTone` singles out. prod must not look like
   // anything else, and a section heading is the first place someone reads.
-  const production = section.id === "prod";
+  const production = section.id === "prod"
   const unreachable = section.clusters.filter(
-    (card) => card.status === "unreachable",
-  ).length;
+    (card) => card.status === "unreachable"
+  ).length
 
   return (
     <section className="mb-10">
@@ -95,7 +107,9 @@ function Environment({ section }: { section: EnvironmentSection }) {
             {section.name}
           </h2>
           {section.description ? (
-            <p className="mt-0.5 text-[12px] text-ink-muted">{section.description}</p>
+            <p className="mt-0.5 text-[12px] text-ink-muted">
+              {section.description}
+            </p>
           ) : null}
         </div>
 
@@ -105,7 +119,9 @@ function Environment({ section }: { section: EnvironmentSection }) {
           ) : null}
           <span>
             {plural(section.clusters.length, "cluster")}
-            {section.resources.length > 0 ? ` · ${section.resources.length} other` : null}
+            {section.resources.length > 0
+              ? ` · ${section.resources.length} other`
+              : null}
           </span>
         </div>
       </div>
@@ -125,12 +141,12 @@ function Environment({ section }: { section: EnvironmentSection }) {
         ))}
       </div>
     </section>
-  );
+  )
 }
 
 function FleetCard({ card }: { card: ClusterCardData }) {
-  const fleet = useFleet();
-  const unreachable = card.status === "unreachable";
+  const fleet = useFleet()
+  const unreachable = card.status === "unreachable"
 
   return (
     <Card className="gap-3 py-4">
@@ -163,7 +179,10 @@ function FleetCard({ card }: { card: ClusterCardData }) {
           // ignore red.
           <div
             className="rounded-sm border p-3 text-[12px]"
-            style={{ background: "var(--danger-soft)", borderColor: "var(--danger)" }}
+            style={{
+              background: "var(--danger-soft)",
+              borderColor: "var(--danger)",
+            }}
           >
             <p className="break-words font-mono">{card.error}</p>
             <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
@@ -189,16 +208,22 @@ function FleetCard({ card }: { card: ClusterCardData }) {
       </CardContent>
 
       <CardFooter className="border-t px-4 pt-3 [.border-t]:pt-3">
-        <SnapshotAge ageMs={card.snapshotAgeMs} maxStalenessMs={card.maxStalenessMs} />
+        <SnapshotAge
+          ageMs={card.snapshotAgeMs}
+          maxStalenessMs={card.maxStalenessMs}
+        />
         <Button variant="link" size="sm" asChild className="ml-auto h-auto p-0">
-          <Link to="/clusters/$clusterId/topics" params={{ clusterId: card.id }}>
+          <Link
+            to="/clusters/$clusterId/topics"
+            params={{ clusterId: card.id }}
+          >
             topics
             <ArrowRight aria-hidden />
           </Link>
         </Button>
       </CardFooter>
     </Card>
-  );
+  )
 }
 
 /**
@@ -210,8 +235,8 @@ function FleetCard({ card }: { card: ClusterCardData }) {
  * rather than stretching to match a cluster card three times as tall.
  */
 function ResourceTile({ card }: { card: ResourceCardData }) {
-  const kind = RESOURCE_KINDS[card.kind];
-  const Icon = kind.icon;
+  const kind = RESOURCE_KINDS[card.kind]
+  const Icon = kind.icon
 
   return (
     <Card className="gap-3 self-start py-4">
@@ -228,18 +253,22 @@ function ResourceTile({ card }: { card: ResourceCardData }) {
         <div className="flex items-center gap-1.5 text-[12px] text-ink-muted">
           <Icon aria-hidden className="size-3.5" />
           {kind.label}
-          <span className="font-mono text-[11px] text-ink-faint">{card.id}</span>
+          <span className="font-mono text-[11px] text-ink-faint">
+            {card.id}
+          </span>
         </div>
       </CardHeader>
 
       <CardContent className="px-4">
         {card.endpoint ? (
-          <p className="break-all font-mono text-[12px] text-ink-muted">{card.endpoint}</p>
+          <p className="break-all font-mono text-[12px] text-ink-muted">
+            {card.endpoint}
+          </p>
         ) : null}
         {card.note ? (
           <p className="mt-2 text-[12px] text-ink-muted">{card.note}</p>
         ) : null}
       </CardContent>
     </Card>
-  );
+  )
 }

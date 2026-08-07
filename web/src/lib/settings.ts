@@ -13,47 +13,47 @@
 // of that script, not a second opinion about it: same key, same two attributes,
 // so there is no state where the two disagree.
 
-import { useSyncExternalStore } from "react";
+import { useSyncExternalStore } from "react"
 
 /** What the reader chose. `system` is a choice too — "keep following the OS". */
-export type Theme = "light" | "dark" | "system";
+export type Theme = "light" | "dark" | "system"
 
 /** Shared with the inline script in `index.html`. Changing it changes both. */
-const THEME_KEY = "kaas-ui-theme";
+const THEME_KEY = "kaas-ui-theme"
 
-const DARK = "(prefers-color-scheme: dark)";
+const DARK = "(prefers-color-scheme: dark)"
 
 /** Absence means `system`, which is why choosing it *removes* the key. */
 function readStored(): Theme {
-  const value = localStorage.getItem(THEME_KEY);
-  return value === "dark" || value === "light" ? value : "system";
+  const value = localStorage.getItem(THEME_KEY)
+  return value === "dark" || value === "light" ? value : "system"
 }
 
-let current: Theme = readStored();
-const listeners = new Set<() => void>();
+let current: Theme = readStored()
+const listeners = new Set<() => void>()
 
 /** What `system` currently means, so the UI can say so instead of guessing. */
 export function resolveTheme(theme: Theme): "light" | "dark" {
-  if (theme !== "system") return theme;
-  return window.matchMedia(DARK).matches ? "dark" : "light";
+  if (theme !== "system") return theme
+  return window.matchMedia(DARK).matches ? "dark" : "light"
 }
 
 /** Both attributes, always — `data-theme` for our CSS, `.dark` for shadcn's. */
 function paint(theme: Theme) {
-  const resolved = resolveTheme(theme);
-  document.documentElement.setAttribute("data-theme", resolved);
-  document.documentElement.classList.toggle("dark", resolved === "dark");
+  const resolved = resolveTheme(theme)
+  document.documentElement.setAttribute("data-theme", resolved)
+  document.documentElement.classList.toggle("dark", resolved === "dark")
 }
 
 function setTheme(theme: Theme) {
-  current = theme;
+  current = theme
   if (theme === "system") {
-    localStorage.removeItem(THEME_KEY);
+    localStorage.removeItem(THEME_KEY)
   } else {
-    localStorage.setItem(THEME_KEY, theme);
+    localStorage.setItem(THEME_KEY, theme)
   }
-  paint(theme);
-  for (const listener of listeners) listener();
+  paint(theme)
+  for (const listener of listeners) listener()
 }
 
 /**
@@ -65,33 +65,33 @@ function setTheme(theme: Theme) {
  * to be mounted would stop at the first navigation.
  */
 export function installTheme() {
-  paint(current);
+  paint(current)
 
   // Following the OS is only meaningful if it keeps following it.
   window.matchMedia(DARK).addEventListener("change", () => {
-    if (current === "system") paint(current);
-  });
+    if (current === "system") paint(current)
+  })
 
   // Another tab is the same browser, so it is the same setting. Without this
   // the two tabs disagree until one of them is reloaded.
   window.addEventListener("storage", (event) => {
-    if (event.key !== null && event.key !== THEME_KEY) return;
-    current = readStored();
-    paint(current);
-    for (const listener of listeners) listener();
-  });
+    if (event.key !== null && event.key !== THEME_KEY) return
+    current = readStored()
+    paint(current)
+    for (const listener of listeners) listener()
+  })
 }
 
 function subscribe(listener: () => void) {
-  listeners.add(listener);
+  listeners.add(listener)
   return () => {
-    listeners.delete(listener);
-  };
+    listeners.delete(listener)
+  }
 }
 
 export function useTheme(): [Theme, (theme: Theme) => void] {
-  const theme = useSyncExternalStore(subscribe, () => current);
-  return [theme, setTheme];
+  const theme = useSyncExternalStore(subscribe, () => current)
+  return [theme, setTheme]
 }
 
 /**
@@ -103,5 +103,5 @@ export function useTheme(): [Theme, (theme: Theme) => void] {
  * answer without reloading the tab.
  */
 export function displayTimeZone(): string {
-  return Intl.DateTimeFormat().resolvedOptions().timeZone;
+  return Intl.DateTimeFormat().resolvedOptions().timeZone
 }

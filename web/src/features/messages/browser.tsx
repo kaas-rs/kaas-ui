@@ -8,47 +8,51 @@
 // know which route it is mounted under — it is a tab on the topic page, and
 // the seek parameters belong to that page's URL, not to this file.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, Loader2, RotateCw } from "lucide-react";
-import { useDefaultLayout } from "react-resizable-panels";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { AlertTriangle, Loader2, RotateCw } from "lucide-react"
+import { useDefaultLayout } from "react-resizable-panels"
 
-import { fetchMessagePage, useOldestTimestamp, usePartitionBounds } from "@/api/client";
-import type { ResolvedSeek, StreamProgress, StreamRow } from "@/api/types";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Progress } from "@/components/ui/progress";
+import {
+  fetchMessagePage,
+  useOldestTimestamp,
+  usePartitionBounds,
+} from "@/api/client"
+import type { ResolvedSeek, StreamProgress, StreamRow } from "@/api/types"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Progress } from "@/components/ui/progress"
 import {
   ResizableHandle,
   ResizablePanel,
   ResizablePanelGroup,
-} from "@/components/ui/resizable";
-import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
-import { useIsMobile } from "@/hooks/use-mobile";
-import { count } from "@/components/domain";
-import { displayTimeZone } from "@/lib/settings";
-import { cn } from "@/lib/utils";
-import { downloadBuffer } from "./download";
-import { MessageDetailPanel } from "./message-detail";
-import { MessageList, ROW_HEIGHT } from "./message-list";
-import { withIds } from "./rows";
-import { SEEK_MODES, type SeekMode } from "./seek-modes";
-import type { MessageSearch } from "./search";
-import { Toolbar } from "./toolbar";
-import { useMessageStream } from "./use-message-stream";
+} from "@/components/ui/resizable"
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet"
+import { useIsMobile } from "@/hooks/use-mobile"
+import { count } from "@/components/domain"
+import { displayTimeZone } from "@/lib/settings"
+import { cn } from "@/lib/utils"
+import { downloadBuffer } from "./download"
+import { MessageDetailPanel } from "./message-detail"
+import { MessageList, ROW_HEIGHT } from "./message-list"
+import { withIds } from "./rows"
+import { SEEK_MODES, type SeekMode } from "./seek-modes"
+import type { MessageSearch } from "./search"
+import { Toolbar } from "./toolbar"
+import { useMessageStream } from "./use-message-stream"
 
 export interface MessageBrowserProps {
-  clusterId: string;
-  topic: string;
+  clusterId: string
+  topic: string
   /** The validated seek parameters, straight from the route. */
-  search: MessageSearch;
+  search: MessageSearch
   /** Write a change back to the URL. Merging is the host's business. */
-  onSearch(next: Partial<MessageSearch>): void;
+  onSearch(next: Partial<MessageSearch>): void
   /**
    * The panel's height, from whatever is hosting it. Given rather than
    * measured: the split pane and the virtualizer both need a definite height,
    * and `h-full` inside a page that scrolls is not one.
    */
-  className?: string;
+  className?: string
 }
 
 export function MessageBrowser({
@@ -58,10 +62,10 @@ export function MessageBrowser({
   onSearch,
   className,
 }: MessageBrowserProps) {
-  const isMobile = useIsMobile();
+  const isMobile = useIsMobile()
 
-  const mode = search.mode;
-  const config = SEEK_MODES[mode];
+  const mode = search.mode
+  const config = SEEK_MODES[mode]
 
   const stream = useMessageStream({
     clusterId,
@@ -73,14 +77,17 @@ export function MessageBrowser({
     filter: search.filter,
     visibility: search.visibility,
     limit: search.limit,
-  });
+  })
 
-  const bounds = usePartitionBounds(clusterId, topic);
+  const bounds = usePartitionBounds(clusterId, topic)
 
   // Panel sizes in localStorage, which the constraints allow explicitly.
   // Message data never goes there — a buffer of a live topic is not something
   // to persist, and restoring one would show stale rows as if they were live.
-  const layout = useDefaultLayout({ id: "messages-split", storage: localStorage });
+  const layout = useDefaultLayout({
+    id: "messages-split",
+    storage: localStorage,
+  })
 
   // The timestamp of the oldest record the topic still holds, which is what
   // bounds the calendar. Derived from a record rather than from a retention
@@ -88,30 +95,33 @@ export function MessageBrowser({
   // deletion, not when it went, so a topic routinely holds data older than its
   // retention says and a calendar built on the setting disables days that have
   // perfectly good records behind them.
-  const oldest = useOldestTimestamp(clusterId, topic);
-  const retentionStart = oldest ? new Date(oldest) : undefined;
+  const oldest = useOldestTimestamp(clusterId, topic)
+  const retentionStart = oldest ? new Date(oldest) : undefined
 
   // The row as it was when it was picked. A live buffer is a moving window, so
   // by the time someone reads the payload the row itself may be gone; keeping
   // the metadata is what lets the panel keep its header instead of blanking.
-  const [retained, setRetained] = useState<StreamRow | undefined>();
+  const [retained, setRetained] = useState<StreamRow | undefined>()
   const rowsById = useMemo(() => {
-    const index = new Map<string, StreamRow>();
-    for (const row of stream.rows) index.set(row.id, row);
-    return index;
-  }, [stream.rows]);
+    const index = new Map<string, StreamRow>()
+    for (const row of stream.rows) index.set(row.id, row)
+    return index
+  }, [stream.rows])
 
-  const selectedId = search.selected;
+  const selectedId = search.selected
   useEffect(() => {
     if (!selectedId) {
-      setRetained(undefined);
-      return;
+      setRetained(undefined)
+      return
     }
-    const present = rowsById.get(selectedId);
-    if (present) setRetained(present);
-  }, [selectedId, rowsById]);
+    const present = rowsById.get(selectedId)
+    if (present) setRetained(present)
+  }, [selectedId, rowsById])
 
-  const onSelect = useCallback((id: string) => onSearch({ selected: id }), [onSearch]);
+  const onSelect = useCallback(
+    (id: string) => onSearch({ selected: id }),
+    [onSearch]
+  )
 
   const onApply = useCallback(
     (next: { mode: SeekMode; offset?: number; timestamp?: number }) => {
@@ -119,16 +129,16 @@ export function MessageBrowser({
       // on the URL, so a new mode builds a new store; the selection has to be
       // dropped explicitly because a row id from one window means nothing in
       // another.
-      onSearch({ ...next, selected: undefined });
+      onSearch({ ...next, selected: undefined })
     },
-    [onSearch],
-  );
+    [onSearch]
+  )
 
   return (
     <div
       className={cn(
         "flex min-h-0 flex-col overflow-hidden rounded-md border border-line",
-        className,
+        className
       )}
     >
       <Toolbar
@@ -143,8 +153,12 @@ export function MessageBrowser({
         timeZone={displayTimeZone()}
         onApply={onApply}
         onFilterChange={(filter) => onSearch({ filter, selected: undefined })}
-        onPartitionsChange={(partitions) => onSearch({ partitions, selected: undefined })}
-        onVisibilityChange={(visibility) => onSearch({ visibility, selected: undefined })}
+        onPartitionsChange={(partitions) =>
+          onSearch({ partitions, selected: undefined })
+        }
+        onVisibilityChange={(visibility) =>
+          onSearch({ visibility, selected: undefined })
+        }
         onRestart={stream.restart}
       />
 
@@ -250,7 +264,7 @@ export function MessageBrowser({
         </Sheet>
       ) : null}
     </div>
-  );
+  )
 }
 
 function StreamStatus({
@@ -261,12 +275,12 @@ function StreamStatus({
   onDownload,
   onRestart,
 }: {
-  phase: string | null;
-  live: boolean;
-  reconnecting: boolean;
-  rows: number;
-  onDownload(): void;
-  onRestart(): void;
+  phase: string | null
+  live: boolean
+  reconnecting: boolean
+  rows: number
+  onDownload(): void
+  onRestart(): void
 }) {
   return (
     <div className="flex items-center gap-2 text-[11px] text-ink-muted">
@@ -308,7 +322,11 @@ function StreamStatus({
           variant="outline"
           className="cursor-pointer gap-1 text-warn-ink hover:bg-surface-raised"
         >
-          <button type="button" onClick={onRestart} title="Open the stream again">
+          <button
+            type="button"
+            onClick={onRestart}
+            title="Open the stream again"
+          >
             <RotateCw className="size-3" aria-hidden /> stream ended
           </button>
         </Badge>
@@ -316,7 +334,7 @@ function StreamStatus({
         <Badge variant="outline">window read</Badge>
       ) : null}
     </div>
-  );
+  )
 }
 
 /** Everything the stream wants to say that is not a row. */
@@ -327,11 +345,11 @@ function Notices({
   error,
   phase,
 }: {
-  dropped: number;
-  progress: StreamProgress | null;
-  resolved: ResolvedSeek | null;
-  error: { message: string } | null;
-  phase: string | null;
+  dropped: number
+  progress: StreamProgress | null
+  resolved: ResolvedSeek | null
+  error: { message: string } | null
+  phase: string | null
 }) {
   // The bar is an in-flight indicator, not a result, so it goes when the scan
   // does. A window that has been read already says so twice — the "window
@@ -342,13 +360,15 @@ function Notices({
   // `1.0`, and on the default 500-record window it is the *only* frame, so
   // this element's whole visible life was a full bar under a finished list.
   const showBar =
-    phase === "streaming" && progress?.fraction !== null && progress?.fraction !== undefined;
+    phase === "streaming" &&
+    progress?.fraction !== null &&
+    progress?.fraction !== undefined
   const noticeCount =
     (dropped > 0 ? 1 : 0) +
     (error ? 1 : 0) +
     (resolved?.unresolved ? 1 : 0) +
-    (progress?.orderingDegraded ? 1 : 0);
-  if (!noticeCount && !showBar) return null;
+    (progress?.orderingDegraded ? 1 : 0)
+  if (!noticeCount && !showBar) return null
 
   return (
     <div className="shrink-0 border-b border-line">
@@ -369,30 +389,31 @@ function Notices({
           // Never suppressed. Silently losing records in a debugging tool is
           // worse than showing a gap.
           <p className="text-[11px] text-warn-ink">
-            {count(dropped)} message(s) were dropped to keep the stream ahead of this
-            browser.
+            {count(dropped)} message(s) were dropped to keep the stream ahead of
+            this browser.
           </p>
         ) : null}
         {resolved?.unresolved ? (
           <p className="flex items-start gap-2 text-[11px] text-warn-ink">
             <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
             <span>
-              This cluster resolved {new Date(resolved.timestamp).toISOString()} to no
-              offset on any of its {resolved.partitions.length} partitions, so the window
-              is empty. Brokers that keep no timestamp index answer a time seek this way;
-              seeking by offset still works.
+              This cluster resolved {new Date(resolved.timestamp).toISOString()}{" "}
+              to no offset on any of its {resolved.partitions.length}{" "}
+              partitions, so the window is empty. Brokers that keep no timestamp
+              index answer a time seek this way; seeking by offset still works.
             </span>
           </p>
         ) : null}
         {progress?.orderingDegraded ? (
           <p className="text-[11px] text-ink-muted">
             Approximately ordered across partitions — records may be up to{" "}
-            {count(progress.reorderWindow)} apart. Within a partition the order is exact.
+            {count(progress.reorderWindow)} apart. Within a partition the order
+            is exact.
           </p>
         ) : null}
       </div>
     </div>
-  );
+  )
 }
 
 /**
@@ -409,37 +430,37 @@ function Terminal({
   search,
   onAppend,
 }: {
-  clusterId: string;
-  topic: string;
-  rows: StreamRow[];
-  mode: SeekMode;
+  clusterId: string
+  topic: string
+  rows: StreamRow[]
+  mode: SeekMode
   search: {
-    offset?: number;
-    timestamp?: number;
-    partitions?: string;
-    filter?: string;
-    limit?: number;
-  };
-  onAppend(rows: StreamRow[]): void;
+    offset?: number
+    timestamp?: number
+    partitions?: string
+    filter?: string
+    limit?: number
+  }
+  onAppend(rows: StreamRow[]): void
 }) {
-  const [loading, setLoading] = useState(false);
-  const [exhausted, setExhausted] = useState(false);
-  const anchor = useRef<number | null>(null);
+  const [loading, setLoading] = useState(false)
+  const [exhausted, setExhausted] = useState(false)
+  const anchor = useRef<number | null>(null)
 
-  const config = SEEK_MODES[mode];
-  const offsets = rows.map((row) => row.offset);
+  const config = SEEK_MODES[mode]
+  const offsets = rows.map((row) => row.offset)
   // Guarded: `Math.min()` of nothing is `Infinity`, which would go on the wire
   // as an offset and come back as a confusing 400.
   const next = offsets.length
     ? config.sort === "desc"
       ? Math.min(...offsets) - 1
       : Math.max(...offsets) + 1
-    : null;
+    : null
 
   async function loadMore() {
-    const from = anchor.current ?? next;
-    if (from === null) return;
-    setLoading(true);
+    const from = anchor.current ?? next
+    if (from === null) return
+    setLoading(true)
     try {
       const params = new URLSearchParams({
         // "More" of a backward window is the next window further back; of a
@@ -449,20 +470,20 @@ function Terminal({
         mode: config.sort === "desc" ? "toOffset" : "fromOffset",
         offset: String(from),
         limit: String(search.limit ?? 500),
-      });
-      if (search.partitions) params.set("partitions", search.partitions);
-      if (search.filter) params.set("filter", search.filter);
+      })
+      if (search.partitions) params.set("partitions", search.partitions)
+      if (search.filter) params.set("filter", search.filter)
 
-      const page = await fetchMessagePage(clusterId, topic, params);
+      const page = await fetchMessagePage(clusterId, topic, params)
       if (!page.items.length) {
-        setExhausted(true);
-        return;
+        setExhausted(true)
+        return
       }
-      onAppend(withIds(page.items));
-      anchor.current = page.nextOffset;
-      if (!page.hasMore || page.nextOffset === null) setExhausted(true);
+      onAppend(withIds(page.items))
+      anchor.current = page.nextOffset
+      if (!page.hasMore || page.nextOffset === null) setExhausted(true)
     } finally {
-      setLoading(false);
+      setLoading(false)
     }
   }
 
@@ -472,7 +493,8 @@ function Terminal({
       style={{ height: ROW_HEIGHT }}
     >
       <span>
-        End of window — {count(rows.length)} message{rows.length === 1 ? "" : "s"}
+        End of window — {count(rows.length)} message
+        {rows.length === 1 ? "" : "s"}
       </span>
       {exhausted ? (
         <span>nothing further in this direction</span>
@@ -488,5 +510,5 @@ function Terminal({
         </Button>
       )}
     </div>
-  );
+  )
 }

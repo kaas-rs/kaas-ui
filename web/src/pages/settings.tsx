@@ -13,15 +13,20 @@
 // it the honest thing is to name it and say where it came from — an inert
 // dropdown with one option in it would be worse.
 
-import { useEffect, useState, type ReactNode } from "react";
-import { Clock, Monitor, Moon, Sun } from "lucide-react";
-import { formatInTimeZone } from "date-fns-tz";
+import { useEffect, useState, type ReactNode } from "react"
+import { Clock, Monitor, Moon, Sun } from "lucide-react"
+import { formatInTimeZone } from "date-fns-tz"
 
-import { Empty, Mono, Section } from "@/components/domain";
-import { Button } from "@/components/ui/button";
-import { displayTimeZone, resolveTheme, useTheme, type Theme } from "@/lib/settings";
-import { cn } from "@/lib/utils";
-import { PageTitle } from "@/components/page-title";
+import { Empty, Mono, Section } from "@/components/domain"
+import { Button } from "@/components/ui/button"
+import {
+  displayTimeZone,
+  resolveTheme,
+  useTheme,
+  type Theme,
+} from "@/lib/settings"
+import { cn } from "@/lib/utils"
+import { PageTitle } from "@/components/page-title"
 
 /** One row of a settings block: what it is, what it says, why it matters. */
 function Setting({
@@ -29,26 +34,28 @@ function Setting({
   note,
   children,
 }: {
-  label: string;
-  note?: string;
-  children: ReactNode;
+  label: string
+  note?: string
+  children: ReactNode
 }) {
   return (
     <div className="border-line flex flex-wrap items-center justify-between gap-x-6 gap-y-3 border-b py-4 last:border-0">
       <div className="min-w-0">
         <div className="text-[13px] font-medium">{label}</div>
-        {note ? <div className="text-ink-muted mt-0.5 text-[12px]">{note}</div> : null}
+        {note ? (
+          <div className="text-ink-muted mt-0.5 text-[12px]">{note}</div>
+        ) : null}
       </div>
       <div className="shrink-0">{children}</div>
     </div>
-  );
+  )
 }
 
 const THEMES: { value: Theme; label: string; icon: typeof Sun }[] = [
   { value: "system", label: "system", icon: Monitor },
   { value: "light", label: "light", icon: Sun },
   { value: "dark", label: "dark", icon: Moon },
-];
+]
 
 /**
  * Three states, not a toggle.
@@ -58,7 +65,7 @@ const THEMES: { value: Theme; label: string; icon: typeof Sun }[] = [
  * when someone first touched it, and stop following at dusk.
  */
 function ThemePicker() {
-  const [theme, setTheme] = useTheme();
+  const [theme, setTheme] = useTheme()
 
   return (
     <div
@@ -67,7 +74,7 @@ function ThemePicker() {
       className="border-line bg-surface-sunken inline-flex gap-0.5 rounded-md border p-0.5"
     >
       {THEMES.map((option) => {
-        const active = option.value === theme;
+        const active = option.value === theme
         return (
           <Button
             key={option.value}
@@ -79,26 +86,26 @@ function ThemePicker() {
             className={cn(
               "px-3",
               active && "bg-surface-raised text-ink shadow-xs",
-              !active && "text-ink-muted",
+              !active && "text-ink-muted"
             )}
           >
             <option.icon aria-hidden />
             {option.label}
           </Button>
-        );
+        )
       })}
     </div>
-  );
+  )
 }
 
 /** A clock in the zone above, so the answer can be checked against a wrist. */
 function Now({ timeZone }: { timeZone: string }) {
-  const [now, setNow] = useState(() => new Date());
+  const [now, setNow] = useState(() => new Date())
 
   useEffect(() => {
-    const timer = setInterval(() => setNow(new Date()), 1000);
-    return () => clearInterval(timer);
-  }, []);
+    const timer = setInterval(() => setNow(new Date()), 1000)
+    return () => clearInterval(timer)
+  }, [])
 
   return (
     <span className="inline-flex items-center gap-2 font-mono text-[13px]">
@@ -108,12 +115,12 @@ function Now({ timeZone }: { timeZone: string }) {
         UTC{formatInTimeZone(now, timeZone, "xxx")}
       </span>
     </span>
-  );
+  )
 }
 
 export function Settings() {
-  const [theme] = useTheme();
-  const timeZone = displayTimeZone();
+  const [theme] = useTheme()
+  const timeZone = displayTimeZone()
 
   return (
     <div className="max-w-3xl">
@@ -150,19 +157,19 @@ export function Settings() {
           </Setting>
         </div>
         <p className="text-ink-muted mt-3 text-[12px]">
-          Brokers deal in epoch milliseconds and so does the wire format, so the zone
-          is applied once, on the way to the screen. It is not a filter on what a
-          cluster returns.
+          Brokers deal in epoch milliseconds and so does the wire format, so the
+          zone is applied once, on the way to the screen. It is not a filter on
+          what a cluster returns.
         </p>
       </Section>
 
       <Section title="Where these live">
         <Empty>
           In this browser's local storage — not in your account, and not on the
-          server. Another browser, or this one after its site data is cleared, starts
-          from the defaults again.
+          server. Another browser, or this one after its site data is cleared,
+          starts from the defaults again.
         </Empty>
       </Section>
     </div>
-  );
+  )
 }

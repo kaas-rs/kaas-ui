@@ -11,26 +11,26 @@
 // in a field of its own, because a file outlives the window it was taken from
 // and nobody reads the UI copy that was on screen at the time.
 
-import type { StreamRow } from "@/api/types";
-import type { SeekMode } from "./seek-modes";
+import type { StreamRow } from "@/api/types"
+import type { SeekMode } from "./seek-modes"
 
 export interface BufferExport {
-  cluster: string;
-  topic: string;
+  cluster: string
+  topic: string
   /** The seek mode the window was read with. */
-  mode: SeekMode;
-  exportedAt: string;
-  count: number;
+  mode: SeekMode
+  exportedAt: string
+  count: number
   /** Said out loud, so the file cannot be mistaken for the whole record. */
-  payloads: string;
-  messages: StreamRow[];
+  payloads: string
+  messages: StreamRow[]
 }
 
 export function bufferExport(
   clusterId: string,
   topic: string,
   mode: SeekMode,
-  rows: StreamRow[],
+  rows: StreamRow[]
 ): BufferExport {
   return {
     cluster: clusterId,
@@ -41,16 +41,20 @@ export function bufferExport(
     payloads:
       "previews — where a payload has truncated: true, the record holds more than its text shows",
     messages: rows,
-  };
+  }
 }
 
 /** `kaas-canary-newest-2026-08-02T14-32-11-004Z.json`. */
-export function exportFilename(topic: string, mode: SeekMode, at: Date): string {
+export function exportFilename(
+  topic: string,
+  mode: SeekMode,
+  at: Date
+): string {
   // Kafka allows only word characters, dot and dash in a topic name, so this
   // is a belt rather than a fix — but a filename is not the place to find out
   // that an assumption about someone else's namespace was wrong.
-  const safe = topic.replace(/[^\w.-]/g, "_");
-  return `${safe}-${mode}-${at.toISOString().replace(/[:.]/g, "-")}.json`;
+  const safe = topic.replace(/[^\w.-]/g, "_")
+  return `${safe}-${mode}-${at.toISOString().replace(/[:.]/g, "-")}.json`
 }
 
 /**
@@ -65,21 +69,21 @@ export function downloadBuffer(
   clusterId: string,
   topic: string,
   mode: SeekMode,
-  rows: StreamRow[],
+  rows: StreamRow[]
 ): void {
-  const document_ = bufferExport(clusterId, topic, mode, rows);
+  const document_ = bufferExport(clusterId, topic, mode, rows)
   const blob = new Blob([JSON.stringify(document_, null, 2)], {
     type: "application/json",
-  });
-  const url = URL.createObjectURL(blob);
+  })
+  const url = URL.createObjectURL(blob)
 
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = exportFilename(topic, mode, new Date());
-  anchor.style.display = "none";
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
+  const anchor = document.createElement("a")
+  anchor.href = url
+  anchor.download = exportFilename(topic, mode, new Date())
+  anchor.style.display = "none"
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
 
-  window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  window.setTimeout(() => URL.revokeObjectURL(url), 10_000)
 }

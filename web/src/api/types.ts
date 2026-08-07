@@ -16,55 +16,55 @@ export type ErrorKind =
   | "unsupported"
   | "invalid"
   | "readOnly"
-  | "other";
+  | "other"
 
 export interface UnsupportedApiDetail {
-  api: string;
-  apiKey: number;
+  api: string
+  apiKey: number
   /** `null` means the cluster does not implement it at all. */
-  broker: [number, number] | null;
+  broker: [number, number] | null
   /** `null` means this build has no schema for it. */
-  ours: [number, number] | null;
+  ours: [number, number] | null
 }
 
 export interface ResourceError {
-  resource: string;
-  kind: ErrorKind;
-  code: string | null;
+  resource: string
+  kind: ErrorKind
+  code: string | null
   /** Present even when `code` is null: against a newer broker it is all there is. */
-  codeNumber: number | null;
-  message: string;
-  unsupportedApi?: UnsupportedApiDetail;
-  retriable: boolean;
+  codeNumber: number | null
+  message: string
+  unsupportedApi?: UnsupportedApiDetail
+  retriable: boolean
 }
 
 export interface Envelope<T> {
-  items: T[];
+  items: T[]
   /** Non-empty is still a successful request. */
-  errors: ResourceError[];
-  snapshotAgeMs: number | null;
-  total?: number;
+  errors: ResourceError[]
+  snapshotAgeMs: number | null
+  total?: number
 }
 
-export type ClusterStatus = "connecting" | "ready" | "unreachable";
+export type ClusterStatus = "connecting" | "ready" | "unreachable"
 
 export interface ClusterCard {
-  id: string;
-  name: string;
-  labels: Record<string, string>;
-  status: ClusterStatus;
-  error: string | null;
-  attempts: number;
-  clusterId: string | null;
-  controllerId: number | null;
-  brokerCount: number;
-  topicCount: number;
-  internalTopicCount: number;
-  partitionCount: number;
-  offlinePartitionCount: number;
-  underReplicatedPartitionCount: number;
-  snapshotAgeMs: number | null;
-  maxStalenessMs: number;
+  id: string
+  name: string
+  labels: Record<string, string>
+  status: ClusterStatus
+  error: string | null
+  attempts: number
+  clusterId: string | null
+  controllerId: number | null
+  brokerCount: number
+  topicCount: number
+  internalTopicCount: number
+  partitionCount: number
+  offlinePartitionCount: number
+  underReplicatedPartitionCount: number
+  snapshotAgeMs: number | null
+  maxStalenessMs: number
   /**
    * What this caller may do on this cluster.
    *
@@ -74,16 +74,12 @@ export interface ClusterCard {
    * the same rule the capability projection follows for what a *broker*
    * cannot answer.
    */
-  grants: Partial<Record<Resource, Action[]>>;
+  grants: Partial<Record<Resource, Action[]>>
 }
 
 /** What a non-cluster resource is. Decides the icon and the wording. */
 export type ResourceKind =
-  | "schema_registry"
-  | "mqtt_broker"
-  | "kafka_connect"
-  | "rest_proxy"
-  | "other";
+  "schema_registry" | "mqtt_broker" | "kafka_connect" | "rest_proxy" | "other"
 
 /**
  * One thing in an environment that is not a Kafka cluster.
@@ -94,24 +90,24 @@ export type ResourceKind =
  * the one thing a fleet view must never show.
  */
 export interface ResourceCard {
-  id: string;
-  name: string;
-  kind: ResourceKind;
-  endpoint: string | null;
-  note: string | null;
-  labels: Record<string, string>;
+  id: string
+  name: string
+  kind: ResourceKind
+  endpoint: string | null
+  note: string | null
+  labels: Record<string, string>
 }
 
 /** One section of the fleet: an environment and everything in it. */
 export interface EnvironmentSection {
   /** The `env` label collected here; empty for the clusters carrying none. */
-  id: string;
-  name: string;
-  description: string | null;
+  id: string
+  name: string
+  description: string | null
   /** Declared in `environments:`, or discovered from a label. */
-  declared: boolean;
-  clusters: ClusterCard[];
-  resources: ResourceCard[];
+  declared: boolean
+  clusters: ClusterCard[]
+  resources: ResourceCard[]
 }
 
 /**
@@ -122,7 +118,7 @@ export interface EnvironmentSection {
  * config file uses, and the API echoes them verbatim so that what the UI hides
  * and what an operator typed are visibly the same vocabulary.
  */
-export type Resource = "cluster_config" | "topic" | "consumer";
+export type Resource = "cluster_config" | "topic" | "consumer"
 
 /**
  * What may be done to it.
@@ -131,16 +127,16 @@ export type Resource = "cluster_config" | "topic" | "consumer";
  * `delete`, `messagesProduce` and the rest of kafbat-ui's vocabulary describe
  * writes, and there is no code path here that could perform one.
  */
-export type Action = "view" | "messages_read";
+export type Action = "view" | "messages_read"
 
 /** `GET /api/me` — who the request is from. */
 export interface Identity {
-  authenticated: boolean;
-  subject: string;
-  displayName: string;
-  roles: string[];
+  authenticated: boolean
+  subject: string
+  displayName: string
+  roles: string[]
   /** Whether this deployment applies roles at all. */
-  enforcing: boolean;
+  enforcing: boolean
   /**
    * Whether an identity provider is configured.
    *
@@ -148,30 +144,30 @@ export interface Identity {
    * button, while `enforcing` decides whether being signed out means seeing
    * nothing.
    */
-  loginAvailable: boolean;
+  loginAvailable: boolean
 }
 
 export interface Broker {
-  nodeId: number;
-  host: string;
-  port: number;
-  rack: string | null;
-  isController: boolean;
+  nodeId: number
+  host: string
+  port: number
+  rack: string | null
+  isController: boolean
   /** `null` where the cluster does not implement DescribeCluster: unknown, not false. */
-  isFenced: boolean | null;
-  leaderPartitionCount: number;
-  replicaPartitionCount: number;
+  isFenced: boolean | null
+  leaderPartitionCount: number
+  replicaPartitionCount: number
 }
 
 export interface ClusterDescription {
-  clusterId: string;
-  controllerId: number | null;
+  clusterId: string
+  controllerId: number | null
 }
 
 export interface ClusterDetail {
-  cluster: ClusterCard;
-  brokers: Broker[];
-  description: ClusterDescription | null;
+  cluster: ClusterCard
+  brokers: Broker[]
+  description: ClusterDescription | null
 }
 
 export type Feature =
@@ -190,142 +186,142 @@ export type Feature =
   | "transactions"
   | "producers"
   | "quorum"
-  | "messages";
+  | "messages"
 
 export type FeatureEntry =
   | { feature: Feature; state: "available" }
   | {
-      feature: Feature;
-      state: "unsupported";
-      api: string;
-      apiKey: number;
-      broker: [number, number] | null;
-      ours: [number, number] | null;
-    };
+      feature: Feature
+      state: "unsupported"
+      api: string
+      apiKey: number
+      broker: [number, number] | null
+      ours: [number, number] | null
+    }
 
 export interface ApiKeyEntry {
-  name: string;
-  key: number;
-  broker: [number, number] | null;
-  ours: [number, number] | null;
-  negotiated: number | null;
-  brokerAhead: boolean;
+  name: string
+  key: number
+  broker: [number, number] | null
+  ours: [number, number] | null
+  negotiated: number | null
+  brokerAhead: boolean
 }
 
 export interface Capabilities {
-  features: FeatureEntry[];
+  features: FeatureEntry[]
   /** Interim: the table is per connection, so the UI says which broker answered. */
-  source: { kind: "broker"; nodeId: number | null; peer: string };
-  apiKeys: ApiKeyEntry[];
-  brokerAheadCount: number;
+  source: { kind: "broker"; nodeId: number | null; peer: string }
+  apiKeys: ApiKeyEntry[]
+  brokerAheadCount: number
 }
 
 export interface TopicSummary {
-  name: string;
+  name: string
   /** Absent on a cluster that reports no topic ids — omit the column, do not show zeroes. */
-  topicId: string | null;
-  internal: boolean;
-  partitionCount: number;
-  replicationFactor: number;
-  offlinePartitionCount: number;
-  underReplicatedPartitionCount: number;
-  logicalBytes: number | null;
-  replicatedBytes: number | null;
+  topicId: string | null
+  internal: boolean
+  partitionCount: number
+  replicationFactor: number
+  offlinePartitionCount: number
+  underReplicatedPartitionCount: number
+  logicalBytes: number | null
+  replicatedBytes: number | null
 }
 
 export interface Partition {
-  partition: number;
-  leader: number | null;
-  leaderEpoch: number;
-  replicas: number[];
-  isr: number[];
-  offlineReplicas: number[];
-  underReplicated: boolean;
-  error: string | null;
-  earliestOffset: number | null;
-  latestOffset: number | null;
+  partition: number
+  leader: number | null
+  leaderEpoch: number
+  replicas: number[]
+  isr: number[]
+  offlineReplicas: number[]
+  underReplicated: boolean
+  error: string | null
+  earliestOffset: number | null
+  latestOffset: number | null
 }
 
 export interface TopicDetail {
-  name: string;
-  topicId: string | null;
-  internal: boolean;
-  partitions: Partition[];
-  brokerIds: number[];
+  name: string
+  topicId: string | null
+  internal: boolean
+  partitions: Partition[]
+  brokerIds: number[]
 }
 
 export interface ConfigEntry {
-  name: string;
-  value: string | null;
-  source: string;
-  isExplicit: boolean;
-  isSensitive: boolean;
-  readOnly: boolean;
-  documentation: string | null;
+  name: string
+  value: string | null
+  source: string
+  isExplicit: boolean
+  isSensitive: boolean
+  readOnly: boolean
+  documentation: string | null
 }
 
 export interface ConfigResourceEntry {
-  resource: string;
-  resourceType: string;
-  name: string;
-  entries: ConfigEntry[];
+  resource: string
+  resourceType: string
+  name: string
+  entries: ConfigEntry[]
 }
 
 export interface LogDirReplica {
-  topic: string;
-  partition: number;
-  sizeBytes: number;
-  offsetLag: number;
-  isFuture: boolean;
+  topic: string
+  partition: number
+  sizeBytes: number
+  offsetLag: number
+  isFuture: boolean
 }
 
 export interface LogDir {
-  path: string;
-  totalBytes: number | null;
-  usableBytes: number | null;
-  replicas: LogDirReplica[];
-  error: string | null;
+  path: string
+  totalBytes: number | null
+  usableBytes: number | null
+  replicas: LogDirReplica[]
+  error: string | null
 }
 
 export interface GroupSummary {
-  groupId: string;
-  state: string;
-  groupType: string;
-  protocolType: string;
-  describable: boolean;
+  groupId: string
+  state: string
+  groupType: string
+  protocolType: string
+  describable: boolean
 }
 
 export interface GroupMember {
-  memberId: string;
-  instanceId: string | null;
-  clientId: string;
-  clientHost: string;
-  rackId: string | null;
-  memberEpoch: number | null;
-  subscribedTopics: string[];
-  assignment: { topic: string; partitions: number[] }[];
+  memberId: string
+  instanceId: string | null
+  clientId: string
+  clientHost: string
+  rackId: string | null
+  memberEpoch: number | null
+  subscribedTopics: string[]
+  assignment: { topic: string; partitions: number[] }[]
 }
 
 /** Four kinds, not one struct with optional fields. */
 export type GroupDetail =
   | {
-      kind: "classic";
-      groupId: string;
-      state: string;
-      protocolType: string;
-      protocol: string;
-      members: GroupMember[];
+      kind: "classic"
+      groupId: string
+      state: string
+      protocolType: string
+      protocol: string
+      members: GroupMember[]
     }
   | {
-      kind: "consumer" | "share";
-      groupId: string;
-      state: string;
-      groupEpoch: number;
-      assignmentEpoch: number;
-      assignor: string;
-      members: GroupMember[];
+      kind: "consumer" | "share"
+      groupId: string
+      state: string
+      groupEpoch: number
+      assignmentEpoch: number
+      assignor: string
+      members: GroupMember[]
     }
-  | { kind: "unrecognized"; groupId: string; groupType: string; state: string };
+  | { kind: "unrecognized"; groupId: string; groupType: string; state: string }
 
 /** Four states, and they must not all render as `0`. */
 export type Lag =
@@ -333,58 +329,58 @@ export type Lag =
   | { state: "emptyPartition" }
   | { state: "caughtUp" }
   | { state: "lagging"; records: number }
-  | { state: "unknown" };
+  | { state: "unknown" }
 
 export interface GroupOffset {
-  topic: string;
-  partition: number;
-  committedOffset: number | null;
-  latestOffset: number | null;
-  metadata: string | null;
-  lag: Lag;
+  topic: string
+  partition: number
+  committedOffset: number | null
+  latestOffset: number | null
+  metadata: string | null
+  lag: Lag
 }
 
 export interface Payload {
-  encoding: "utf8" | "hex";
-  text: string;
-  bytes: number;
-  truncated: boolean;
+  encoding: "utf8" | "hex"
+  text: string
+  bytes: number
+  truncated: boolean
 }
 
 export interface Message {
-  partition: number;
-  offset: number;
-  timestamp: number;
-  timestampType: string;
-  key: Payload | null;
+  partition: number
+  offset: number
+  timestamp: number
+  timestampType: string
+  key: Payload | null
   /** `null` is a tombstone, which is not the same as an empty value. */
-  value: Payload | null;
-  headers: { name: string; value: Payload | null }[];
-  transactional: boolean;
-  sizeBytes: number;
+  value: Payload | null
+  headers: { name: string; value: Payload | null }[]
+  transactional: boolean
+  sizeBytes: number
 }
 
 export interface PartitionOffsets {
-  partition: number;
-  earliestOffset: number | null;
-  latestOffset: number | null;
-  records: number | null;
+  partition: number
+  earliestOffset: number | null
+  latestOffset: number | null
+  records: number | null
 }
 
 // --- the message stream ---------------------------------------------------
 
 /** A decoded record, previewed rather than whole. */
 export interface StreamRecord {
-  kind: "record";
-  partition: number;
-  offset: number;
+  kind: "record"
+  partition: number
+  offset: number
   /** Epoch milliseconds. */
-  timestamp: number;
-  timestampType: string;
-  key: Payload | null;
+  timestamp: number
+  timestampType: string
+  key: Payload | null
   /** `null` is a tombstone, which is not the same as an empty value. */
-  value: Payload | null;
-  transactional: boolean;
+  value: Payload | null
+  transactional: boolean
 }
 
 /**
@@ -394,14 +390,14 @@ export interface StreamRecord {
  * surfacing it is the entire reason that design exists.
  */
 export interface MalformedRow {
-  kind: "malformed";
-  partition: number;
-  offset: number;
-  lastOffset: number;
-  reason: string;
+  kind: "malformed"
+  partition: number
+  offset: number
+  lastOffset: number
+  reason: string
 }
 
-export type StreamRowData = StreamRecord | MalformedRow;
+export type StreamRowData = StreamRecord | MalformedRow
 
 /**
  * A row with the id everything keys on.
@@ -411,28 +407,28 @@ export type StreamRowData = StreamRecord | MalformedRow;
  * are all the same string, and computing it in four places is how they end up
  * disagreeing.
  */
-export type StreamRow = StreamRowData & { id: string };
+export type StreamRow = StreamRowData & { id: string }
 
-export type StreamPhase = "seeking" | "streaming" | "done";
+export type StreamPhase = "seeking" | "streaming" | "done"
 
 export interface StreamProgress {
   /** `null` for a live tail, which has no end to be a fraction of. */
-  fraction: number | null;
-  recordsEmitted: number;
-  recordsScanned: number;
-  malformedBatches: number;
-  partitionsActive: number;
-  orderingDegraded: boolean;
+  fraction: number | null
+  recordsEmitted: number
+  recordsScanned: number
+  malformedBatches: number
+  partitionsActive: number
+  orderingDegraded: boolean
   /** Roughly how far apart two partitions may be reordered. `0` means exact. */
-  reorderWindow: number;
+  reorderWindow: number
 }
 
 export interface ResolvedPartition {
-  partition: number;
+  partition: number
   /** `null` where the broker reported no offset at or after the instant. */
-  offset: number | null;
-  timestamp: number | null;
-  error: string | null;
+  offset: number | null
+  timestamp: number | null
+  error: string | null
 }
 
 /**
@@ -444,29 +440,29 @@ export interface ResolvedPartition {
  * rather than interpreted.
  */
 export interface ResolvedSeek {
-  timestamp: number;
-  partitions: ResolvedPartition[];
-  unresolved: boolean;
+  timestamp: number
+  partitions: ResolvedPartition[]
+  unresolved: boolean
 }
 
 /** One page of a window, for "load more". */
 export interface MessagePage {
-  items: StreamRowData[];
-  errors: ResourceError[];
-  hasMore: boolean;
-  nextOffset: number | null;
-  resolved?: ResolvedSeek;
+  items: StreamRowData[]
+  errors: ResourceError[]
+  hasMore: boolean
+  nextOffset: number | null
+  resolved?: ResolvedSeek
 }
 
 /** The full payload of one record. */
 export type MessageDetail =
   | ({ kind: "record" } & Message)
   | {
-      kind: "malformed";
-      partition: number;
-      offset: number;
-      lastOffset: number;
-      reason: string;
+      kind: "malformed"
+      partition: number
+      offset: number
+      lastOffset: number
+      reason: string
       /** The batch as it is on disk. */
-      raw: Payload;
-    };
+      raw: Payload
+    }

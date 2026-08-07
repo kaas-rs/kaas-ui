@@ -12,13 +12,13 @@
 // hides items with. Reading it here means the page cannot disagree with the
 // navigation, which a second source would eventually do.
 
-import { ShieldCheck } from "lucide-react";
-import type { ReactNode } from "react";
+import { ShieldCheck } from "lucide-react"
+import type { ReactNode } from "react"
 
-import { useClusters, useIdentity } from "@/api/client";
-import type { Action, ClusterCard, Resource } from "@/api/types";
-import { ClusterChip, Empty, Section, Spinner } from "@/components/domain";
-import { Badge } from "@/components/ui/badge";
+import { useClusters, useIdentity } from "@/api/client"
+import type { Action, ClusterCard, Resource } from "@/api/types"
+import { ClusterChip, Empty, Section, Spinner } from "@/components/domain"
+import { Badge } from "@/components/ui/badge"
 import {
   Table,
   TableBody,
@@ -26,16 +26,32 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from "@/components/ui/table";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { PageTitle } from "@/components/page-title";
+} from "@/components/ui/table"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
+import { PageTitle } from "@/components/page-title"
 
 /** The resources a row reports on, in the order the sidebar uses them. */
 const RESOURCES: { resource: Resource; label: string; what: string }[] = [
-  { resource: "cluster_config", label: "cluster", what: "brokers, configs, capabilities" },
-  { resource: "topic", label: "topics", what: "the topic list, and each topic's detail" },
-  { resource: "consumer", label: "groups", what: "consumer groups, offsets and lag" },
-];
+  {
+    resource: "cluster_config",
+    label: "cluster",
+    what: "brokers, configs, capabilities",
+  },
+  {
+    resource: "topic",
+    label: "topics",
+    what: "the topic list, and each topic's detail",
+  },
+  {
+    resource: "consumer",
+    label: "groups",
+    what: "consumer groups, offsets and lag",
+  },
+]
 
 /**
  * One cell of the access table.
@@ -47,9 +63,9 @@ const RESOURCES: { resource: Resource; label: string; what: string }[] = [
  */
 function Grant({ actions }: { actions: Action[] | undefined }) {
   if (!actions || actions.length === 0) {
-    return <span className="text-ink-faint">—</span>;
+    return <span className="text-ink-faint">—</span>
   }
-  const payloads = actions.includes("messages_read");
+  const payloads = actions.includes("messages_read")
   return (
     <span className="inline-flex items-center gap-1.5">
       <span className="text-ok text-[13px] font-medium">view</span>
@@ -66,7 +82,7 @@ function Grant({ actions }: { actions: Action[] | undefined }) {
         </Tooltip>
       ) : null}
     </span>
-  );
+  )
 }
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
@@ -75,22 +91,25 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
       <span className="text-ink-muted shrink-0 text-[13px]">{label}</span>
       <span className="min-w-0 text-right text-[13px]">{children}</span>
     </div>
-  );
+  )
 }
 
 export function Account() {
-  const identity = useIdentity();
-  const clusters = useClusters();
+  const identity = useIdentity()
+  const clusters = useClusters()
 
-  if (identity.isLoading) return <Spinner label="reading your identity" />;
-  const me = identity.data;
-  if (!me) return <Empty>the server did not say who you are</Empty>;
+  if (identity.isLoading) return <Spinner label="reading your identity" />
+  const me = identity.data
+  if (!me) return <Empty>the server did not say who you are</Empty>
 
-  const cards: ClusterCard[] = clusters.data?.items ?? [];
+  const cards: ClusterCard[] = clusters.data?.items ?? []
 
   return (
     <div className="max-w-3xl">
-      <PageTitle title="Account" subtitle="Who this session is, and what it reaches." />
+      <PageTitle
+        title="Account"
+        subtitle="Who this session is, and what it reaches."
+      />
 
       <Section title="Identity">
         <div className="rounded-md border px-4 py-1">
@@ -104,14 +123,19 @@ export function Account() {
           <Row label="subject">
             {/* The claim a role's `subjects` is matched against — so this is
                 the string to quote when asking someone for access. */}
-            <span className="font-mono text-[12px] break-all">{me.subject}</span>
+            <span className="font-mono text-[12px] break-all">
+              {me.subject}
+            </span>
           </Row>
           <Row label="signed in">
             {me.authenticated ? (
               <span className="text-ok font-medium">yes</span>
             ) : (
               <span className="text-ink-muted">
-                no{me.loginAvailable ? "" : " — this deployment has no identity provider"}
+                no
+                {me.loginAvailable
+                  ? ""
+                  : " — this deployment has no identity provider"}
               </span>
             )}
           </Row>
@@ -139,13 +163,13 @@ export function Account() {
           </div>
         ) : me.enforcing ? (
           <Empty>
-            No role covers this caller, so no cluster is visible. A role is matched on
-            the subject, login or email above.
+            No role covers this caller, so no cluster is visible. A role is
+            matched on the subject, login or email above.
           </Empty>
         ) : (
           <Empty>
-            No roles are configured, so nothing is restricted — everything is visible
-            to everyone who can reach this server.
+            No roles are configured, so nothing is restricted — everything is
+            visible to everyone who can reach this server.
           </Empty>
         )}
       </Section>
@@ -157,14 +181,15 @@ export function Account() {
           <Empty>
             No cluster is visible to this caller. A cluster nobody may see is a{" "}
             <code className="font-mono">404</code>, not a{" "}
-            <code className="font-mono">403</code>, so this list being empty is the
-            same answer as the fleet being empty.
+            <code className="font-mono">403</code>, so this list being empty is
+            the same answer as the fleet being empty.
           </Empty>
         ) : (
           <>
             <p className="text-ink-muted mb-3 text-[13px]">
-              What these roles reach, per cluster. This is the applied answer — the
-              same grants the sidebar hides items with — not the policy as written.
+              What these roles reach, per cluster. This is the applied answer —
+              the same grants the sidebar hides items with — not the policy as
+              written.
             </p>
             <div className="overflow-x-auto rounded-md border">
               <Table>
@@ -175,7 +200,9 @@ export function Account() {
                       <TableHead key={entry.resource}>
                         <Tooltip>
                           <TooltipTrigger asChild>
-                            <span className="cursor-default">{entry.label}</span>
+                            <span className="cursor-default">
+                              {entry.label}
+                            </span>
                           </TooltipTrigger>
                           <TooltipContent>{entry.what}</TooltipContent>
                         </Tooltip>
@@ -203,5 +230,5 @@ export function Account() {
         )}
       </Section>
     </div>
-  );
+  )
 }

@@ -6,15 +6,15 @@
 // expires, which means it fires in the middle of reading a topic and returns
 // you to the fleet with no idea why. A button is a place to stand.
 
-import { Button } from "@/components/ui/button";
+import { Button } from "@/components/ui/button"
 import {
   Card,
   CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
-} from "@/components/ui/card";
-import { withBase } from "@/api/base";
+} from "@/components/ui/card"
+import { withBase } from "@/api/base"
 
 /**
  * GitHub's mark, inline.
@@ -31,7 +31,7 @@ function GithubMark() {
         fill="currentColor"
       />
     </svg>
-  );
+  )
 }
 
 export function SignIn({ enforcing }: { enforcing: boolean }) {
@@ -75,8 +75,8 @@ export function SignIn({ enforcing }: { enforcing: boolean }) {
               // with no roles configured authenticates people and grants them
               // nothing extra, because everything was already visible.
               <p className="text-ink-faint text-center text-[12px]">
-                This deployment has no roles configured, so signing in changes nothing
-                about what is visible — it only records who is looking.
+                This deployment has no roles configured, so signing in changes
+                nothing about what is visible — it only records who is looking.
               </p>
             )}
           </CardContent>
@@ -85,10 +85,10 @@ export function SignIn({ enforcing }: { enforcing: boolean }) {
         {/* Where a template would put terms nobody reads, the one property
             worth knowing before you sign in. */}
         <p className="text-ink-faint px-6 text-center text-[12px]">
-          kaas-ui is <strong className="font-medium">read-only</strong>. It can describe
-          every cluster in this fleet and change none of them.
+          kaas-ui is <strong className="font-medium">read-only</strong>. It can
+          describe every cluster in this fleet and change none of them.
         </p>
       </div>
     </div>
-  );
+  )
 }

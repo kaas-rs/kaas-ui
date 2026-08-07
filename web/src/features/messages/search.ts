@@ -14,12 +14,12 @@
 // link to a seeked view that lands on the partitions table is not a link to
 // that view.
 
-import type { SearchSchemaInput } from "@tanstack/react-router";
-import { z } from "zod";
+import type { SearchSchemaInput } from "@tanstack/react-router"
+import { z } from "zod"
 
-import { DEFAULT_SEEK_MODE, SEEK_MODE_NAMES, type SeekMode } from "./seek-modes";
+import { DEFAULT_SEEK_MODE, SEEK_MODE_NAMES, type SeekMode } from "./seek-modes"
 
-const modes = SEEK_MODE_NAMES as [SeekMode, ...SeekMode[]];
+const modes = SEEK_MODE_NAMES as [SeekMode, ...SeekMode[]]
 
 const fields = z.object({
   mode: z.enum(modes).default(DEFAULT_SEEK_MODE),
@@ -33,9 +33,9 @@ const fields = z.object({
   limit: z.coerce.number().int().positive().max(10_000).optional(),
   /** `{partition}-{offset}` — the same id everything else keys on. */
   selected: z.string().optional(),
-});
+})
 
-type Fields = z.infer<typeof fields>;
+type Fields = z.infer<typeof fields>
 
 /**
  * A seek mode without its parameter is not a view, and rendering one anyway
@@ -44,20 +44,20 @@ type Fields = z.infer<typeof fields>;
  * a validation screen for a link someone was sent.
  */
 function usable(search: Fields): Fields {
-  const needsOffset = search.mode === "fromOffset" || search.mode === "toOffset";
-  const needsTime = search.mode === "sinceTime" || search.mode === "toTime";
+  const needsOffset = search.mode === "fromOffset" || search.mode === "toOffset"
+  const needsTime = search.mode === "sinceTime" || search.mode === "toTime"
   if (needsOffset && search.offset === undefined) {
-    return { ...search, mode: DEFAULT_SEEK_MODE };
+    return { ...search, mode: DEFAULT_SEEK_MODE }
   }
   if (needsTime && search.timestamp === undefined) {
-    return { ...search, mode: DEFAULT_SEEK_MODE };
+    return { ...search, mode: DEFAULT_SEEK_MODE }
   }
-  return search;
+  return search
 }
 
-export const messageSearch = fields.transform(usable);
+export const messageSearch = fields.transform(usable)
 
-export type MessageSearch = Fields;
+export type MessageSearch = Fields
 
 /**
  * The topic page's tabs. In the URL, so a shared link opens the right one.
@@ -68,18 +68,18 @@ export type MessageSearch = Fields;
  * placement is — so links shared while it was its own tab still open on the
  * view they were pointing at.
  */
-export const TOPIC_TABS = ["partitions", "configs", "messages"] as const;
+export const TOPIC_TABS = ["partitions", "configs", "messages"] as const
 
-export type TopicTab = (typeof TOPIC_TABS)[number];
+export type TopicTab = (typeof TOPIC_TABS)[number]
 
 export const topicSearch = fields
   // `.catch` rather than `.default`: it covers a missing tab *and* a nonsense
   // one. A tab is a thing people hand-edit, and `?tab=message` landing on an
   // error boundary rather than on the topic would be a poor reward for it.
   .extend({ tab: z.enum(TOPIC_TABS).catch("partitions") })
-  .transform((search) => ({ ...usable(search), tab: search.tab }));
+  .transform((search) => ({ ...usable(search), tab: search.tab }))
 
-export type TopicSearch = Fields & { tab: TopicTab };
+export type TopicSearch = Fields & { tab: TopicTab }
 
 /**
  * What a `<Link>` to the topic page may pass.
@@ -89,11 +89,11 @@ export type TopicSearch = Fields & { tab: TopicTab };
  * that: without it, `validateSearch` is read as taking what it returns, and
  * every link to a topic in the app is then made to state a seek mode.
  */
-export type TopicSearchInput = Partial<TopicSearch> & SearchSchemaInput;
+export type TopicSearchInput = Partial<TopicSearch> & SearchSchemaInput
 
 /** TanStack Router's `validateSearch` for the topic route. */
 export function topicSearchSchema(input: TopicSearchInput): TopicSearch {
-  return topicSearch.parse(input);
+  return topicSearch.parse(input)
 }
 
 /**
@@ -103,7 +103,7 @@ export function topicSearchSchema(input: TopicSearchInput): TopicSearch {
  * arriving on exactly the view it named.
  */
 export function messageSearchSchema(
-  input: Partial<MessageSearch> & SearchSchemaInput,
+  input: Partial<MessageSearch> & SearchSchemaInput
 ): MessageSearch {
-  return messageSearch.parse(input);
+  return messageSearch.parse(input)
 }

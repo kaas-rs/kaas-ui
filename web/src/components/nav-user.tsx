@@ -18,12 +18,18 @@
 //     that disappears leaves "who am I" unanswerable exactly when it is
 //     least obvious.
 
-import { BadgeCheck, ChevronsUpDown, LogIn, LogOut, Settings } from "lucide-react";
-import { useRef } from "react";
-import { Link } from "@tanstack/react-router";
+import {
+  BadgeCheck,
+  ChevronsUpDown,
+  LogIn,
+  LogOut,
+  Settings,
+} from "lucide-react"
+import { useRef } from "react"
+import { Link } from "@tanstack/react-router"
 
-import { withBase } from "@/api/base";
-import type { Identity } from "@/api/types";
+import { withBase } from "@/api/base"
+import type { Identity } from "@/api/types"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -32,19 +38,19 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+} from "@/components/ui/dropdown-menu"
 import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
   useSidebar,
-} from "@/components/ui/sidebar";
+} from "@/components/ui/sidebar"
 
 /** Up to two letters, from a display name that may be one word or three. */
 function initials(name: string): string {
-  const parts = name.split(/[\s._-]+/).filter(Boolean);
-  const letters = parts.slice(0, 2).map((part) => part[0] ?? "");
-  return (letters.join("") || name.slice(0, 2) || "?").toUpperCase();
+  const parts = name.split(/[\s._-]+/).filter(Boolean)
+  const letters = parts.slice(0, 2).map((part) => part[0] ?? "")
+  return (letters.join("") || name.slice(0, 2) || "?").toUpperCase()
 }
 
 /**
@@ -55,9 +61,12 @@ function initials(name: string): string {
  * granted" look like "signed in".
  */
 function subtitle(me: Identity): string {
-  if (!me.authenticated) return me.loginAvailable ? "not signed in" : "no identity provider";
-  if (me.roles.length > 0) return me.roles.join(", ");
-  return me.enforcing ? "no roles — nothing is visible" : "roles are not enforced";
+  if (!me.authenticated)
+    return me.loginAvailable ? "not signed in" : "no identity provider"
+  if (me.roles.length > 0) return me.roles.join(", ")
+  return me.enforcing
+    ? "no roles — nothing is visible"
+    : "roles are not enforced"
 }
 
 function Face({ name }: { name: string }) {
@@ -68,23 +77,27 @@ function Face({ name }: { name: string }) {
     >
       {initials(name)}
     </div>
-  );
+  )
 }
 
 export function NavUser({ identity }: { identity: Identity }) {
-  const { isMobile } = useSidebar();
+  const { isMobile } = useSidebar()
   // Logout is a POST so that a page elsewhere cannot sign somebody out by
   // being loaded. A menu item is a button, not a form, so the form lives
   // beside the menu and the item submits it — the property survives the
   // change of clothes.
-  const signOut = useRef<HTMLFormElement>(null);
+  const signOut = useRef<HTMLFormElement>(null)
 
-  const name = identity.authenticated ? identity.displayName : "anonymous";
-  const under = subtitle(identity);
+  const name = identity.authenticated ? identity.displayName : "anonymous"
+  const under = subtitle(identity)
 
   return (
     <SidebarMenu>
       <SidebarMenuItem>
+        {/* Kept on one line: `cargo xtask ci` proves logout is a POST by
+            grepping for `action` and `method="post"` together, and Prettier
+            would otherwise wrap this at 80 columns and defeat the check. */}
+        {/* prettier-ignore */}
         <form ref={signOut} method="post" action={withBase("/auth/logout")} hidden />
 
         <DropdownMenu>
@@ -114,7 +127,9 @@ export function NavUser({ identity }: { identity: Identity }) {
                 <Face name={name} />
                 <div className="grid flex-1 text-left text-sm leading-tight">
                   <span className="truncate font-medium">{name}</span>
-                  <span className="text-ink-muted truncate text-xs">{under}</span>
+                  <span className="text-ink-muted truncate text-xs">
+                    {under}
+                  </span>
                 </div>
               </div>
             </DropdownMenuLabel>
@@ -163,8 +178,8 @@ export function NavUser({ identity }: { identity: Identity }) {
                 className="focus:bg-transparent"
               >
                 <span className="text-ink-muted text-[12px]">
-                  This deployment has no identity provider, so every caller is this
-                  one.
+                  This deployment has no identity provider, so every caller is
+                  this one.
                 </span>
               </DropdownMenuItem>
             )}
@@ -172,5 +187,5 @@ export function NavUser({ identity }: { identity: Identity }) {
         </DropdownMenu>
       </SidebarMenuItem>
     </SidebarMenu>
-  );
+  )
 }

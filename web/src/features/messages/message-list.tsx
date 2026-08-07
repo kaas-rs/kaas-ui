@@ -11,16 +11,16 @@
 // visibly jumps. If a requirement ever seems to need variable rows, raise it
 // rather than adding `measureElement`.
 
-import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
-import { useVirtualizer } from "@tanstack/react-virtual";
-import { AlertTriangle } from "lucide-react";
+import { useCallback, useEffect, useLayoutEffect, useRef } from "react"
+import { useVirtualizer } from "@tanstack/react-virtual"
+import { AlertTriangle } from "lucide-react"
 
-import type { StreamRow } from "@/api/types";
-import { cn } from "@/lib/utils";
-import { insertsAtTop, type SeekMode } from "./seek-modes";
+import type { StreamRow } from "@/api/types"
+import { cn } from "@/lib/utils"
+import { insertsAtTop, type SeekMode } from "./seek-modes"
 
 /** Declared once, shared by the CSS and the virtualizer. */
-export const ROW_HEIGHT = 36;
+export const ROW_HEIGHT = 36
 
 /**
  * The five columns, shared by the header and every row.
@@ -35,19 +35,19 @@ export const ROW_HEIGHT = 36;
  * The three fixed ones are what their content actually needs: thirteen digits
  * of offset, three of partition, and `14:35:12.553`.
  */
-const COLUMNS = "96px 56px 150px minmax(0, 1fr) minmax(0, 2.2fr)";
+const COLUMNS = "96px 56px 150px minmax(0, 1fr) minmax(0, 2.2fr)"
 
 export interface MessageListProps {
-  rows: StreamRow[];
-  mode: SeekMode;
-  selectedId?: string;
-  onSelect(id: string): void;
+  rows: StreamRow[]
+  mode: SeekMode
+  selectedId?: string
+  onSelect(id: string): void
   /** Told whether the reader is parked where new rows arrive. */
-  onEdgeChange(atEdge: boolean): void;
+  onEdgeChange(atEdge: boolean): void
   /** How many rows arrived while they were scrolled away from that edge. */
-  unseen: number;
+  unseen: number
   /** Rendered after the last row when the window is exhausted. */
-  terminal?: React.ReactNode;
+  terminal?: React.ReactNode
 }
 
 export function MessageList({
@@ -59,7 +59,7 @@ export function MessageList({
   unseen,
   terminal,
 }: MessageListProps) {
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null)
 
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -70,13 +70,19 @@ export function MessageList({
     // most expensive thing React can be asked to do.
     getItemKey: (index) => rows[index]?.id ?? index,
     overscan: 8,
-  });
+  })
 
-  useScrollCompensation(scrollRef, rows.length, mode);
-  useEdgeReporting(scrollRef, mode, onEdgeChange);
-  useKeyboardSelection(scrollRef, rows, selectedId, onSelect, virtualizer.scrollToIndex);
+  useScrollCompensation(scrollRef, rows.length, mode)
+  useEdgeReporting(scrollRef, mode, onEdgeChange)
+  useKeyboardSelection(
+    scrollRef,
+    rows,
+    selectedId,
+    onSelect,
+    virtualizer.scrollToIndex
+  )
 
-  const items = virtualizer.getVirtualItems();
+  const items = virtualizer.getVirtualItems()
 
   return (
     <div
@@ -108,8 +114,8 @@ export function MessageList({
         count={unseen}
         mode={mode}
         onJump={() => {
-          const element = scrollRef.current;
-          if (element) element.scrollTop = 0;
+          const element = scrollRef.current
+          if (element) element.scrollTop = 0
         }}
       />
 
@@ -119,11 +125,15 @@ export function MessageList({
         className="relative min-h-0 flex-1 overflow-y-auto overflow-x-hidden outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
       >
         <div
-          style={{ height: virtualizer.getTotalSize(), position: "relative", width: "100%" }}
+          style={{
+            height: virtualizer.getTotalSize(),
+            position: "relative",
+            width: "100%",
+          }}
         >
           {items.map((item) => {
-            const row = rows[item.index];
-            if (!row) return null;
+            const row = rows[item.index]
+            if (!row) return null
             return (
               <Row
                 key={item.key}
@@ -133,13 +143,13 @@ export function MessageList({
                 selected={row.id === selectedId}
                 onSelect={onSelect}
               />
-            );
+            )
           })}
         </div>
         {terminal}
       </div>
     </div>
-  );
+  )
 }
 
 /**
@@ -154,11 +164,11 @@ function NewMessagesPill({
   mode,
   onJump,
 }: {
-  count: number;
-  mode: SeekMode;
-  onJump(): void;
+  count: number
+  mode: SeekMode
+  onJump(): void
 }) {
-  if (count <= 0 || !insertsAtTop(mode)) return null;
+  if (count <= 0 || !insertsAtTop(mode)) return null
   return (
     <button
       type="button"
@@ -167,7 +177,7 @@ function NewMessagesPill({
     >
       {count.toLocaleString()} new message{count === 1 ? "" : "s"}
     </button>
-  );
+  )
 }
 
 function Row({
@@ -177,11 +187,11 @@ function Row({
   selected,
   onSelect,
 }: {
-  row: StreamRow;
-  rowIndex: number;
-  top: number;
-  selected: boolean;
-  onSelect(id: string): void;
+  row: StreamRow
+  rowIndex: number
+  top: number
+  selected: boolean
+  onSelect(id: string): void
 }) {
   const common = {
     role: "row" as const,
@@ -196,7 +206,7 @@ function Row({
       height: ROW_HEIGHT,
       transform: `translateY(${top}px)`,
     },
-  };
+  }
 
   if (row.kind === "malformed") {
     // The same height and the same grid, with the cells replaced by one
@@ -207,17 +217,18 @@ function Row({
         {...common}
         className={cn(
           "flex cursor-pointer items-center gap-2 border-b border-line/60 bg-warn-soft/50 px-4 text-xs text-warn-ink",
-          selected && "bg-rust/25",
+          selected && "bg-rust/25"
         )}
       >
         <AlertTriangle className="size-3.5 shrink-0" aria-hidden />
         <span role="gridcell" className="truncate">
-          offsets {row.offset.toLocaleString()}–{row.lastOffset.toLocaleString()} did not decode
+          offsets {row.offset.toLocaleString()}–
+          {row.lastOffset.toLocaleString()} did not decode
           {" — "}
           {row.reason}
         </span>
       </div>
-    );
+    )
   }
 
   return (
@@ -225,7 +236,7 @@ function Row({
       {...common}
       className={cn(
         "grid cursor-pointer items-center gap-3 border-b border-line/60 px-4 text-xs hover:bg-surface-raised",
-        selected && "bg-rust/25",
+        selected && "bg-rust/25"
       )}
       style={{ ...common.style, gridTemplateColumns: "var(--message-columns)" }}
     >
@@ -238,10 +249,16 @@ function Row({
       <span role="gridcell" className="font-mono text-[11px] text-ink-muted">
         {formatTimestamp(row.timestamp)}
       </span>
-      <span role="gridcell" className="truncate font-mono text-[11px] text-ink-muted">
+      <span
+        role="gridcell"
+        className="truncate font-mono text-[11px] text-ink-muted"
+      >
         {row.key ? row.key.text : <span className="text-ink-faint">—</span>}
       </span>
-      <span role="gridcell" className="truncate font-mono text-[11px] text-ink-muted">
+      <span
+        role="gridcell"
+        className="truncate font-mono text-[11px] text-ink-muted"
+      >
         {row.value === null ? (
           // A tombstone is not an empty value, and compaction turns on the
           // difference. Rendering both as blank loses the only thing worth
@@ -252,12 +269,12 @@ function Row({
         )}
       </span>
     </div>
-  );
+  )
 }
 
 function formatTimestamp(ms: number): string {
-  const date = new Date(ms);
-  return `${date.toLocaleTimeString("en-GB")}.${String(date.getMilliseconds()).padStart(3, "0")}`;
+  const date = new Date(ms)
+  return `${date.toLocaleTimeString("en-GB")}.${String(date.getMilliseconds()).padStart(3, "0")}`
 }
 
 /**
@@ -275,46 +292,46 @@ function formatTimestamp(ms: number): string {
 function useScrollCompensation(
   scrollRef: React.RefObject<HTMLDivElement | null>,
   count: number,
-  mode: SeekMode,
+  mode: SeekMode
 ) {
-  const previous = useRef(count);
-  const prepends = insertsAtTop(mode);
+  const previous = useRef(count)
+  const prepends = insertsAtTop(mode)
 
   useLayoutEffect(() => {
-    const element = scrollRef.current;
-    const added = count - previous.current;
-    previous.current = count;
-    if (!element || !prepends || added <= 0) return;
+    const element = scrollRef.current
+    const added = count - previous.current
+    previous.current = count
+    if (!element || !prepends || added <= 0) return
     // Parked at the top, the reader wants to follow the stream, so the
     // viewport should stay where it is and let new rows push in.
-    if (element.scrollTop > 8) element.scrollTop += added * ROW_HEIGHT;
-  }, [count, prepends, scrollRef]);
+    if (element.scrollTop > 8) element.scrollTop += added * ROW_HEIGHT
+  }, [count, prepends, scrollRef])
 }
 
 /** Report whether the reader is parked at the end rows arrive at. */
 function useEdgeReporting(
   scrollRef: React.RefObject<HTMLDivElement | null>,
   mode: SeekMode,
-  onEdgeChange: (atEdge: boolean) => void,
+  onEdgeChange: (atEdge: boolean) => void
 ) {
-  const prepends = insertsAtTop(mode);
+  const prepends = insertsAtTop(mode)
 
   const check = useCallback(() => {
-    const element = scrollRef.current;
-    if (!element) return;
+    const element = scrollRef.current
+    if (!element) return
     const atEdge = prepends
       ? element.scrollTop <= 8
-      : element.scrollHeight - element.scrollTop - element.clientHeight <= 8;
-    onEdgeChange(atEdge);
-  }, [onEdgeChange, prepends, scrollRef]);
+      : element.scrollHeight - element.scrollTop - element.clientHeight <= 8
+    onEdgeChange(atEdge)
+  }, [onEdgeChange, prepends, scrollRef])
 
   useEffect(() => {
-    const element = scrollRef.current;
-    if (!element) return;
-    check();
-    element.addEventListener("scroll", check, { passive: true });
-    return () => element.removeEventListener("scroll", check);
-  }, [check, scrollRef]);
+    const element = scrollRef.current
+    if (!element) return
+    check()
+    element.addEventListener("scroll", check, { passive: true })
+    return () => element.removeEventListener("scroll", check)
+  }, [check, scrollRef])
 }
 
 /** `j`/`k` and the arrows move the selection; the list keeps focus. */
@@ -323,29 +340,34 @@ function useKeyboardSelection(
   rows: StreamRow[],
   selectedId: string | undefined,
   onSelect: (id: string) => void,
-  scrollToIndex: (index: number, options?: { align?: "auto" | "start" | "center" | "end" }) => void,
+  scrollToIndex: (
+    index: number,
+    options?: { align?: "auto" | "start" | "center" | "end" }
+  ) => void
 ) {
   useEffect(() => {
-    const element = scrollRef.current;
-    if (!element) return;
+    const element = scrollRef.current
+    if (!element) return
 
     function onKeyDown(event: KeyboardEvent) {
-      let delta = 0;
-      if (event.key === "j" || event.key === "ArrowDown") delta = 1;
-      else if (event.key === "k" || event.key === "ArrowUp") delta = -1;
-      else return;
+      let delta = 0
+      if (event.key === "j" || event.key === "ArrowDown") delta = 1
+      else if (event.key === "k" || event.key === "ArrowUp") delta = -1
+      else return
 
-      event.preventDefault();
-      if (!rows.length) return;
-      const current = selectedId ? rows.findIndex((row) => row.id === selectedId) : -1;
-      const next = Math.min(rows.length - 1, Math.max(0, current + delta));
-      const row = rows[next];
-      if (!row) return;
-      onSelect(row.id);
-      scrollToIndex(next, { align: "auto" });
+      event.preventDefault()
+      if (!rows.length) return
+      const current = selectedId
+        ? rows.findIndex((row) => row.id === selectedId)
+        : -1
+      const next = Math.min(rows.length - 1, Math.max(0, current + delta))
+      const row = rows[next]
+      if (!row) return
+      onSelect(row.id)
+      scrollToIndex(next, { align: "auto" })
     }
 
-    element.addEventListener("keydown", onKeyDown);
-    return () => element.removeEventListener("keydown", onKeyDown);
-  }, [rows, selectedId, onSelect, scrollToIndex, scrollRef]);
+    element.addEventListener("keydown", onKeyDown)
+    return () => element.removeEventListener("keydown", onKeyDown)
+  }, [rows, selectedId, onSelect, scrollToIndex, scrollRef])
 }

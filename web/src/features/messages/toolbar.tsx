@@ -1,13 +1,13 @@
 // The toolbar. Driven entirely by SEEK_MODES — no component below here asks
 // which mode is selected.
 
-import { useEffect, useState } from "react";
-import { RotateCw } from "lucide-react";
+import { useEffect, useState } from "react"
+import { RotateCw } from "lucide-react"
 
-import type { PartitionOffsets } from "@/api/types";
-import { Button } from "@/components/ui/button";
-import { DateTimePicker } from "@/components/date-time-picker";
-import { Input } from "@/components/ui/input";
+import type { PartitionOffsets } from "@/api/types"
+import { Button } from "@/components/ui/button"
+import { DateTimePicker } from "@/components/date-time-picker"
+import { Input } from "@/components/ui/input"
 import {
   Select,
   SelectContent,
@@ -16,27 +16,27 @@ import {
   SelectLabel,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select";
-import { SEEK_GROUPS, SEEK_MODES, type SeekMode } from "./seek-modes";
+} from "@/components/ui/select"
+import { SEEK_GROUPS, SEEK_MODES, type SeekMode } from "./seek-modes"
 
 export interface ToolbarProps {
-  mode: SeekMode;
-  offset?: number;
-  timestamp?: number;
-  filter?: string;
-  partitions?: string;
-  visibility: "all" | "committed";
+  mode: SeekMode
+  offset?: number
+  timestamp?: number
+  filter?: string
+  partitions?: string
+  visibility: "all" | "committed"
   /** Both ends of every partition, for clamping. */
-  bounds: PartitionOffsets[];
+  bounds: PartitionOffsets[]
   /** The oldest record the topic still holds, bounding the calendar. */
-  retentionStart?: Date;
+  retentionStart?: Date
   /** The zone the app displays times in. */
-  timeZone: string;
-  onApply(next: { mode: SeekMode; offset?: number; timestamp?: number }): void;
-  onFilterChange(filter: string | undefined): void;
-  onPartitionsChange(partitions: string | undefined): void;
-  onVisibilityChange(visibility: "all" | "committed"): void;
-  onRestart(): void;
+  timeZone: string
+  onApply(next: { mode: SeekMode; offset?: number; timestamp?: number }): void
+  onFilterChange(filter: string | undefined): void
+  onPartitionsChange(partitions: string | undefined): void
+  onVisibilityChange(visibility: "all" | "committed"): void
+  onRestart(): void
 }
 
 export function Toolbar({
@@ -55,51 +55,64 @@ export function Toolbar({
   onVisibilityChange,
   onRestart,
 }: ToolbarProps) {
-  const config = SEEK_MODES[mode];
+  const config = SEEK_MODES[mode]
 
   // Held locally until Apply, so typing an offset does not tear down and
   // reopen the stream on every keystroke.
-  const [draftMode, setDraftMode] = useState<SeekMode>(mode);
-  const [draftOffset, setDraftOffset] = useState<string>(offset?.toString() ?? "");
+  const [draftMode, setDraftMode] = useState<SeekMode>(mode)
+  const [draftOffset, setDraftOffset] = useState<string>(
+    offset?.toString() ?? ""
+  )
   const [draftInstant, setDraftInstant] = useState<Date | undefined>(
-    timestamp !== undefined ? new Date(timestamp) : undefined,
-  );
-  const [draftFilter, setDraftFilter] = useState(filter ?? "");
+    timestamp !== undefined ? new Date(timestamp) : undefined
+  )
+  const [draftFilter, setDraftFilter] = useState(filter ?? "")
 
-  useEffect(() => setDraftMode(mode), [mode]);
-  useEffect(() => setDraftOffset(offset?.toString() ?? ""), [offset]);
+  useEffect(() => setDraftMode(mode), [mode])
+  useEffect(() => setDraftOffset(offset?.toString() ?? ""), [offset])
   useEffect(
-    () => setDraftInstant(timestamp !== undefined ? new Date(timestamp) : undefined),
-    [timestamp],
-  );
-  useEffect(() => setDraftFilter(filter ?? ""), [filter]);
+    () =>
+      setDraftInstant(
+        timestamp !== undefined ? new Date(timestamp) : undefined
+      ),
+    [timestamp]
+  )
+  useEffect(() => setDraftFilter(filter ?? ""), [filter])
 
-  const draftConfig = SEEK_MODES[draftMode];
+  const draftConfig = SEEK_MODES[draftMode]
 
   // Partitions that failed leave the control unclamped rather than blocking
   // it: a partition mid-election must not stop someone seeking in the fifteen
   // that are fine.
-  const earliest = min(bounds.map((partition) => partition.earliestOffset));
-  const latest = max(bounds.map((partition) => partition.latestOffset));
+  const earliest = min(bounds.map((partition) => partition.earliestOffset))
+  const latest = max(bounds.map((partition) => partition.latestOffset))
 
   function apply() {
-    const parsedOffset = draftOffset.trim() === "" ? undefined : Number(draftOffset);
+    const parsedOffset =
+      draftOffset.trim() === "" ? undefined : Number(draftOffset)
     onApply({
       mode: draftMode,
       offset:
-        draftConfig.input === "offset" && Number.isFinite(parsedOffset) ? parsedOffset : undefined,
+        draftConfig.input === "offset" && Number.isFinite(parsedOffset)
+          ? parsedOffset
+          : undefined,
       timestamp:
-        draftConfig.input === "datetime" && draftInstant ? draftInstant.getTime() : undefined,
-    });
+        draftConfig.input === "datetime" && draftInstant
+          ? draftInstant.getTime()
+          : undefined,
+    })
   }
 
   const incomplete =
     (draftConfig.input === "offset" && draftOffset.trim() === "") ||
-    (draftConfig.input === "datetime" && !draftInstant);
+    (draftConfig.input === "datetime" && !draftInstant)
 
   return (
     <div className="flex flex-wrap items-center gap-2 border-b border-line px-4 py-2">
-      <Select value={draftMode} onValueChange={(value) => setDraftMode(value as SeekMode)}>
+      <Select
+        value={draftMode}
+        onValueChange={(value) => setDraftMode(value as SeekMode)}
+      >
         <SelectTrigger className="w-[150px]" aria-label="Seek mode">
           <SelectValue />
         </SelectTrigger>
@@ -107,7 +120,12 @@ export function Toolbar({
           {SEEK_GROUPS.map((group) => (
             <SelectGroup key={group}>
               <SelectLabel>{group}</SelectLabel>
-              {(Object.entries(SEEK_MODES) as [SeekMode, (typeof SEEK_MODES)[SeekMode]][])
+              {(
+                Object.entries(SEEK_MODES) as [
+                  SeekMode,
+                  (typeof SEEK_MODES)[SeekMode],
+                ][]
+              )
                 .filter(([, entry]) => entry.group === group)
                 .map(([key, entry]) => (
                   <SelectItem key={key} value={key}>
@@ -128,11 +146,15 @@ export function Toolbar({
           max={latest ?? undefined}
           onChange={(event) => setDraftOffset(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === "Enter" && !incomplete) apply();
+            if (event.key === "Enter" && !incomplete) apply()
           }}
           className="w-[150px] tabular-nums"
           aria-label="Offset"
-          placeholder={earliest !== null && latest !== null ? `${earliest}–${latest}` : "offset"}
+          placeholder={
+            earliest !== null && latest !== null
+              ? `${earliest}–${latest}`
+              : "offset"
+          }
         />
       ) : null}
 
@@ -156,7 +178,9 @@ export function Toolbar({
         <Button onClick={apply}>Apply</Button>
       ) : null}
 
-      <span className="text-[11px] text-ink-faint">{SEEK_MODES[draftMode].hint}</span>
+      <span className="text-[11px] text-ink-faint">
+        {SEEK_MODES[draftMode].hint}
+      </span>
 
       <span className="flex-1" />
 
@@ -169,7 +193,8 @@ export function Toolbar({
         onKeyDown={(event) => {
           // Applied on Enter, not on change. The filter runs in the Rust
           // process — see below — so every keystroke would reopen the stream.
-          if (event.key === "Enter") onFilterChange(draftFilter.trim() || undefined);
+          if (event.key === "Enter")
+            onFilterChange(draftFilter.trim() || undefined)
         }}
         onBlur={() => onFilterChange(draftFilter.trim() || undefined)}
       />
@@ -181,9 +206,14 @@ export function Toolbar({
           `all` — hiding nothing, and saying so. */}
       <Select
         value={visibility}
-        onValueChange={(value) => onVisibilityChange(value as "all" | "committed")}
+        onValueChange={(value) =>
+          onVisibilityChange(value as "all" | "committed")
+        }
       >
-        <SelectTrigger className="w-[130px]" aria-label="Transaction visibility">
+        <SelectTrigger
+          className="w-[130px]"
+          aria-label="Transaction visibility"
+        >
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
@@ -197,7 +227,9 @@ export function Toolbar({
         placeholder="Partitions"
         aria-label="Partitions"
         className="w-[110px] tabular-nums"
-        onChange={(event) => onPartitionsChange(event.target.value.trim() || undefined)}
+        onChange={(event) =>
+          onPartitionsChange(event.target.value.trim() || undefined)
+        }
       />
 
       {/* For the bounded modes, and only those. A window is a snapshot with no
@@ -218,15 +250,15 @@ export function Toolbar({
         </Button>
       )}
     </div>
-  );
+  )
 }
 
 function min(values: (number | null)[]): number | null {
-  const present = values.filter((value): value is number => value !== null);
-  return present.length ? Math.min(...present) : null;
+  const present = values.filter((value): value is number => value !== null)
+  return present.length ? Math.min(...present) : null
 }
 
 function max(values: (number | null)[]): number | null {
-  const present = values.filter((value): value is number => value !== null);
-  return present.length ? Math.max(...present) : null;
+  const present = values.filter((value): value is number => value !== null)
+  return present.length ? Math.max(...present) : null
 }

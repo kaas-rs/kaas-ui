@@ -10,12 +10,12 @@
 // keeping: header, content, footer, rail, and a `collapsible="icon"` sidebar
 // that forwards its props so a caller can still say where it goes.
 
-import type { ComponentProps } from "react";
-import { Link } from "@tanstack/react-router";
+import type { ComponentProps } from "react"
+import { Link } from "@tanstack/react-router"
 
-import { useIdentity } from "@/api/client";
-import { NavMain } from "@/components/nav-main";
-import { NavUser } from "@/components/nav-user";
+import { useIdentity } from "@/api/client"
+import { NavMain } from "@/components/nav-main"
+import { NavUser } from "@/components/nav-user"
 import {
   Sidebar,
   SidebarContent,
@@ -25,7 +25,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarRail,
-} from "@/components/ui/sidebar";
+} from "@/components/ui/sidebar"
 
 /**
  * The dark nav band is the strongest visual anchor and it is dark in both
@@ -34,7 +34,7 @@ import {
  * be answerable without reading the URL.
  */
 export function AppSidebar({ ...props }: ComponentProps<typeof Sidebar>) {
-  const identity = useIdentity();
+  const identity = useIdentity()
 
   return (
     <Sidebar collapsible="icon" {...props}>
@@ -55,7 +55,9 @@ export function AppSidebar({ ...props }: ComponentProps<typeof Sidebar>) {
                 </div>
                 <div className="grid flex-1 text-left leading-tight">
                   <span className="truncate font-semibold">kaas-ui</span>
-                  <span className="truncate text-[11px] opacity-70">read-only</span>
+                  <span className="truncate text-[11px] opacity-70">
+                    read-only
+                  </span>
                 </div>
               </Link>
             </SidebarMenuButton>
@@ -82,5 +84,5 @@ export function AppSidebar({ ...props }: ComponentProps<typeof Sidebar>) {
 
       <SidebarRail />
     </Sidebar>
-  );
+  )
 }

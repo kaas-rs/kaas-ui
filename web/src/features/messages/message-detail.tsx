@@ -10,23 +10,23 @@
 // underneath them because of that would be the most annoying possible
 // behaviour. So the header keeps rendering, with a note saying why.
 
-import { AlertTriangle, Loader2 } from "lucide-react";
+import { AlertTriangle, Loader2 } from "lucide-react"
 
-import { useMessageDetail } from "@/api/client";
-import type { Payload, StreamRow } from "@/api/types";
-import { Badge } from "@/components/ui/badge";
-import { Empty, Mono, bytes } from "@/components/domain";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useMessageDetail } from "@/api/client"
+import type { Payload, StreamRow } from "@/api/types"
+import { Badge } from "@/components/ui/badge"
+import { Empty, Mono, bytes } from "@/components/domain"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
 export interface MessageDetailPanelProps {
-  clusterId: string;
-  topic: string;
+  clusterId: string
+  topic: string
   /** The selected id, or nothing selected. */
-  selectedId?: string;
+  selectedId?: string
   /** The row as it was when it was selected, kept so the panel survives eviction. */
-  retained?: StreamRow;
+  retained?: StreamRow
   /** Whether that row is still in the buffer. */
-  present: boolean;
+  present: boolean
 }
 
 export function MessageDetailPanel({
@@ -36,15 +36,15 @@ export function MessageDetailPanel({
   retained,
   present,
 }: MessageDetailPanelProps) {
-  const detail = useMessageDetail(clusterId, topic, selectedId);
+  const detail = useMessageDetail(clusterId, topic, selectedId)
 
   if (!selectedId) {
     return (
       <Empty>
-        Select a message to inspect its payload. Use <Mono>j</Mono> and <Mono>k</Mono> to move
-        through the list.
+        Select a message to inspect its payload. Use <Mono>j</Mono> and{" "}
+        <Mono>k</Mono> to move through the list.
       </Empty>
-    );
+    )
   }
 
   return (
@@ -52,7 +52,10 @@ export function MessageDetailPanel({
       <header className="shrink-0 border-b border-line px-4 py-3">
         <div className="flex items-baseline gap-2">
           <h2 className="text-sm font-medium">
-            Offset <span className="tabular-nums">{retained?.offset.toLocaleString()}</span>
+            Offset{" "}
+            <span className="tabular-nums">
+              {retained?.offset.toLocaleString()}
+            </span>
           </h2>
           <Badge variant="outline" className="tabular-nums">
             partition {retained?.partition}
@@ -76,8 +79,8 @@ export function MessageDetailPanel({
         ) : null}
         {!present ? (
           <p className="mt-2 text-[11px] text-warn-ink">
-            No longer in the buffer — the stream has moved past it. The payload below is still
-            read from the topic.
+            No longer in the buffer — the stream has moved past it. The payload
+            below is still read from the topic.
           </p>
         ) : null}
       </header>
@@ -85,18 +88,21 @@ export function MessageDetailPanel({
       <div className="min-h-0 flex-1 overflow-auto px-4 py-3">
         {detail.isLoading ? (
           <p className="flex items-center gap-2 text-xs text-ink-muted">
-            <Loader2 className="size-3.5 animate-spin" aria-hidden /> reading the record
+            <Loader2 className="size-3.5 animate-spin" aria-hidden /> reading
+            the record
           </p>
         ) : detail.error ? (
-          <p className="text-xs text-danger">{(detail.error as Error).message}</p>
+          <p className="text-xs text-danger">
+            {(detail.error as Error).message}
+          </p>
         ) : detail.data?.kind === "malformed" ? (
           <div className="space-y-3">
             <p className="flex items-start gap-2 text-xs text-warn-ink">
               <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
               <span>
                 Offsets {detail.data.offset.toLocaleString()}–
-                {detail.data.lastOffset.toLocaleString()} did not decode: {detail.data.reason}.
-                The scan continued past it.
+                {detail.data.lastOffset.toLocaleString()} did not decode:{" "}
+                {detail.data.reason}. The scan continued past it.
               </span>
             </p>
             <PayloadBlock label="Raw batch" payload={detail.data.raw} />
@@ -108,7 +114,9 @@ export function MessageDetailPanel({
               <TabsTrigger value="key">Key</TabsTrigger>
               <TabsTrigger value="headers">
                 Headers
-                {detail.data.headers.length ? ` (${detail.data.headers.length})` : ""}
+                {detail.data.headers.length
+                  ? ` (${detail.data.headers.length})`
+                  : ""}
               </TabsTrigger>
             </TabsList>
             <TabsContent value="value">
@@ -116,7 +124,8 @@ export function MessageDetailPanel({
                 <PayloadBlock payload={detail.data.value} />
               ) : (
                 <p className="py-3 text-xs text-warn-ink italic">
-                  Tombstone — the record has no value, which is not the same as an empty one.
+                  Tombstone — the record has no value, which is not the same as
+                  an empty one.
                 </p>
               )}
             </TabsContent>
@@ -134,9 +143,15 @@ export function MessageDetailPanel({
                 <ol className="space-y-1 py-2 text-xs">
                   {detail.data.headers.map((header, index) => (
                     <li key={`${header.name}-${index}`} className="flex gap-2">
-                      <span className="font-mono text-ink-muted">{header.name}</span>
+                      <span className="font-mono text-ink-muted">
+                        {header.name}
+                      </span>
                       <span className="font-mono break-all">
-                        {header.value ? header.value.text : <em className="text-ink-faint">null</em>}
+                        {header.value ? (
+                          header.value.text
+                        ) : (
+                          <em className="text-ink-faint">null</em>
+                        )}
                       </span>
                     </li>
                   ))}
@@ -149,10 +164,16 @@ export function MessageDetailPanel({
         ) : null}
       </div>
     </div>
-  );
+  )
 }
 
-function PayloadBlock({ payload, label }: { payload: Payload; label?: string }) {
+function PayloadBlock({
+  payload,
+  label,
+}: {
+  payload: Payload
+  label?: string
+}) {
   return (
     <div className="space-y-1 py-2">
       <div className="flex items-center gap-2 text-[11px] text-ink-faint">
@@ -164,11 +185,13 @@ function PayloadBlock({ payload, label }: { payload: Payload; label?: string }) 
           {payload.encoding}
         </Badge>
         <span className="tabular-nums">{bytes(payload.bytes)}</span>
-        {payload.truncated ? <span className="text-warn-ink">truncated</span> : null}
+        {payload.truncated ? (
+          <span className="text-warn-ink">truncated</span>
+        ) : null}
       </div>
       <pre className="max-h-full overflow-auto rounded-md border border-line bg-surface-sunken p-3 font-mono text-[11px] leading-relaxed break-all whitespace-pre-wrap">
         {payload.text}
       </pre>
     </div>
-  );
+  )
 }

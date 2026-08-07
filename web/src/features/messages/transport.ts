@@ -11,16 +11,16 @@ import type {
   StreamPhase,
   StreamProgress,
   StreamRowData,
-} from "@/api/types";
-import type { MessageStore } from "./message-store";
-import { withIds } from "./rows";
+} from "@/api/types"
+import type { MessageStore } from "./message-store"
+import { withIds } from "./rows"
 
 export interface StreamHandlers {
-  onProgress(progress: StreamProgress): void;
-  onResolved(resolved: ResolvedSeek): void;
-  onError(error: ResourceError): void;
+  onProgress(progress: StreamProgress): void
+  onResolved(resolved: ResolvedSeek): void
+  onError(error: ResourceError): void
   /** The connection itself failed, as opposed to the cluster answering badly. */
-  onDisconnect(): void;
+  onDisconnect(): void
   /**
    * The server is talking, so whatever was wrong is not wrong now.
    *
@@ -28,11 +28,11 @@ export interface StreamHandlers {
    * always replays `seeking` and `streaming`, phases are rare, and the rule
    * that record traffic never reaches React state stays intact.
    */
-  onConnected(): void;
+  onConnected(): void
 }
 
 export interface StreamHandle {
-  close(): void;
+  close(): void
 }
 
 /**
@@ -50,21 +50,21 @@ export interface StreamHandle {
 export function openMessageStream(
   url: string,
   store: MessageStore,
-  handlers: StreamHandlers,
+  handlers: StreamHandlers
 ): StreamHandle {
-  const source = new EventSource(url);
+  const source = new EventSource(url)
 
   source.addEventListener("messages", (event) => {
-    const rows = parse<StreamRowData[]>(event.data);
+    const rows = parse<StreamRowData[]>(event.data)
     // The id is attached here and nowhere else — see `rows.ts`.
-    if (rows) store.push(withIds(rows));
-  });
+    if (rows) store.push(withIds(rows))
+  })
 
   source.addEventListener("phase", (event) => {
-    const body = parse<{ phase: StreamPhase }>(event.data);
-    if (!body) return;
-    handlers.onConnected();
-    store.setPhase(body.phase);
+    const body = parse<{ phase: StreamPhase }>(event.data)
+    if (!body) return
+    handlers.onConnected()
+    store.setPhase(body.phase)
 
     // `done` ends the stream, and ending it here is the whole point:
     // `EventSource` reconnects whenever the response completes, and it cannot
@@ -77,54 +77,54 @@ export function openMessageStream(
     //
     // The server only sends `done` deliberately: the window is read, or the
     // process is shutting down. Neither is a case for retrying.
-    if (body.phase === "done") source.close();
-  });
+    if (body.phase === "done") source.close()
+  })
 
   source.addEventListener("dropped", (event) => {
-    const body = parse<{ count: number }>(event.data);
-    if (body) store.setDropped(body.count);
-  });
+    const body = parse<{ count: number }>(event.data)
+    if (body) store.setDropped(body.count)
+  })
 
   source.addEventListener("progress", (event) => {
-    const body = parse<StreamProgress>(event.data);
-    if (body) handlers.onProgress(body);
-  });
+    const body = parse<StreamProgress>(event.data)
+    if (body) handlers.onProgress(body)
+  })
 
   source.addEventListener("resolved", (event) => {
-    const body = parse<ResolvedSeek>(event.data);
-    if (body) handlers.onResolved(body);
-  });
+    const body = parse<ResolvedSeek>(event.data)
+    if (body) handlers.onResolved(body)
+  })
 
   source.addEventListener("error", (event) => {
     // Two unrelated things arrive on this name. A `MessageEvent` with data is
     // the server's own `error` event — a cluster answered badly, and the
     // payload says how. A bare `Event` is `EventSource` reporting that the
     // *connection* dropped, which it will retry by itself.
-    const data = (event as MessageEvent).data;
+    const data = (event as MessageEvent).data
     if (typeof data === "string") {
-      const body = parse<ResourceError>(data);
-      if (body) handlers.onError(body);
-      return;
+      const body = parse<ResourceError>(data)
+      if (body) handlers.onError(body)
+      return
     }
-    handlers.onDisconnect();
-  });
+    handlers.onDisconnect()
+  })
 
   return {
     close() {
       // Dropping the response is the whole cancellation story: the server's
       // pump selects on the reader going away and drops the scan with it.
-      source.close();
+      source.close()
     },
-  };
+  }
 }
 
 function parse<T>(raw: string): T | null {
   try {
-    return JSON.parse(raw) as T;
+    return JSON.parse(raw) as T
   } catch {
     // A payload this end cannot read is worth ignoring rather than tearing the
     // stream down: the next event is very likely fine, and a debugging tool
     // that dies on one bad frame is the wrong trade.
-    return null;
+    return null
   }
 }
