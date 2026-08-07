@@ -164,14 +164,35 @@ export function NavUser({ identity }: { identity: Identity }) {
                 Sign out
               </DropdownMenuItem>
             ) : identity.loginAvailable ? (
-              <DropdownMenuItem asChild>
-                {/* A plain navigation: the browser has to leave for the
-                    provider and come back with a cookie. */}
-                <a href={withBase("/auth/login")}>
-                  <LogIn />
-                  Sign in
-                </a>
-              </DropdownMenuItem>
+              // One item per configured connector, and a single unnamed one
+              // when none are configured. The same reasoning as the sign-in
+              // screen, and it has to hold from both places a login can start
+              // — otherwise the chooser page this removed comes back through
+              // this menu.
+              identity.connectors.length === 0 ? (
+                <DropdownMenuItem asChild>
+                  {/* A plain navigation: the browser has to leave for the
+                      provider and come back with a cookie. */}
+                  <a href={withBase("/auth/login")}>
+                    <LogIn />
+                    Sign in
+                  </a>
+                </DropdownMenuItem>
+              ) : (
+                identity.connectors.map((connector) => {
+                  // On one line with the `href` on purpose — see the same
+                  // note on the sign-in screen.
+                  const id = encodeURIComponent(connector.id)
+                  return (
+                    <DropdownMenuItem key={connector.id} asChild>
+                      <a href={withBase(`/auth/login?connector=${id}`)}>
+                        <LogIn />
+                        Sign in with {connector.name}
+                      </a>
+                    </DropdownMenuItem>
+                  )
+                })
+              )
             ) : (
               <DropdownMenuItem
                 onSelect={(event) => event.preventDefault()}

@@ -145,6 +145,23 @@ export interface Identity {
    * nothing.
    */
   loginAvailable: boolean
+  /**
+   * The named ways to sign in, if this deployment lists any.
+   *
+   * Empty means one unlabelled button and the provider asks which connector —
+   * Dex serves its own chooser page when it has more than one. A non-empty
+   * list is the deployment saying it would rather ask that itself, and the
+   * sign-in screen draws one button per entry.
+   */
+  connectors: LoginConnector[]
+}
+
+/** One way to sign in. The id is opaque and only Dex knows what it means. */
+export interface LoginConnector {
+  /** Sent back as `/auth/login?connector=<id>`. */
+  id: string
+  /** What the button says. */
+  name: string
 }
 
 /**

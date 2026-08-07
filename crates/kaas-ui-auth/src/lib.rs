@@ -24,6 +24,13 @@
 //! shape. Keeping this crate provider-blind is what makes a second identity
 //! source a Dex config change rather than a kaas-ui release.
 //!
+//! [`Connector`] is the near miss, and stays on the right side of the line: it
+//! is a label and an opaque id, read from *this* deployment's configuration and
+//! forwarded to Dex unexamined. No code here branches on which connector it is,
+//! and adding one is still a config change rather than a release — it is now
+//! two config files that have to agree rather than one, which is the price of
+//! not making people click through Dex's chooser page.
+//!
 //! # This crate has no dependency on the rest of the workspace
 //!
 //! Deliberately. `kaas-ui-core` depends on *it* — the registry lookup takes an
@@ -47,6 +54,6 @@ pub mod policy;
 
 pub use audit::{Audit, AuditError, Kind, Read};
 pub use identity::Principal;
-pub use oidc::{OidcConfig, OidcError, Pending, Provider};
+pub use oidc::{Connector, OidcConfig, OidcError, Pending, Provider};
 pub use policy::Action;
 pub use policy::{Access, Permission, Policy, Resource, Role};

@@ -14,6 +14,20 @@ use crate::AppState;
 use crate::error::ApiError;
 use crate::session;
 
+/// What the sign-in screen asks for.
+#[derive(Debug, Deserialize)]
+pub struct Start {
+    /// Which connector to go straight to, skipping the provider's chooser.
+    ///
+    /// Absent is "let the provider decide", which is what a deployment that
+    /// configures no connectors always does. Validated against the configured
+    /// list in [`Provider::start_login`], so an id that would confuse Dex never
+    /// reaches it.
+    ///
+    /// [`Provider::start_login`]: kaas_ui_auth::Provider::start_login
+    connector: Option<String>,
+}
+
 /// What the provider sends back.
 #[derive(Debug, Deserialize)]
 pub struct Callback {
@@ -32,13 +46,31 @@ pub struct Callback {
 ///
 /// A `GET` because it is a link somebody clicks, and it changes nothing on
 /// this side that a second click would not simply replace.
-pub async fn login(State(state): State<AppState>, jar: PrivateCookieJar) -> Response {
+///
+/// `?connector=<id>` picks one of the configured connectors and skips the
+/// provider's chooser page. The sign-in screen sends it because it draws that
+/// chooser itself; anything else may omit it and get the provider's.
+pub async fn login(
+    State(state): State<AppState>,
+    jar: PrivateCookieJar,
+    Query(start): Query<Start>,
+) -> Response {
     let Some(provider) = state.auth() else {
         return no_provider();
     };
 
-    match provider.start_login() {
+    match provider.start_login(start.connector.as_deref()) {
         Ok((url, pending)) => (session::stash(jar, &pending), Redirect::to(&url)).into_response(),
+        // The caller asked for a connector this deployment does not offer, so
+        // this is a `400` and not a `502`: nothing was wrong with the provider,
+        // and nothing was sent to it. In practice it means kaas-ui's config and
+        // Dex's have drifted, which is worth saying plainly — the alternative
+        // is Dex's own "Connector ID does not match a valid Connector", one
+        // redirect further on and in someone else's error page.
+        Err(error @ kaas_ui_auth::OidcError::UnknownConnector(_)) => {
+            tracing::warn!(%error, "a sign-in asked for a connector this deployment does not offer");
+            ApiError::bad_request(error.to_string()).into_response()
+        }
         Err(error) => {
             tracing::error!(%error, "could not start a login");
             ApiError::bad_gateway_login(&error.to_string()).into_response()

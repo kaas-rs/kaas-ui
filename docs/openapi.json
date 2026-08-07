@@ -3456,12 +3456,20 @@
           "displayName",
           "roles",
           "enforcing",
-          "loginAvailable"
+          "loginAvailable",
+          "connectors"
         ],
         "properties": {
           "authenticated": {
             "type": "boolean",
             "description": "Whether an identity provider vouched for this caller."
+          },
+          "connectors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LoginConnector"
+            },
+            "description": "The named ways to sign in, if this deployment lists any.\n\nEmpty is the common case and means \"one unlabelled sign-in button\" —\nthe provider is then responsible for asking which connector, which is\nwhat Dex does when it has more than one. A deployment that would rather\nask that question itself, on its own screen, lists them in `auth\n.connectors`, and these are what it listed.\n\nDeliberately here rather than on its own endpoint. It is the same\nquestion `login_available` answers — *what should the sign-in control\nlook like* — and splitting it across two fetches would let the two\nhalves disagree while one of them was stale."
           },
           "displayName": {
             "type": "string",
@@ -3651,6 +3659,24 @@
           "topic": {
             "type": "string",
             "description": "Topic."
+          }
+        }
+      },
+      "LoginConnector": {
+        "type": "object",
+        "description": "One way to sign in, as the sign-in screen renders it.\n\nThe id is opaque and only means something to the provider. Nothing in\nkaas-ui interprets it — see [`kaas_ui_auth::Connector`], the configuration\nthis mirrors.",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Passed back as `/auth/login?connector=<id>`."
+          },
+          "name": {
+            "type": "string",
+            "description": "What the button says."
           }
         }
       },

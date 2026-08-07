@@ -162,6 +162,43 @@ pub struct OidcConfig {
     /// How long a session lasts before a login is asked for again.
     #[serde(default = "default_session_ttl", with = "humantime_serde")]
     pub session_ttl: Duration,
+    /// The provider's connectors, named so kaas-ui can offer them directly.
+    ///
+    /// Empty — the default — is "let the provider ask". Dex with more than one
+    /// connector serves its own chooser page before the login form, and that
+    /// page is the only part of a login a deployment cannot style.
+    ///
+    /// Listing them here replaces it: the sign-in screen draws one button per
+    /// entry, and each carries [`connector_id`] so Dex jumps straight into that
+    /// connector. See [`Provider::start_login`].
+    ///
+    /// **The ids must match Dex's `connectors[].id` exactly**, and nothing
+    /// checks that at startup — kaas-ui does not read Dex's configuration, and
+    /// asking would put a second service on the boot path for a cosmetic
+    /// feature. A wrong id is a `400` from *us* on the sign-in click, with the
+    /// id in the message, rather than a confusing page from Dex.
+    ///
+    /// This is a list of strings, not knowledge of any provider. Nothing here
+    /// branches on what a connector *is* — see the crate docs, which this is
+    /// deliberately still inside of.
+    ///
+    /// [`connector_id`]: https://github.com/dexidp/dex/blob/v2.45.1/server/handlers.go#L156
+    #[serde(default)]
+    pub connectors: Vec<Connector>,
+}
+
+/// One entry on the sign-in screen.
+///
+/// A label and an opaque id. What sits behind it — GitHub, Entra, LDAP, a
+/// static password list — is Dex's business and appears nowhere in this
+/// workspace.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "snake_case")]
+pub struct Connector {
+    /// Dex's `connectors[].id`, sent as `connector_id`.
+    pub id: String,
+    /// What the button says. `"GitHub"`, `"Microsoft"`.
+    pub name: String,
 }
 
 impl OidcConfig {
@@ -227,6 +264,13 @@ pub enum OidcError {
     /// The provider answered the exchange with an error.
     #[error("the login provider refused the exchange: {0}")]
     Exchange(String),
+    /// A sign-in asked for a connector this deployment does not offer.
+    ///
+    /// Caller error, not provider error: the id is checked against
+    /// [`OidcConfig::connectors`] before a redirect is built, so an id Dex
+    /// would reject never leaves this process.
+    #[error("no such login connector: {0}")]
+    UnknownConnector(String),
 }
 
 /// A login in progress.
@@ -384,12 +428,38 @@ impl Provider {
         .set_redirect_uri(redirect))
     }
 
+    /// The connectors this deployment offers by name.
+    ///
+    /// Empty when none are configured, which is the instruction to let the
+    /// provider ask. See [`OidcConfig::connectors`].
+    #[must_use]
+    pub fn connectors(&self) -> &[Connector] {
+        &self.config.connectors
+    }
+
     /// Where to send the browser, and what to remember while it is away.
+    ///
+    /// `connector` skips Dex's chooser page and lands on that connector's
+    /// login directly. `None` is the old behaviour and still the behaviour for
+    /// a deployment that configures no connectors: Dex decides, which for a
+    /// single connector means going straight there anyway.
     ///
     /// # Errors
     ///
-    /// Only if the configuration stopped being a URL since startup.
-    pub fn start_login(&self) -> Result<(String, Pending), OidcError> {
+    /// [`OidcError::UnknownConnector`] if `connector` names something
+    /// [`OidcConfig::connectors`] does not. Checked here rather than left to
+    /// Dex so that the failure is ours, in our own error shape, and so that
+    /// this parameter cannot be used to probe which connectors a provider has
+    /// by watching how it answers.
+    ///
+    /// Otherwise only if the configuration stopped being a URL since startup.
+    pub fn start_login(&self, connector: Option<&str>) -> Result<(String, Pending), OidcError> {
+        if let Some(id) = connector
+            && !self.config.connectors.iter().any(|known| known.id == id)
+        {
+            return Err(OidcError::UnknownConnector(id.to_owned()));
+        }
+
         // S256, always. `PkceCodeChallenge::new_random_sha256` is the only
         // constructor used here; the `plain` method that Dex would also accept
         // is never spelled anywhere in this workspace.
@@ -411,6 +481,14 @@ impl Provider {
             if scope != "openid" {
                 request = request.add_scope(Scope::new(scope.clone()));
             }
+        }
+
+        // Not an OIDC parameter — Dex's own, read off the authorization
+        // request and turned into a redirect to `/auth/<id>` before the
+        // chooser page is ever rendered. An unknown id is a `400` from Dex,
+        // which the check above means we cannot produce.
+        if let Some(id) = connector {
+            request = request.add_extra_param("connector_id", id);
         }
 
         let (url, state, nonce) = request.url();
@@ -766,6 +844,7 @@ mod tests {
             redirect_url: "https://kaas.smeding.cloud/auth/callback".to_owned(),
             scopes: default_scopes(),
             session_ttl: default_session_ttl(),
+            connectors: Vec::new(),
         }
     }
 
@@ -775,7 +854,7 @@ mod tests {
         // decision rests on: Dex will serve a flow with no challenge at all,
         // so nothing but this guarantees one is sent.
         let provider = Provider::from_metadata(recorded_metadata(), recorded_config());
-        let (url, pending) = provider.start_login().expect("the fixture is valid");
+        let (url, pending) = provider.start_login(None).expect("the fixture is valid");
 
         let query: std::collections::HashMap<_, _> = url::Url::parse(&url)
             .expect("a URL")
@@ -801,6 +880,92 @@ mod tests {
         assert_eq!(scope.matches("openid").count(), 1, "{scope}");
     }
 
+    fn configured_with_connectors() -> OidcConfig {
+        OidcConfig {
+            connectors: vec![
+                Connector {
+                    id: "github".to_owned(),
+                    name: "GitHub".to_owned(),
+                },
+                Connector {
+                    id: "microsoft".to_owned(),
+                    name: "Microsoft".to_owned(),
+                },
+            ],
+            ..recorded_config()
+        }
+    }
+
+    #[test]
+    fn a_named_connector_rides_along_as_connector_id() {
+        // The whole feature: Dex reads `connector_id` off the authorization
+        // request and redirects to that connector's login, so its chooser page
+        // — the one screen of a login a deployment cannot style — is never
+        // rendered. Verified against dex v2.45.1 `server/handlers.go`.
+        let provider = Provider::from_metadata(recorded_metadata(), configured_with_connectors());
+        let (url, _) = provider
+            .start_login(Some("microsoft"))
+            .expect("a configured connector");
+
+        let query: std::collections::HashMap<_, _> = url::Url::parse(&url)
+            .expect("a URL")
+            .query_pairs()
+            .into_owned()
+            .collect();
+
+        assert_eq!(
+            query.get("connector_id").map(String::as_str),
+            Some("microsoft")
+        );
+        // Adding a parameter must not have cost the three that matter.
+        assert!(query.contains_key("code_challenge"));
+        assert!(query.contains_key("state"));
+        assert!(query.contains_key("nonce"));
+    }
+
+    #[test]
+    fn no_named_connector_sends_no_connector_id() {
+        // The default, and the behaviour every deployment had before this
+        // existed: the provider decides, which for a single connector means
+        // going straight there anyway.
+        let provider = Provider::from_metadata(recorded_metadata(), configured_with_connectors());
+        let (url, _) = provider.start_login(None).expect("the fixture is valid");
+
+        assert!(
+            !url.contains("connector_id"),
+            "an unasked-for connector reached the provider: {url}"
+        );
+    }
+
+    #[test]
+    fn an_unconfigured_connector_never_reaches_the_provider() {
+        // Checked here rather than left to Dex, which answers a `400` with its
+        // own error page one redirect further on. The id is echoed because in
+        // practice this means kaas-ui's config and Dex's have drifted, and the
+        // id is the thing that has to match.
+        let provider = Provider::from_metadata(recorded_metadata(), configured_with_connectors());
+        let error = provider
+            .start_login(Some("gitlab"))
+            .expect_err("gitlab is not configured");
+
+        assert!(
+            matches!(&error, OidcError::UnknownConnector(id) if id == "gitlab"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn connectors_are_empty_unless_configured() {
+        // The absent `connectors:` block is what every existing deployment
+        // has, and it has to keep meaning "one unnamed button, let the
+        // provider ask" rather than "no way to sign in".
+        let provider = Provider::from_metadata(recorded_metadata(), recorded_config());
+        assert!(provider.connectors().is_empty());
+        // And with none configured, naming one is still refused rather than
+        // forwarded on the theory that the provider might know it.
+        assert!(provider.start_login(Some("github")).is_err());
+    }
+
     #[test]
     fn a_login_verifies_against_the_current_keys_not_the_ones_discovered_at_startup() {
         // The regression this guards is a live one: Dex rotates its signing
@@ -814,7 +979,7 @@ mod tests {
         // of the metadata a unit test can see; what matters is that `client()`
         // reads what is in the cell now rather than a snapshot beside it.
         let provider = Provider::from_metadata(recorded_metadata(), recorded_config());
-        let (before, _) = provider.start_login().expect("the fixture is valid");
+        let (before, _) = provider.start_login(None).expect("the fixture is valid");
         assert!(
             before.starts_with("https://kaas.smeding.cloud/dex/auth?"),
             "{before}"
@@ -834,7 +999,7 @@ mod tests {
         .expect("the fixture parses");
         provider.metadata.store(Arc::new(rotated));
 
-        let (after, _) = provider.start_login().expect("the fixture is valid");
+        let (after, _) = provider.start_login(None).expect("the fixture is valid");
         assert!(
             after.starts_with("https://kaas.smeding.cloud/dex/rotated?"),
             "the client is pinned to the metadata it booted with: {after}"
@@ -844,8 +1009,8 @@ mod tests {
     #[test]
     fn two_logins_never_share_a_challenge() {
         let provider = Provider::from_metadata(recorded_metadata(), recorded_config());
-        let (_, first) = provider.start_login().expect("valid");
-        let (_, second) = provider.start_login().expect("valid");
+        let (_, first) = provider.start_login(None).expect("valid");
+        let (_, second) = provider.start_login(None).expect("valid");
 
         assert_ne!(first.verifier, second.verifier);
         assert_ne!(first.state, second.state);
@@ -861,6 +1026,7 @@ mod tests {
             redirect_url: "https://example.test/auth/callback".to_owned(),
             scopes: default_scopes(),
             session_ttl: default_session_ttl(),
+            connectors: Vec::new(),
         };
         let error = Provider::discover(config)
             .await
@@ -879,6 +1045,7 @@ mod tests {
             redirect_url: "/auth/callback".to_owned(),
             scopes: default_scopes(),
             session_ttl: default_session_ttl(),
+            connectors: Vec::new(),
         };
         let error = Provider::discover(config)
             .await
@@ -918,7 +1085,7 @@ mod tests {
         // And the same property where it actually bites: the URL handed to the
         // browser, built through the client rather than read off the metadata.
         let provider = Provider::from_metadata(metadata, recorded_config());
-        let (url, _) = provider.start_login().expect("the fixture is valid");
+        let (url, _) = provider.start_login(None).expect("the fixture is valid");
         assert!(
             url.starts_with("https://kaas.smeding.cloud/dex/auth?"),
             "{url}"
@@ -942,6 +1109,7 @@ mod tests {
             redirect_url: "https://kaas.smeding.cloud/auth/callback".to_owned(),
             scopes: default_scopes(),
             session_ttl: default_session_ttl(),
+            connectors: Vec::new(),
         };
         let error = Provider::discover(config)
             .await

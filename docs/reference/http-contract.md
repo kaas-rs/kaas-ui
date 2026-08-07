@@ -6,10 +6,15 @@ router needs.
 ## Every data endpoint is a GET
 
 Because reading is what they do — not because a check forbids the alternative.
-The auth flow adds `POST /auth/login` and `POST /auth/logout`, and the Dex
-proxy at `/dex/*` forwards whatever method the browser sends. What guarantees
-read-only is the single `Admin::connect_read_only` construction site: a handler
-reached by any verb has no client that can write.
+The auth flow adds `POST /auth/logout`, and the Dex proxy at `/dex/*` forwards
+whatever method the browser sends. What guarantees read-only is the single
+`Admin::connect_read_only` construction site: a handler reached by any verb has
+no client that can write.
+
+`/auth/login` is a `GET` and has to stay one: `SameSite=Lax` sends the pending
+cookie on a top-level navigation and not on a `fetch`. Logout is the mirror
+image and is a `POST` for the same reason. `login_is_a_navigation` in
+`cargo xtask ci` holds both in place.
 
 ## The envelope
 
@@ -129,7 +134,7 @@ GET  /api/clusters/{id}/topics/{topic}/messages?mode=…          [3] one bounde
 GET  /api/clusters/{id}/topics/{topic}/messages/stream?mode=…   [3] text/event-stream
 GET  /api/clusters/{id}/topics/{topic}/messages/{part}/{offset} [3] one record, whole
 
-POST /auth/login                                                [4]
+GET  /auth/login?connector=…                                    [4] optional, skips the chooser
 GET  /auth/callback                                             [4]
 POST /auth/logout                                               [4]
 GET  /api/me                                                    [4]

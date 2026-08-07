@@ -17,8 +17,15 @@ import {
 import { LogIn } from "lucide-react"
 
 import { withBase } from "@/api/base"
+import type { LoginConnector } from "@/api/types"
 
-export function SignIn({ enforcing }: { enforcing: boolean }) {
+export function SignIn({
+  enforcing,
+  connectors,
+}: {
+  enforcing: boolean
+  connectors: LoginConnector[]
+}) {
   return (
     <div className="bg-muted flex min-h-svh flex-col items-center justify-center gap-6 p-6 md:p-10">
       <div className="flex w-full max-w-sm flex-col gap-6">
@@ -44,22 +51,51 @@ export function SignIn({ enforcing }: { enforcing: boolean }) {
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-4">
-            {/* A plain link, not a fetch: the whole point of this navigation
-                is that the browser leaves for the provider and comes back
-                with a cookie.
+            {/* Plain links, not fetches: the whole point of this navigation is
+                that the browser leaves for the provider and comes back with a
+                cookie.
 
-                Deliberately unbranded. Which providers exist is Dex's
-                configuration, not this build's — a deployment can front
-                GitHub, Entra, both, or something neither of us has heard of,
-                and with more than one Dex asks which before the login form.
-                Naming one here is wrong the moment a second is added, and
-                nothing in this bundle knows how many there are. */}
-            <Button asChild className="w-full">
-              <a href={withBase("/auth/login")}>
-                <LogIn />
-                Sign in
-              </a>
-            </Button>
+                Still unbranded *by this build*. Which providers exist is
+                configuration — a deployment can front GitHub, Entra, both, or
+                something neither of us has heard of — so the names below are
+                read from `/api/me` at runtime and nothing here knows what any
+                of them mean. The alternative was Dex's chooser page, which is
+                the one screen in a login a deployment cannot style.
+
+                Empty is the default and the fallback: one button, no name, and
+                the provider asks. */}
+            {connectors.length === 0 ? (
+              <Button asChild className="w-full">
+                <a href={withBase("/auth/login")}>
+                  <LogIn />
+                  Sign in
+                </a>
+              </Button>
+            ) : (
+              connectors.map((connector) => {
+                // Encoded here rather than inline so that the `href` and the
+                // path it points at stay on one line: `cargo xtask ci` reads
+                // this file to prove no login is a `fetch`, and it reads it
+                // line by line. See `login_is_a_navigation` in xtask.
+                const id = encodeURIComponent(connector.id)
+                return (
+                  // Equal weight, on purpose. One of two providers being the
+                  // primary button reads as a recommendation, and which one a
+                  // person should use is not something this build could know.
+                  <Button
+                    key={connector.id}
+                    asChild
+                    variant="outline"
+                    className="w-full"
+                  >
+                    <a href={withBase(`/auth/login?connector=${id}`)}>
+                      <LogIn />
+                      Sign in with {connector.name}
+                    </a>
+                  </Button>
+                )
+              })
+            )}
 
             {enforcing ? null : (
               // Worth saying rather than leaving as a surprise: a provider

@@ -58,18 +58,68 @@ pub struct Identity {
     /// or a provider and no roles, which is an open deployment that happens to
     /// know your name.
     pub login_available: bool,
+    /// The named ways to sign in, if this deployment lists any.
+    ///
+    /// Empty is the common case and means "one unlabelled sign-in button" —
+    /// the provider is then responsible for asking which connector, which is
+    /// what Dex does when it has more than one. A deployment that would rather
+    /// ask that question itself, on its own screen, lists them in `auth
+    /// .connectors`, and these are what it listed.
+    ///
+    /// Deliberately here rather than on its own endpoint. It is the same
+    /// question `login_available` answers — *what should the sign-in control
+    /// look like* — and splitting it across two fetches would let the two
+    /// halves disagree while one of them was stale.
+    pub connectors: Vec<LoginConnector>,
+}
+
+/// One way to sign in, as the sign-in screen renders it.
+///
+/// The id is opaque and only means something to the provider. Nothing in
+/// kaas-ui interprets it — see [`kaas_ui_auth::Connector`], the configuration
+/// this mirrors.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LoginConnector {
+    /// Passed back as `/auth/login?connector=<id>`.
+    pub id: String,
+    /// What the button says.
+    pub name: String,
+}
+
+impl From<&kaas_ui_auth::Connector> for LoginConnector {
+    fn from(connector: &kaas_ui_auth::Connector) -> Self {
+        Self {
+            id: connector.id.clone(),
+            name: connector.name.clone(),
+        }
+    }
 }
 
 impl Identity {
     /// Project a resolved caller.
-    pub fn of(who: &Principal, access: &Access, enforcing: bool, login_available: bool) -> Self {
+    ///
+    /// `provider` is the deployment's identity provider, if it has one. Both
+    /// [`login_available`](Self::login_available) and
+    /// [`connectors`](Self::connectors) are read off it here rather than passed
+    /// in separately, so there is no arrangement of arguments that reports a
+    /// connector list for a deployment that cannot log anybody in.
+    pub fn of(
+        who: &Principal,
+        access: &Access,
+        enforcing: bool,
+        provider: Option<&kaas_ui_auth::Provider>,
+    ) -> Self {
         Self {
             authenticated: who.is_authenticated(),
             subject: who.subject().to_owned(),
             display_name: who.display_name().to_owned(),
             roles: access.role_names().map(str::to_owned).collect(),
             enforcing,
-            login_available,
+            login_available: provider.is_some(),
+            connectors: provider
+                .map(|provider| provider.connectors().iter().map(Into::into).collect())
+                .unwrap_or_default(),
         }
     }
 }

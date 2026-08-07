@@ -672,6 +672,57 @@ clusters:
         assert!(format!("{err}").contains("schema_registry"), "{err}");
     }
 
+    /// The block the deployed sign-in screen is driven by.
+    ///
+    /// `OidcConfig` and `Connector` both `deny_unknown_fields`, so a typo in
+    /// either key is a startup failure rather than a silently empty list — and
+    /// an empty list is exactly what "let the provider ask" looks like, which
+    /// is why it must not be reachable by accident.
+    #[test]
+    fn named_connectors_parse_and_are_optional() {
+        let config = Config::from_yaml(
+            r#"
+clusters:
+  - id: kaas
+    bootstrap: ["a:9092"]
+
+auth:
+  issuer: https://kaas.smeding.cloud/dex
+  client_id: kaas-ui
+  redirect_url: https://kaas.smeding.cloud/auth/callback
+  connectors:
+    - id: github
+      name: GitHub
+    - id: microsoft
+      name: Microsoft
+"#,
+        )
+        .unwrap();
+
+        let auth = config.auth.expect("an auth block");
+        let ids: Vec<&str> = auth.connectors.iter().map(|c| c.id.as_str()).collect();
+        let names: Vec<&str> = auth.connectors.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(ids, ["github", "microsoft"]);
+        assert_eq!(names, ["GitHub", "Microsoft"]);
+
+        // Absent is the shape every deployment had before this existed, and it
+        // has to keep meaning "one unnamed button".
+        let bare = Config::from_yaml(
+            r#"
+clusters:
+  - id: kaas
+    bootstrap: ["a:9092"]
+
+auth:
+  issuer: https://kaas.smeding.cloud/dex
+  client_id: kaas-ui
+  redirect_url: https://kaas.smeding.cloud/auth/callback
+"#,
+        )
+        .unwrap();
+        assert!(bare.auth.expect("an auth block").connectors.is_empty());
+    }
+
     #[test]
     fn environments_and_resources_parse() {
         let config = Config::from_yaml(

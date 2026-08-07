@@ -73,6 +73,7 @@ use utoipa::OpenApi;
         kaas_ui_core::dto::Dropped,
         kaas_ui_core::dto::Header,
         kaas_ui_core::dto::Lag,
+        kaas_ui_core::dto::LoginConnector,
         kaas_ui_core::dto::LogDirDto,
         kaas_ui_core::dto::LogDirReplicaDto,
         kaas_ui_core::dto::MalformedDetail,

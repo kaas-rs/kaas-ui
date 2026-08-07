@@ -32,7 +32,7 @@ export function AppLayout() {
   // already sees everything, so demanding a login first would be theatre.
   const me = identity.data
   if (me && me.loginAvailable && me.enforcing && !me.authenticated) {
-    return <SignIn enforcing={me.enforcing} />
+    return <SignIn enforcing={me.enforcing} connectors={me.connectors} />
   }
 
   return (
