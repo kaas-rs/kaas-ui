@@ -5,24 +5,92 @@
       // Vite on :5173, proxying /api and /health to the binary on :8099 —
       // so the debugger keeps the Rust side and the browser gets hot reload,
       // without rebuilding the binary for a CSS change.
+      //
+      // `dev:proxy`, not `dev`. Inside code-server the browser reaches this
+      // through a path proxy, and the base, the host binding and the HMR
+      // socket all have to be told about it — see web/vite.config.ts. Plain
+      // `dev` binds loopback only and serves at `/`, which from the proxy
+      // looks like a dead port.
+      //
+      // **Open https://<host>/absproxy/5173/, not /proxy/5173/.** The two
+      // code-server routes differ: /proxy strips the prefix, /absproxy passes
+      // it through, and Vite needs it passed through.
       "label": "web: vite dev server",
       "type": "shell",
-      "command": "npm run dev",
+      "command": "npm run dev:proxy",
       "options": { "cwd": "${workspaceFolder}/web" },
       "isBackground": true,
-      "problemMatcher": [],
+      // Lets this be a preLaunchTask: without a background matcher VS Code
+      // waits for a dev server that never exits.
+      "problemMatcher": {
+        "pattern": { "regexp": "^$" },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "VITE v",
+          "endsPattern": "ready in"
+        }
+      },
       "presentation": { "reveal": "always", "panel": "dedicated" }
     },
     {
-      // Only needed when running the *binary's* embedded copy rather than the
-      // dev server. rust-embed reads web/dist at compile time, so this has to
-      // run before `cargo build` for a frontend change to appear.
+      // Stopping the debug session does not stop Vite. VS Code leaves a
+      // `preLaunchTask` running when the session it preceded ends, so without
+      // this the dev server survives every stop and keeps answering on
+      // /absproxy/5173/ — serving a frontend whose API is gone.
+      //
+      // Killed by *port* rather than by name: `pkill -f vite` matches the
+      // shell running the pkill as well, which makes the task kill itself.
+      //
+      // SIGKILL, which is `fuser -k`'s default and is deliberate here. With
+      // SIGTERM node lingers, and measured from a real session the port was
+      // still being served three seconds later; `strictPort` then fails the
+      // next launch on a port that is about to free itself.
+      //
+      // `|| true` because fuser exits 1 when nothing is listening, which is
+      // the normal case if the session never started Vite.
+      "label": "web: stop vite dev server",
+      "type": "shell",
+      "command": "fuser -k 5173/tcp 2>/dev/null || true",
+      "problemMatcher": [],
+      "presentation": { "reveal": "silent", "panel": "shared", "close": true }
+    },
+    {
+      // Only needed when serving the frontend from the *binary* rather than
+      // the dev server — i.e. when you open :8099 instead of the Vite URL.
+      //
+      // A debug build does **not** need `cargo build` afterwards: rust-embed
+      // is compiled without `debug-embed`, so it reads web/dist off disk per
+      // request. Rebuild, refresh, done. A *release* build is the opposite —
+      // there the folder is baked in, so it is `npm run build` first and
+      // `cargo build --release` second, and getting that order backwards
+      // produces a binary that compiles cleanly and serves the old frontend.
       "label": "web: build into the binary",
       "type": "shell",
       "command": "npm run build",
       "options": { "cwd": "${workspaceFolder}/web" },
       "problemMatcher": [],
       "group": "build"
+    },
+    {
+      // For staying on the :8099 URL while still seeing frontend edits — the
+      // debugger's own page, rather than Vite's. Rebuilds web/dist on every
+      // save; the running debug binary picks each one up, so a browser
+      // refresh is enough. No hot reload: this is a full rebuild and a manual
+      // refresh, which is the price of not going through Vite.
+      "label": "web: rebuild dist on change",
+      "type": "shell",
+      "command": "npm run build -- --watch",
+      "options": { "cwd": "${workspaceFolder}/web" },
+      "isBackground": true,
+      "problemMatcher": {
+        "pattern": { "regexp": "^$" },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "build started",
+          "endsPattern": "built in"
+        }
+      },
+      "presentation": { "reveal": "always", "panel": "dedicated" }
     },
     {
       "label": "cargo xtask ci",
