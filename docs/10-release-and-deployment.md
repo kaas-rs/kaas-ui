@@ -167,10 +167,23 @@ than a project.
 | push to `main` | `main`, `sha-<short>` |
 | tag `v1.2.3` | `1.2.3`, `1.2`, `1`, `latest` |
 
-> On a `0.x` tag the `{{major}}` pattern emits nothing — `docker/metadata-action`
-> does not publish a `0` tag, deliberately, because `0` would mean "any 0.x"
-> and 0.x makes no compatibility promise. So `v0.1.2` publishes `0.1.2`,
-> `0.1` and `latest`, and there is no `:0`.
+> On a `0.x` tag there is no `:0`, because `0` would mean "any 0.x" and 0.x
+> makes no compatibility promise. So `v0.1.2` publishes `0.1.2`, `0.1` and
+> `latest`.
+>
+> **That is something `release.yml` does, not something the action does.**
+> This paragraph used to claim `docker/metadata-action` suppressed the tag
+> by itself; it does not, and every release from v0.4.0 through v0.8.1
+> published a bare `0` while the claim sat here unchallenged. The action's
+> README has a "Major version zero" section recommending the tag *should not*
+> be generated and supplying the `enable=` expression that stops it — a
+> recommendation misread as a behaviour. The guard is now on the
+> `{{major}}` line and lapses by itself at `v1.0.0`.
+>
+> Nobody noticed for ten releases because the published tag list is only
+> visible in the release log: this repo's `gh` token has no `read:packages`
+> scope, so `gh api …/packages/container/kaas-ui/versions` returns 403 and
+> the tags have to be read out of `DOCKER_METADATA_OUTPUT_JSON`.
 
 **Bump `[workspace.package] version` in the same commit as the tag.** The
 binary reports `CARGO_PKG_VERSION` from `GET /health`, which exists so a

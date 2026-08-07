@@ -98,12 +98,27 @@ jobs:
           # linux/amd64 only. The cluster is a single amd64 node, and
           # cross-building arm64 under QEMU on that same node would triple
           # the release time for nothing. Add arm64 when something needs it.
+          #
+          # The bare-major tag carries an `enable=` guard because
+          # `metadata-action` does **not** special-case a zero major: it
+          # emitted a plain `0` on every release from v0.4.0 through v0.8.1.
+          # Its README has a "Major version zero" section saying the tag
+          # *should not* be generated and giving exactly this expression to
+          # stop it — a recommendation, not a behaviour, which is the reading
+          # docs/10-release-and-deployment.md originally got wrong. `:0` would
+          # mean "any 0.x", a compatibility promise 0.x does not make. The
+          # guard lapses on its own at v1.0.0, so this is a condition rather
+          # than a deleted line.
+          #
+          # Comments live out here, not inside the block below: `tags:` is a
+          # literal scalar handed to the action verbatim, and `#` lines in it
+          # are not documented as being stripped.
           tags: |
             type=ref,event=branch
             type=sha,prefix=sha-,format=short
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
+            type=semver,pattern={{major}},enable=${{ !startsWith(github.ref, 'refs/tags/v0.') }}
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
 
       - id: build
