@@ -91,10 +91,20 @@ pub async fn callback(
             let access = state.policy().access(&principal);
             let roles: Vec<String> = access.role_names().map(str::to_owned).collect();
 
+            // **The groups and the roles together, or this line is not worth
+            // writing.** A role naming a group that never arrives grants
+            // nothing, and the symptom is an empty fleet — indistinguishable
+            // from a role that matched and permits nothing. The claim is only
+            // in hand here: it is not in the session cookie, so no later
+            // request can report it. Seeing `groups=["Platform Team"]` next to
+            // `roles=[]` names the mismatch, which on Entra is usually a group
+            // renamed out from under a `subjects` entry.
+            let groups: Vec<&str> = principal.groups().collect();
             tracing::info!(
                 subject = %principal.subject(),
                 name = %principal.display_name(),
-                roles = roles.len(),
+                ?groups,
+                ?roles,
                 "signed in"
             );
 

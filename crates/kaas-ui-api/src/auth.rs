@@ -151,7 +151,12 @@ impl FromRequestParts<AppState> for Caller {
             return Ok(Self::new(principal, access));
         };
 
-        let principal = Principal::new(found.subject, Some(found.name), []);
+        // No aliases and no groups, deliberately. Roles were resolved once at
+        // login and the cookie carries their *names*; `access_for_roles` below
+        // matches on those and never consults `identifiers`. Rebuilding the
+        // claims here would mean either trusting the cookie to carry a whole
+        // `groups` claim or asking the provider again on every request.
+        let principal = Principal::new(found.subject).with_name(Some(found.name));
         let access = state.policy().access_for_roles(&found.roles);
         Ok(Self::new(principal, access))
     }

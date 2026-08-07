@@ -493,8 +493,14 @@ mod tests {
             .collect()
     }
 
+    /// Someone whose provider put them in these groups.
     fn member(groups: &[&str]) -> Principal {
-        Principal::new("sub-1", None, groups.iter().map(|g| (*g).to_owned()))
+        Principal::new("sub-1").with_groups(groups.iter().map(|g| (*g).to_owned()))
+    }
+
+    /// Someone the provider knows by these other names — a login, an email.
+    fn person(aliases: &[&str]) -> Principal {
+        Principal::new("sub-1").with_aliases(aliases.iter().map(|a| (*a).to_owned()))
     }
 
     fn view_topics(name: &str, subjects: &[&str], clusters: &[&str]) -> Role {
@@ -531,7 +537,7 @@ mod tests {
     #[test]
     fn an_admin_role_permits_every_resource_and_action() {
         let policy = Policy::enforcing(vec![Role::admin("admin", vec!["Woestebanaan".to_owned()])]);
-        let access = policy.access(&Principal::new("sub", None, []));
+        let access = policy.access(&Principal::new("sub"));
         assert!(!access.is_administrator(), "held by role, not by default");
 
         // The subject did not match — the principal has no identifiers here.
@@ -539,12 +545,12 @@ mod tests {
 
         // The login is an *identity*, not the display name: a name somebody
         // chose must never grant access, which is why `identifiers` covers the
-        // subject, the login and the email and stops there.
-        let mine = policy.access(&Principal::new(
-            "sub",
-            Some("Ben".to_owned()),
-            ["Woestebanaan".to_owned()],
-        ));
+        // subject, the aliases and the groups and stops there.
+        let mine = policy.access(
+            &Principal::new("sub")
+                .with_name(Some("Ben".to_owned()))
+                .with_aliases(["Woestebanaan".to_owned()]),
+        );
         assert!(mine.sees("kaas", &labels(&[])));
         assert!(mine.may_read_topic("kaas", &labels(&[]), "payments"));
         assert!(mine.may(
@@ -562,8 +568,41 @@ mod tests {
         // Dex's `sub` is an opaque blob; a role names a person by the login or
         // the email, which is what `identifiers` carries.
         let policy = Policy::enforcing(vec![Role::admin("admin", vec!["Woestebanaan".to_owned()])]);
-        let by_login = Principal::new("CgVhZG1pbhIFbG9jYWw", None, ["Woestebanaan".to_owned()]);
+        let by_login =
+            Principal::new("CgVhZG1pbhIFbG9jYWw").with_aliases(["Woestebanaan".to_owned()]);
         assert!(policy.access(&by_login).sees("kaas", &labels(&[])));
+    }
+
+    /// The point of reading the `groups` claim at all.
+    ///
+    /// A role naming a *set* rather than a person — an Entra group through
+    /// Dex's `microsoft` connector, `org:team` through its GitHub one. Until
+    /// the claim was read this matched nobody, and did so silently: the config
+    /// validated, the login succeeded, and the fleet came back empty.
+    #[test]
+    fn a_group_names_a_subject_just_as_a_login_does() {
+        let policy = Policy::enforcing(vec![view_topics("platform", &["platform-team"], &["*"])]);
+
+        assert!(
+            policy
+                .access(&member(&["platform-team"]))
+                .sees("kaas", &labels(&[]))
+        );
+
+        // And the same string as somebody's login rather than their group is
+        // still a match — `identifiers` is one flat set on purpose.
+        assert!(
+            policy
+                .access(&person(&["platform-team"]))
+                .sees("kaas", &labels(&[]))
+        );
+
+        // Belonging to a different group grants nothing.
+        assert!(
+            !policy
+                .access(&member(&["some-other-team"]))
+                .sees("kaas", &labels(&[]))
+        );
     }
 
     #[test]

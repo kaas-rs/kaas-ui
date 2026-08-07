@@ -30,17 +30,85 @@ use std::time::Duration;
 
 use arc_swap::ArcSwap;
 use openidconnect::core::{
-    CoreAuthenticationFlow, CoreClient, CoreGenderClaim, CoreJsonWebKeySet, CoreProviderMetadata,
+    CoreAuthDisplay, CoreAuthPrompt, CoreAuthenticationFlow, CoreErrorResponseType,
+    CoreGenderClaim, CoreJsonWebKey, CoreJsonWebKeySet, CoreJweContentEncryptionAlgorithm,
+    CoreJwsSigningAlgorithm, CoreProviderMetadata, CoreRevocableToken, CoreRevocationErrorResponse,
+    CoreTokenIntrospectionResponse, CoreTokenType,
 };
 use openidconnect::reqwest;
 use openidconnect::{
-    AuthorizationCode, ClaimsVerificationError, ClientId, CsrfToken, EmptyAdditionalClaims,
-    IdTokenClaims, IssuerUrl, JsonWebKeySetUrl, Nonce, PkceCodeChallenge, PkceCodeVerifier,
-    RedirectUrl, Scope, TokenUrl, UserInfoUrl,
+    AdditionalClaims, AuthorizationCode, ClaimsVerificationError, Client, ClientId, CsrfToken,
+    EmptyExtraTokenFields, IdTokenClaims, IdTokenFields, IssuerUrl, JsonWebKeySetUrl, Nonce,
+    PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, Scope, StandardErrorResponse,
+    StandardTokenResponse, TokenUrl, UserInfoUrl,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::identity::Principal;
+
+/// The one claim beyond the standard set that this crate reads.
+///
+/// `openidconnect` models a token's claims as a fixed standard set plus a type
+/// parameter for everything else, and the `Core*` aliases fill that parameter
+/// with [`EmptyAdditionalClaims`](openidconnect::EmptyAdditionalClaims) — which
+/// parses `groups` and throws it away. Asking for the scope is not enough;
+/// something has to name the claim, and this is it.
+///
+/// `#[serde(default)]` because a provider that asserts no groups is normal and
+/// must not fail a login. Dex's static-password connector has no groups field
+/// at all, and its GitHub connector emits none without an `orgs:` block.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+pub struct GroupClaims {
+    #[serde(default)]
+    groups: Vec<String>,
+}
+
+impl AdditionalClaims for GroupClaims {}
+
+/// The token fields of a provider whose `id_token` carries [`GroupClaims`].
+type GroupIdTokenFields = IdTokenFields<
+    GroupClaims,
+    EmptyExtraTokenFields,
+    CoreGenderClaim,
+    CoreJweContentEncryptionAlgorithm,
+    CoreJwsSigningAlgorithm,
+>;
+
+/// The token endpoint's response, carrying [`GroupIdTokenFields`].
+type GroupTokenResponse = StandardTokenResponse<GroupIdTokenFields, CoreTokenType>;
+
+/// `CoreClient` with the additional-claims parameter filled by [`GroupClaims`].
+///
+/// Spelled out rather than aliased from `CoreClient` because that alias fixes
+/// the parameter this type exists to change. Everything else is the core set,
+/// and the six endpoint-state parameters are passed through so callers can
+/// name the shape `from_provider_metadata` returns.
+type GroupClient<
+    HasAuthUrl,
+    HasDeviceAuthUrl,
+    HasIntrospectionUrl,
+    HasRevocationUrl,
+    HasTokenUrl,
+    HasUserInfoUrl,
+> = Client<
+    GroupClaims,
+    CoreAuthDisplay,
+    CoreGenderClaim,
+    CoreJweContentEncryptionAlgorithm,
+    CoreJsonWebKey,
+    CoreAuthPrompt,
+    StandardErrorResponse<CoreErrorResponseType>,
+    GroupTokenResponse,
+    CoreTokenIntrospectionResponse,
+    CoreRevocableToken,
+    CoreRevocationErrorResponse,
+    HasAuthUrl,
+    HasDeviceAuthUrl,
+    HasIntrospectionUrl,
+    HasRevocationUrl,
+    HasTokenUrl,
+    HasUserInfoUrl,
+>;
 
 /// How long discovery and the token exchange may take.
 ///
@@ -294,7 +362,7 @@ impl Provider {
     fn client(
         &self,
     ) -> Result<
-        CoreClient<
+        GroupClient<
             openidconnect::EndpointSet,
             openidconnect::EndpointNotSet,
             openidconnect::EndpointNotSet,
@@ -306,7 +374,7 @@ impl Provider {
     > {
         let redirect = RedirectUrl::new(self.config.redirect_url.clone())
             .map_err(|error| OidcError::Config(error.to_string()))?;
-        Ok(CoreClient::from_provider_metadata(
+        Ok(GroupClient::from_provider_metadata(
             self.metadata.load().as_ref().clone(),
             ClientId::new(self.config.client_id.clone()),
             // No client secret. This is a public client, and PKCE is what
@@ -616,10 +684,11 @@ fn swap_prefix(endpoint: &str, issuer: &str, internal: &str) -> String {
 /// What the claims say, in this workspace's terms.
 ///
 /// The subject is `sub` — Dex's opaque `(connector, user id)` pair, stable and
-/// unreadable. A role naming a person will be matching `preferred_username` or
-/// `email` instead, which is why [`Principal::identifiers`] covers all three
-/// and why this hands them over rather than picking one.
-fn principal_of(claims: &IdTokenClaims<EmptyAdditionalClaims, CoreGenderClaim>) -> Principal {
+/// unreadable. A role naming a *person* will be matching `preferred_username`
+/// or `email` instead, and one naming a *set of people* will be matching a
+/// `groups` entry. [`Principal::identifiers`] covers all of them, so this hands
+/// every one over rather than picking.
+fn principal_of(claims: &IdTokenClaims<GroupClaims, CoreGenderClaim>) -> Principal {
     let name = claims
         .preferred_username()
         .map(|name| name.as_str().to_owned())
@@ -631,15 +700,18 @@ fn principal_of(claims: &IdTokenClaims<EmptyAdditionalClaims, CoreGenderClaim>) 
         })
         .or_else(|| claims.email().map(|email| email.as_str().to_owned()));
 
-    let mut identities = Vec::new();
+    let mut aliases = Vec::new();
     if let Some(username) = claims.preferred_username() {
-        identities.push(username.as_str().to_owned());
+        aliases.push(username.as_str().to_owned());
     }
     if let Some(email) = claims.email() {
-        identities.push(email.as_str().to_owned());
+        aliases.push(email.as_str().to_owned());
     }
 
-    Principal::new(claims.subject().to_string(), name, identities)
+    Principal::new(claims.subject().to_string())
+        .with_name(name)
+        .with_aliases(aliases)
+        .with_groups(claims.additional_claims().groups.clone())
 }
 
 impl Provider {
@@ -917,5 +989,140 @@ mod tests {
                 "issuer={issuer} internal={internal}"
             );
         }
+    }
+
+    /// A verified `id_token`'s claims, as [`principal_of`] receives them.
+    ///
+    /// Built by deserialization rather than by `IdTokenClaims::new` so the
+    /// fixture is the wire format — the thing a provider actually sends, and
+    /// the thing that has to be *read* for any of this to work. `iss`, `exp`,
+    /// `iat` and `sub` are the required set; `aud` defaults.
+    fn claims_of(json: &str) -> IdTokenClaims<GroupClaims, CoreGenderClaim> {
+        serde_json::from_str(json).expect("the fixture parses")
+    }
+
+    /// The claim this module was changed to read.
+    ///
+    /// Dex's `microsoft` connector resolves Entra group ids to names by
+    /// default, so these arrive as strings a role's `subjects` can name.
+    #[test]
+    fn a_groups_claim_becomes_the_principals_groups() {
+        let who = principal_of(&claims_of(
+            r#"{
+                "iss": "https://kaas.smeding.cloud/dex",
+                "aud": "kaas-ui",
+                "exp": 1893456000,
+                "iat": 1893452400,
+                "sub": "CgVhZG1pbhIIbWljcm9zb2Z0",
+                "preferred_username": "ada",
+                "email": "ada@example.test",
+                "groups": ["platform-team", "kafka-readers"]
+            }"#,
+        ));
+
+        assert_eq!(
+            who.groups().collect::<Vec<_>>(),
+            ["kafka-readers", "platform-team"],
+            "the groups claim, and nothing else"
+        );
+        assert_eq!(
+            who.aliases().collect::<Vec<_>>(),
+            ["ada", "ada@example.test"],
+            "the other names for this one person"
+        );
+        assert!(who.is_authenticated());
+
+        // All of it is matchable, which is what a role's `subjects` needs.
+        let names: Vec<&str> = who.identifiers().collect();
+        assert!(names.contains(&"CgVhZG1pbhIIbWljcm9zb2Z0"));
+        assert!(names.contains(&"ada@example.test"));
+        assert!(names.contains(&"platform-team"));
+    }
+
+    /// The regression guard for the defect this replaced.
+    ///
+    /// `preferred_username` and `email` used to be passed positionally into a
+    /// parameter named `groups`, so `Principal::groups()` answered with an
+    /// email and the real claim went unread. Nothing failed — the login
+    /// succeeded and the fleet was silently empty.
+    #[test]
+    fn an_email_is_an_alias_and_never_a_group() {
+        let who = principal_of(&claims_of(
+            r#"{
+                "iss": "https://kaas.smeding.cloud/dex",
+                "aud": "kaas-ui",
+                "exp": 1893456000,
+                "iat": 1893452400,
+                "sub": "sub-1",
+                "email": "ada@example.test",
+                "groups": ["platform-team"]
+            }"#,
+        ));
+
+        assert_eq!(who.groups().collect::<Vec<_>>(), ["platform-team"]);
+        assert!(
+            !who.groups().any(|group| group.contains('@')),
+            "an email reaching groups() is the bug this test exists for"
+        );
+        assert_eq!(who.aliases().collect::<Vec<_>>(), ["ada@example.test"]);
+    }
+
+    /// A provider that asserts no groups is normal, not an error.
+    ///
+    /// Dex's static-password connector has no groups field at all, and its
+    /// GitHub connector emits none without an `orgs:` block — which is how the
+    /// deployed one is configured. Both must still log somebody in.
+    #[test]
+    fn a_token_without_a_groups_claim_still_names_someone() {
+        let who = principal_of(&claims_of(
+            r#"{
+                "iss": "https://kaas.smeding.cloud/dex",
+                "aud": "kaas-ui",
+                "exp": 1893456000,
+                "iat": 1893452400,
+                "sub": "CgVhZG1pbhIFbG9jYWw",
+                "email": "admin@kaas-ui.test",
+                "name": "acceptance-admin"
+            }"#,
+        ));
+
+        assert_eq!(who.groups().count(), 0);
+        assert!(who.is_authenticated());
+        assert_eq!(who.aliases().collect::<Vec<_>>(), ["admin@kaas-ui.test"]);
+        // `name` is not an identifier — a display name somebody chose must
+        // never grant access — but it is what renders.
+        assert_eq!(who.display_name(), "acceptance-admin");
+        assert!(!who.identifiers().any(|id| id == "acceptance-admin"));
+    }
+
+    /// `preferred_username` wins the display name, then `name`, then `email`.
+    #[test]
+    fn a_display_name_prefers_the_username_the_provider_chose() {
+        let who = principal_of(&claims_of(
+            r#"{
+                "iss": "https://kaas.smeding.cloud/dex",
+                "aud": "kaas-ui",
+                "exp": 1893456000,
+                "iat": 1893452400,
+                "sub": "sub-1",
+                "preferred_username": "ada",
+                "name": "Ada Lovelace",
+                "email": "ada@example.test"
+            }"#,
+        ));
+        assert_eq!(who.display_name(), "ada");
+
+        // With nothing to go on, the opaque subject rather than nothing.
+        let bare = principal_of(&claims_of(
+            r#"{
+                "iss": "https://kaas.smeding.cloud/dex",
+                "aud": "kaas-ui",
+                "exp": 1893456000,
+                "iat": 1893452400,
+                "sub": "CgVhZG1pbhIFbG9jYWw"
+            }"#,
+        ));
+        assert_eq!(bare.display_name(), "CgVhZG1pbhIFbG9jYWw");
+        assert_eq!(bare.aliases().count(), 0);
     }
 }

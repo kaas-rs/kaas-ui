@@ -347,7 +347,7 @@ clusters:
             ..Role::admin("prod-only", vec!["someone".to_owned()])
         }]);
         let state = state(policy);
-        let nobody = Caller::new(Principal::new("stranger", None, []), Access::none());
+        let nobody = Caller::new(Principal::new("stranger"), Access::none());
 
         let error = state.cluster("kaas", &nobody).unwrap_err();
         assert_eq!(error.status(), axum::http::StatusCode::NOT_FOUND);

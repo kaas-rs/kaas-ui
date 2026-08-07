@@ -1638,7 +1638,7 @@ roles:
 
         let registry = Registry::from_config(&config);
         let policy = kaas_ui_auth::Policy::enforcing(config.roles.clone());
-        let who = policy.access(&Principal::new("u", None, ["dev-team".to_owned()]));
+        let who = policy.access(&Principal::new("u").with_groups(["dev-team".to_owned()]));
 
         let sections = arrange(&registry, &who);
         let ids: Vec<&str> = sections.iter().map(|section| section.id.as_str()).collect();
