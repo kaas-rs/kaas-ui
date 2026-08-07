@@ -91,18 +91,35 @@ pub async fn callback(
             let access = state.policy().access(&principal);
             let roles: Vec<String> = access.role_names().map(str::to_owned).collect();
 
-            // **The groups and the roles together, or this line is not worth
-            // writing.** A role naming a group that never arrives grants
-            // nothing, and the symptom is an empty fleet — indistinguishable
-            // from a role that matched and permits nothing. The claim is only
-            // in hand here: it is not in the session cookie, so no later
-            // request can report it. Seeing `groups=["Platform Team"]` next to
-            // `roles=[]` names the mismatch, which on Entra is usually a group
-            // renamed out from under a `subjects` entry.
+            // **Everything a role could have matched, beside what it did
+            // match, or this line is not worth writing.** A role naming
+            // something the token never carried grants nothing, and the
+            // symptom is an empty fleet — indistinguishable from a role that
+            // matched and permits nothing.
+            //
+            // Here is the only place the answer exists. `identifiers()` is
+            // built from these three and nothing else, and none of them reach
+            // the session cookie, which carries resolved role *names*. So no
+            // later request can report them and no other service should have
+            // to be consulted to find out.
+            //
+            // That last part is the lesson rather than the theory. The first
+            // Entra login against this deployment matched no role, and this
+            // line — which then printed only `groups` and `roles` — could not
+            // say why; the answer was in Dex's log, one service away. The
+            // caller was a tenant *guest*, so `email` was the rewritten
+            // `benjamin_smdng.nl#EXT#@openimx.onmicrosoft.com` rather than
+            // any address a role would have been written with.
+            //
+            // Printed as `aliases=[…] groups=[] roles=[]`, that diagnoses
+            // itself: the strings on the left are exactly what a `subjects`
+            // entry has to equal.
+            let aliases: Vec<&str> = principal.aliases().collect();
             let groups: Vec<&str> = principal.groups().collect();
             tracing::info!(
                 subject = %principal.subject(),
                 name = %principal.display_name(),
+                ?aliases,
                 ?groups,
                 ?roles,
                 "signed in"
