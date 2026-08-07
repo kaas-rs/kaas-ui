@@ -740,3 +740,59 @@ async fn assertions() -> Result<Acceptance, String> {
 
     Ok(acceptance)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::connector_link;
+
+    /// Dex's chooser page, as it serves it with two connectors configured.
+    ///
+    /// Recorded rather than described: the `req` id is Dex's, minted per flow,
+    /// and the point of scanning for the link instead of building it is not to
+    /// depend on the shape. A fixture that was written from the same
+    /// assumption as the parser would prove nothing.
+    const CHOOSER: &str = r#"<!DOCTYPE html><html><body>
+      <div class="theme-panel">
+        <div class="theme-form-row">
+          <a href="/dex/auth/local?req=nnq4mqmzqvvhs3d4kkgqvsvkq" class="theme-btn-provider">
+            <span class="dex-btn-text">Log in with Email</span>
+          </a>
+        </div>
+        <div class="theme-form-row">
+          <a href="/dex/auth/mock?req=nnq4mqmzqvvhs3d4kkgqvsvkq" class="theme-btn-provider">
+            <span class="dex-btn-text">Log in with Mock</span>
+          </a>
+        </div>
+      </div></body></html>"#;
+
+    #[test]
+    fn each_connector_is_found_by_its_own_id() {
+        assert_eq!(
+            connector_link(CHOOSER, "local").as_deref(),
+            Some("/dex/auth/local?req=nnq4mqmzqvvhs3d4kkgqvsvkq")
+        );
+        assert_eq!(
+            connector_link(CHOOSER, "mock").as_deref(),
+            Some("/dex/auth/mock?req=nnq4mqmzqvvhs3d4kkgqvsvkq")
+        );
+    }
+
+    /// The failure that matters: a connector that is not configured must be
+    /// `None` rather than somebody else's link. Selecting the wrong connector
+    /// would sign a different identity in and assert against it, which reads
+    /// as a policy bug rather than a missing fixture.
+    #[test]
+    fn a_connector_that_is_not_there_is_not_guessed() {
+        assert_eq!(connector_link(CHOOSER, "microsoft"), None);
+        assert_eq!(connector_link("", "mock"), None);
+    }
+
+    /// The id is matched where the href is, not anywhere the string appears —
+    /// Dex puts the connector's *name* in the link text right next to it.
+    #[test]
+    fn the_link_text_is_not_mistaken_for_the_href() {
+        let link = connector_link(CHOOSER, "mock").expect("mock is in the fixture");
+        assert!(link.starts_with("/dex/auth/"), "{link}");
+        assert!(!link.contains("dex-btn-text"), "{link}");
+    }
+}
