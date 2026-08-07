@@ -169,7 +169,7 @@ export function NavUser({ identity }: { identity: Identity }) {
                     provider and come back with a cookie. */}
                 <a href={withBase("/auth/login")}>
                   <LogIn />
-                  Sign in with GitHub
+                  Sign in
                 </a>
               </DropdownMenuItem>
             ) : (
