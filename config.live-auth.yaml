@@ -65,6 +65,28 @@ roles:
       - resource: consumer
         actions: [view]
 
+  # The third role names a **group**, and no person.
+  #
+  # The two above are reachable by email, which is a path that worked even
+  # while the `groups` claim was being parsed and discarded — the login
+  # succeeded, the role matched nobody, and the fleet came back empty with
+  # nothing logged. This role has no email in it, so the only way to hold it
+  # is for the claim to reach the policy.
+  #
+  # `authors` is what Dex's `mockCallback` connector asserts, fixed in its
+  # source. The static-password connector cannot do this: `staticPasswords`
+  # is email, hash, username and userID, with nowhere to put a group.
+  - name: acceptance-authors
+    subjects: ["authors"]
+    clusters: ["*"]
+    permissions:
+      - resource: cluster_config
+        actions: [view]
+      - resource: topic
+        actions: [view]
+      - resource: consumer
+        actions: [view]
+
 clusters:
   - id: kaas
     name: kaas

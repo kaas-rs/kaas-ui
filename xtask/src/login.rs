@@ -286,17 +286,36 @@ async fn follow(
     Err(format!("more than {MAX_HOPS} redirects, ending at {at}"))
 }
 
-/// Sign in, and end holding a session cookie.
+/// The `href` of one connector's link on Dex's chooser page.
 ///
-/// # Errors
+/// **Dex only shows a chooser when it has more than one connector.** With one
+/// it redirects straight into it, which is what this file assumed for as long
+/// as `dex-test` had only static passwords. The moment a second connector
+/// exists — a `mockCallback` here, Entra alongside GitHub in the deployed one
+/// — that assumption stops being true, and a harness that did not notice would
+/// land on the chooser and report "expected Dex's login form".
 ///
-/// If any hop answers something other than what the flow requires — named by
-/// hop, because "login failed" is the least useful sentence a test can print.
-async fn sign_in(
+/// Scanned for rather than constructed: the `req` id is Dex's, minted per
+/// flow, and guessing the URL shape would couple this to a template.
+fn connector_link(body: &str, connector: &str) -> Option<String> {
+    let needle = format!("/auth/{connector}?req=");
+    let at = body.find(&needle)?;
+    let opening = body.get(..at)?.rfind(['"', '\''])?;
+    let rest = body.get(opening + 1..)?;
+    let closing = rest.find(['"', '\''])?;
+    Some(rest.get(..closing)?.to_owned())
+}
+
+/// Start a login and get as far as the named connector.
+///
+/// Ends either on that connector's own page — Dex's login form, for a password
+/// connector — or wherever it sent the browser next, which for a connector
+/// that needs no interaction is already back at kaas-ui.
+async fn reach_connector(
     client: &reqwest::Client,
     jar: &mut Jar,
-    (user, password): (&str, &str),
-) -> Result<String, String> {
+    connector: &str,
+) -> Result<(Url, reqwest::Response), String> {
     let start_at = Url::parse(&url("/auth/login")).map_err(|error| error.to_string())?;
     let response = hop(client, jar, Method::GET, start_at.clone(), None).await?;
 
@@ -310,7 +329,47 @@ async fn sign_in(
         ));
     }
 
-    let (form_at, response) = follow(client, jar, start_at, response).await?;
+    let (at, response) = follow(client, jar, start_at, response).await?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "the redirect chain ended at {at} with {}",
+            response.status()
+        ));
+    }
+
+    // Already inside a connector: Dex had only one, or it redirected past the
+    // chooser. Nothing to select.
+    if at.path().contains(&format!("/auth/{connector}")) {
+        return Ok((at, response));
+    }
+
+    let body = response
+        .text()
+        .await
+        .map_err(|error| format!("{at}: unreadable body: {error}"))?;
+    let link = connector_link(&body, connector).ok_or_else(|| {
+        format!("landed on {at} with no link to the {connector:?} connector — is it configured?")
+    })?;
+    let chosen = at
+        .join(&link)
+        .map_err(|error| format!("{at}: {link} is not a URL: {error}"))?;
+
+    let response = hop(client, jar, Method::GET, chosen.clone(), None).await?;
+    follow(client, jar, chosen, response).await
+}
+
+/// Sign in with a password, and end holding a session cookie.
+///
+/// # Errors
+///
+/// If any hop answers something other than what the flow requires — named by
+/// hop, because "login failed" is the least useful sentence a test can print.
+async fn sign_in(
+    client: &reqwest::Client,
+    jar: &mut Jar,
+    (user, password): (&str, &str),
+) -> Result<String, String> {
+    let (form_at, response) = reach_connector(client, jar, "local").await?;
     if !response.status().is_success() {
         return Err(format!(
             "the redirect chain ended at {form_at} with {}",
@@ -353,6 +412,42 @@ async fn sign_in(
     if !jar.holds(&landed, "kaas-ui-session") {
         return Err(
             "the login ended at / without a session cookie — the callback took its \
+             no-pending-login branch and verified nothing"
+                .to_owned(),
+        );
+    }
+    Ok(landed.to_string())
+}
+
+/// Sign in through a connector that asserts a fixed identity, groups included.
+///
+/// **The only way this run can prove group matching.** Dex's static-password
+/// connector has no groups field at all — `staticPasswords` is email, hash,
+/// username, userID and nothing else — so the two users above can never
+/// exercise a role whose `subjects` names a group. `mockCallback` asserts
+/// `groups: ["authors"]` and needs no interaction, so selecting it *is* the
+/// whole login.
+///
+/// Which makes this the acceptance for the defect Part 1 fixed: before the
+/// `groups` claim was read, this login succeeded and matched nothing.
+async fn sign_in_as_author(client: &reqwest::Client, jar: &mut Jar) -> Result<String, String> {
+    let (landed, response) = reach_connector(client, jar, "mock").await?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!(
+            "the mock login ended at {landed} with {status}: {}",
+            body.chars().take(200).collect::<String>()
+        ));
+    }
+    if landed.port() != Some(PORT) || landed.path() != "/" {
+        return Err(format!(
+            "a completed login should end at /, ended at {landed}"
+        ));
+    }
+    if !jar.holds(&landed, "kaas-ui-session") {
+        return Err(
+            "the mock login ended at / without a session cookie — the callback took its \
              no-pending-login branch and verified nothing"
                 .to_owned(),
         );
@@ -568,6 +663,62 @@ async fn assertions() -> Result<Acceptance, String> {
             ))
         },
     );
+
+    // --- a group, rather than a person, resolving a role --------------------
+    //
+    // Every assertion above names its caller by email. That path worked even
+    // while the `groups` claim was being parsed and thrown away, which is how
+    // the defect survived a phase: a role naming a group matched nobody, the
+    // config validated, the login succeeded, and the fleet came back empty.
+    // `acceptance-authors` names no person — only the group `mockCallback`
+    // asserts — so it can only be reached by reading the claim.
+    let mut author = Jar::default();
+    let signed_in = sign_in_as_author(&client, &mut author).await;
+    acceptance.check(
+        "a connector that asserts groups completes a login",
+        signed_in
+            .as_ref()
+            .map(|_| "mock".to_owned())
+            .map_err(Clone::clone),
+    );
+
+    if signed_in.is_ok() {
+        let (status, body) = api(&client, &mut author, "/api/me").await?;
+        let roles: Vec<String> = body
+            .get("roles")
+            .and_then(Value::as_array)
+            .map(|roles| {
+                roles
+                    .iter()
+                    .filter_map(|role| role.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default();
+        acceptance.check(
+            "a group in the claim resolves a role that names no person",
+            if status == 200 && roles == ["acceptance-authors"] {
+                Ok(format!("authors -> {roles:?}"))
+            } else {
+                Err(format!(
+                    "{status}, roles {roles:?} — a role naming only a group matched nothing, \
+                     so the groups claim is not reaching the policy"
+                ))
+            },
+        );
+
+        let (status, body) = api(&client, &mut author, "/api/clusters").await?;
+        let seen = fleet_size(&body);
+        acceptance.check(
+            "and that role grants what it says",
+            if status == 200 && seen == admin_fleet && seen > 0 {
+                Ok(format!("{seen} clusters"))
+            } else {
+                Err(format!(
+                    "{status}, {seen} clusters against admin's {admin_fleet}"
+                ))
+            },
+        );
+    }
 
     // --- and signing out ends it --------------------------------------------
     let logout_at = Url::parse(&url("/auth/logout")).map_err(|error| error.to_string())?;
