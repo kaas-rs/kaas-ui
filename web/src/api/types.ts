@@ -147,6 +147,21 @@ export interface Identity {
   loginAvailable: boolean
 }
 
+/**
+ * `GET /health` — liveness, and the only place the build names itself.
+ *
+ * Outside `/api` because a liveness probe is not part of the API surface, and
+ * mirrored here because the header reads `version` from it. That field is
+ * `CARGO_PKG_VERSION`, so it is the *binary's* number rather than the image
+ * tag it was pulled under — which is exactly what makes it worth showing. The
+ * two disagreeing is the drift the endpoint exists to expose.
+ */
+export interface Health {
+  status: string
+  version: string
+  auth: "open" | "enforcing"
+}
+
 export interface Broker {
   nodeId: number
   host: string

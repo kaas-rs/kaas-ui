@@ -12,18 +12,13 @@ import { useIdentity } from "@/api/client"
 import { SignIn } from "@/pages/sign-in"
 import { AppSidebar } from "@/components/app-sidebar"
 import { Breadcrumbs } from "@/components/breadcrumbs"
-import { Button } from "@/components/ui/button"
+import { VersionBadge } from "@/components/version-badge"
 import { Separator } from "@/components/ui/separator"
 import {
   SidebarInset,
   SidebarProvider,
   SidebarTrigger,
 } from "@/components/ui/sidebar"
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip"
 
 export function AppLayout() {
   const identity = useIdentity()
@@ -49,21 +44,12 @@ export function AppLayout() {
           <SidebarTrigger className="-ml-1" />
           <Separator orientation="vertical" className="mr-1 h-4" />
           <Breadcrumbs pathname={pathname} />
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="sm"
-                asChild
-                className="ml-auto text-[12px]"
-              >
-                <a href="/api/openapi.json">openapi.json</a>
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>
-              the document every endpoint above is described by
-            </TooltipContent>
-          </Tooltip>
+          {/* The corner used to hold a link to openapi.json. That is a
+              reference document — something you go and find once — and it has
+              moved to Settings, where the other things you look up live. What
+              belongs in a frame drawn on every page is the answer to "what am
+              I looking at", which is the build. */}
+          <VersionBadge />
         </header>
 
         <main className="min-w-0 flex-1 p-6">

@@ -9,6 +9,7 @@ import type {
   GroupDetail,
   GroupOffset,
   GroupSummary,
+  Health,
   Identity,
   LogDir,
   MessageDetail,
@@ -56,6 +57,25 @@ const encode = encodeURIComponent
 
 /** How often a view that is backed by a metadata snapshot re-asks. */
 const SNAPSHOT_REFRESH = 10_000
+
+/**
+ * The running build.
+ *
+ * `staleTime: Infinity` is not a tuning choice: the binary answering this
+ * request cannot change while the page is open. A new version means a new pod,
+ * which means a new page. Re-asking would only ever return the same string.
+ *
+ * `/health` is not under `/api`, but it is under the deployment's base path,
+ * so it still goes through `get` rather than a bare `fetch`.
+ */
+export function useHealth() {
+  return useQuery({
+    queryKey: ["health"],
+    queryFn: () => get<Health>("/health"),
+    staleTime: Infinity,
+    retry: false,
+  })
+}
 
 export function useClusters() {
   return useQuery({

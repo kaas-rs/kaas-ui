@@ -14,11 +14,13 @@
 // dropdown with one option in it would be worse.
 
 import { useEffect, useState, type ReactNode } from "react"
-import { Clock, Monitor, Moon, Sun } from "lucide-react"
+import { Clock, ExternalLinkIcon, Monitor, Moon, Sun } from "lucide-react"
 import { formatInTimeZone } from "date-fns-tz"
 
+import { withBase } from "@/api/base"
 import { Empty, Mono, Section } from "@/components/domain"
 import { Button } from "@/components/ui/button"
+import { Item, ItemActions, ItemContent, ItemTitle } from "@/components/ui/item"
 import {
   displayTimeZone,
   resolveTheme,
@@ -126,7 +128,7 @@ export function Settings() {
     <div className="max-w-3xl">
       <PageTitle
         title="Settings"
-        subtitle="How this browser displays kaas-ui. Nothing here is sent to the server."
+        subtitle="How this browser displays kaas-ui, and where to find what it is built on."
       />
 
       <Section title="Appearance">
@@ -163,11 +165,39 @@ export function Settings() {
         </p>
       </Section>
 
-      <Section title="Where these live">
+      {/* Not a setting, and the heading says so rather than pretending
+          otherwise. It used to sit in the top bar of every page, which gave a
+          document you read once the same weight as the navigation. */}
+      <Section title="Reference">
+        {/* `asChild`, not `render` — the Item in this registry is the Radix
+            build, so the anchor is passed as the child and `Slot.Root` merges
+            the props onto it. No wrapping bordered div either: `outline` is
+            the border, and keeping both draws two. */}
+        <Item variant="outline" asChild>
+          <a
+            href={withBase("/api/openapi.json")}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <ItemContent>
+              <ItemTitle>OpenAPI</ItemTitle>
+            </ItemContent>
+            <ItemActions>
+              <ExternalLinkIcon className="size-4" />
+            </ItemActions>
+          </a>
+        </Item>
+      </Section>
+
+      {/* Named "your settings" rather than "these" because Reference now sits
+          directly above it: "these" would sweep in the API description, which
+          is served by the binary and would make "not on the server" read as a
+          contradiction. */}
+      <Section title="Where your settings live">
         <Empty>
-          In this browser's local storage — not in your account, and not on the
-          server. Another browser, or this one after its site data is cleared,
-          starts from the defaults again.
+          Your theme choice lives in this browser's local storage — not in your
+          account, and not on the server. Another browser, or this one after its
+          site data is cleared, starts from the defaults again.
         </Empty>
       </Section>
     </div>
