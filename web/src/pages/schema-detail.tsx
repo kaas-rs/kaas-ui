@@ -11,12 +11,7 @@
 
 import { useState } from "react"
 import { Link } from "@tanstack/react-router"
-import {
-  AlertTriangle,
-  ArrowLeft,
-  ChevronRight,
-  FileWarning,
-} from "lucide-react"
+import { AlertTriangle, ArrowLeft, FileWarning } from "lucide-react"
 
 import { useEnvironment, useSubjectVersions, useTopics } from "@/api/client"
 import type { SubjectSchema } from "@/api/types"
@@ -25,12 +20,8 @@ import { PageTitle } from "@/components/page-title"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible"
 import { Label } from "@/components/ui/label"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   Select,
   SelectContent,
@@ -86,13 +77,9 @@ export function SchemaDetail({
   // its keep on the schema with ninety fields and one changed default, which
   // is exactly where scrolling a full diff stops being reading.
   const [compact, setCompact] = useState(false)
-  // Open. "Collapsible" is a thing you may fold, not a thing that starts
-  // folded — defaulting it shut deleted the diff from the page for anyone who
-  // was reading it, which is not a smaller version of the feature but the
-  // absence of one. The argument for shut was that a closed Radix panel
-  // unmounts, so the quadratic LCS never runs; that is true and it is worth
-  // less than the section being there.
-  const [comparing, setComparing] = useState(true)
+  // Which view. `actual` first: the schema as it stands is why anyone opens a
+  // subject, and comparing is the follow-up question.
+  const [view, setView] = useState<SchemaView>("actual")
 
   const back = (
     <Button variant="ghost" size="sm" asChild>
@@ -232,10 +219,65 @@ export function SchemaDetail({
 
       <AvailableOn envId={envId} registryId={registryId} subject={subject} />
 
-      <Section title="Actual version">
-        <SchemaText text={newest.schema} format={newest.format} />
-        <References schema={newest} />
-      </Section>
+      {/* Two views of the same schema, not two sections of the page. The
+          collapsible this replaces had one of them hidden behind a disclosure,
+          which made "what does it say now" and "what changed" feel like
+          different weights of question. They are the same question at two
+          version counts.
+
+          Radix unmounts the panel that is not shown, so the quadratic LCS
+          still does not run until you ask for it — the reason the collapsible
+          existed, kept, without anything being missing from the page. */}
+      <Tabs value={view} onValueChange={(next) => setView(next as SchemaView)}>
+        <TabsList>
+          <TabsTrigger value="actual">actual version</TabsTrigger>
+          {/* Absent rather than disabled on a single-version subject: there is
+              nothing to compare it with, and a tab that explains its own
+              uselessness is a row of noise on every new subject. */}
+          {versions.length > 1 ? (
+            <TabsTrigger value="compare">compare versions</TabsTrigger>
+          ) : null}
+        </TabsList>
+
+        <TabsContent value="actual" className="mt-4">
+          <SchemaText text={newest.schema} format={newest.format} />
+          <References schema={newest} />
+        </TabsContent>
+
+        <TabsContent value="compare" className="mt-4">
+          <div className="mb-2 flex flex-wrap items-center gap-4 text-xs">
+            <VersionSelect
+              label="From"
+              versions={versions}
+              value={a?.version}
+              onChange={setLeft}
+            />
+            <VersionSelect
+              label="To"
+              versions={versions}
+              value={b?.version}
+              onChange={setRight}
+            />
+            <Label className="text-ink-muted gap-1.5 self-end pb-1 text-[12px] font-normal">
+              <input
+                type="checkbox"
+                checked={compact}
+                onChange={(event) => setCompact(event.target.checked)}
+              />
+              compact
+              <span
+                className="text-ink-faint"
+                title="Drop the unchanged lines, keeping three either side of every change"
+              >
+                (changes only)
+              </span>
+            </Label>
+          </div>
+          {a && b ? (
+            <Diff before={a.schema} after={b.schema} compact={compact} />
+          ) : null}
+        </TabsContent>
+      </Tabs>
 
       {older.length ? (
         <Section title="Old versions">
@@ -257,66 +299,6 @@ export function SchemaDetail({
             </Table>
           </div>
         </Section>
-      ) : null}
-
-      {/* Foldable, and open. Closing it unmounts the panel, so the quadratic
-          LCS over both schemas stops running — which is the whole benefit, and
-          it belongs to the reader who decided they were done comparing rather
-          than to a default that hides the section from everyone who was not. */}
-      {versions.length > 1 ? (
-        <Collapsible open={comparing} onOpenChange={setComparing}>
-          <Section
-            title="Compare versions"
-            actions={
-              <CollapsibleTrigger asChild>
-                <Button variant="ghost" size="sm">
-                  {comparing ? "hide" : `compare ${versions.length} versions`}
-                  <ChevronRight
-                    aria-hidden
-                    className={cn(
-                      "transition-transform duration-200",
-                      comparing && "rotate-90"
-                    )}
-                  />
-                </Button>
-              </CollapsibleTrigger>
-            }
-          >
-            <CollapsibleContent>
-              <div className="mb-2 flex flex-wrap items-center gap-4 text-xs">
-                <VersionSelect
-                  label="From"
-                  versions={versions}
-                  value={a?.version}
-                  onChange={setLeft}
-                />
-                <VersionSelect
-                  label="To"
-                  versions={versions}
-                  value={b?.version}
-                  onChange={setRight}
-                />
-                <Label className="text-ink-muted gap-1.5 self-end pb-1 text-[12px] font-normal">
-                  <input
-                    type="checkbox"
-                    checked={compact}
-                    onChange={(event) => setCompact(event.target.checked)}
-                  />
-                  compact
-                  <span
-                    className="text-ink-faint"
-                    title="Drop the unchanged lines, keeping three either side of every change"
-                  >
-                    (changes only)
-                  </span>
-                </Label>
-              </div>
-              {a && b ? (
-                <Diff before={a.schema} after={b.schema} compact={compact} />
-              ) : null}
-            </CollapsibleContent>
-          </Section>
-        </Collapsible>
       ) : null}
     </>
   )
@@ -697,6 +679,9 @@ function Diff({
     </pre>
   )
 }
+
+/** Which of the two views of a schema is showing. */
+type SchemaView = "actual" | "compare"
 
 /** How many unchanged lines to keep either side of a change. */
 const CONTEXT = 3
