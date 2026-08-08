@@ -165,11 +165,12 @@ export function SchemaDetail({
         <ErrorChips errors={detail.data.errors} />
       ) : null}
 
-      {/* Overview first, then the schema. It used to be a narrow column beside
-          the text, which made it a sidebar — the thing you read *if* the code
-          did not answer you. It is the opposite: five short facts that frame
-          everything below, and none of them wants a 220px column. Full width
-          above, and the text gets the whole page. */}
+      {/* What this subject *is*, then where it applies, then what it says.
+          Both of the first two used to sit after or beside the schema text,
+          which put the longest thing on the page in front of the two shortest
+          — and the schema is the one part you scroll rather than read, so
+          anything below it is behind a scroll. Full width, and the text gets
+          the whole page once you have the frame for it. */}
       <Section title="Overview">
         <Card className="px-5 py-4">
           {/* Two columns on a phone, five on a desktop, separated by space
@@ -206,12 +207,12 @@ export function SchemaDetail({
         </Card>
       </Section>
 
+      <AvailableOn envId={envId} registryId={registryId} subject={subject} />
+
       <Section title="Actual version">
         <SchemaText text={newest.schema} format={newest.format} />
         <References schema={newest} />
       </Section>
-
-      <AvailableOn envId={envId} registryId={registryId} subject={subject} />
 
       {older.length ? (
         <Section title="Old versions">
