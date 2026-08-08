@@ -165,33 +165,51 @@ export function SchemaDetail({
         <ErrorChips errors={detail.data.errors} />
       ) : null}
 
-      {/* The schema and the facts about it, side by side. The text is the
-          reason anyone opened this page, so it gets the width; the facts are
-          five short lines and read as a column. */}
-      <div className="grid gap-4 lg:grid-cols-[2.4fr_minmax(220px,1fr)]">
-        <Section title="Actual version">
-          <SchemaText text={newest.schema} format={newest.format} />
-          <References schema={newest} />
-        </Section>
-
-        <Card className="h-fit p-4">
-          <dl className="space-y-3 text-xs">
-            <Fact label="Latest version">{newest.version}</Fact>
-            <Fact label="ID">#{newest.id}</Fact>
+      {/* Overview first, then the schema. It used to be a narrow column beside
+          the text, which made it a sidebar — the thing you read *if* the code
+          did not answer you. It is the opposite: five short facts that frame
+          everything below, and none of them wants a 220px column. Full width
+          above, and the text gets the whole page. */}
+      <Section title="Overview">
+        <Card className="px-5 py-4">
+          {/* Two columns on a phone, five on a desktop, separated by space
+              rather than rules. A wrapped grid has no row a separator could
+              belong to, so drawing one means nth-child arithmetic per
+              breakpoint — three chances to leave a stray line down the middle,
+              for a divider that five short facts do not need. */}
+          <dl className="grid grid-cols-2 gap-x-8 gap-y-4 sm:grid-cols-3 lg:grid-cols-5">
+            <Fact label="Latest version">v{newest.version}</Fact>
+            <Fact label="Schema id" hint="The number the wire format carries.">
+              #{newest.id}
+            </Fact>
             <Fact label="Type">
               <Badge variant="outline">{newest.format}</Badge>
             </Fact>
-            <Fact label="Subject">
-              <span className="font-mono break-all">{subject}</span>
+            <Fact label="Versions">
+              {versions.length}
+              {older.length > 0 ? (
+                <span className="text-ink-faint text-[11px]">
+                  {" "}
+                  ({older.length} superseded)
+                </span>
+              ) : null}
             </Fact>
-            <Fact label="Compatibility">
+            <Fact
+              label="Compatibility"
+              hint="What the registry will accept as the next version."
+            >
               {detail.data?.compatibility ?? (
                 <span className="text-ink-faint">—</span>
               )}
             </Fact>
           </dl>
         </Card>
-      </div>
+      </Section>
+
+      <Section title="Actual version">
+        <SchemaText text={newest.schema} format={newest.format} />
+        <References schema={newest} />
+      </Section>
 
       <AvailableOn envId={envId} registryId={registryId} subject={subject} />
 
@@ -240,17 +258,33 @@ export function SchemaDetail({
   )
 }
 
+/**
+ * One cell of the overview.
+ *
+ * `Subject` is not among them any more: the page title is the subject, in
+ * mono, two inches above — a strip whose first job is to repeat the heading
+ * has spent a fifth of itself saying nothing. `Versions` took the slot, which
+ * is the one fact the page held and never stated.
+ */
 function Fact({
   label,
+  hint,
   children,
 }: {
   label: string
+  hint?: string
   children: React.ReactNode
 }) {
   return (
-    <div>
-      <dt className="text-[11px] text-ink-faint">{label}</dt>
-      <dd className="mt-0.5 font-mono">{children}</dd>
+    <div className="min-w-0">
+      <dt
+        className="text-ink-faint text-[11px] tracking-wide uppercase"
+        title={hint}
+        style={hint ? { cursor: "help" } : undefined}
+      >
+        {label}
+      </dt>
+      <dd className="mt-1 truncate font-mono text-[15px]">{children}</dd>
     </div>
   )
 }
