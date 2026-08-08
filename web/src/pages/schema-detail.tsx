@@ -11,7 +11,7 @@
 
 import { useState } from "react"
 import { Link } from "@tanstack/react-router"
-import { AlertTriangle, ArrowLeft, FileWarning } from "lucide-react"
+import { AlertTriangle, ArrowLeft, FileWarning, RotateCcw } from "lucide-react"
 
 import { useEnvironment, useSubjectVersions, useTopics } from "@/api/client"
 import type { SubjectSchema } from "@/api/types"
@@ -21,7 +21,6 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   Select,
   SelectContent,
@@ -77,9 +76,6 @@ export function SchemaDetail({
   // its keep on the schema with ninety fields and one changed default, which
   // is exactly where scrolling a full diff stops being reading.
   const [compact, setCompact] = useState(false)
-  // Which view. `actual` first: the schema as it stands is why anyone opens a
-  // subject, and comparing is the follow-up question.
-  const [view, setView] = useState<SchemaView>("actual")
 
   const back = (
     <Button variant="ghost" size="sm" asChild>
@@ -147,9 +143,16 @@ export function SchemaDetail({
     )
   }
 
-  const previous = versions[versions.length - 2]
-  const a = versions.find((v) => v.version === left) ?? previous ?? newest
-  const b = versions.find((v) => v.version === right) ?? newest
+  // Both ends default to the newest, so the first thing the page shows is the
+  // schema as it stands rather than a diff nobody asked for. It used to open
+  // on previous-vs-newest, which answered a question one version late.
+  const a = versions.find((version) => version.version === left) ?? newest
+  const b = versions.find((version) => version.version === right) ?? newest
+  const atDefault = a.version === newest.version && b.version === newest.version
+  // Textually the same once both are normalised, which is exactly the
+  // condition under which the diff would have nothing to draw. Two *different*
+  // versions can satisfy it — a registration that only reordered keys.
+  const identical = prettyJson(a.schema) === prettyJson(b.schema)
   const older = versions.slice(0, -1).reverse()
 
   return (
@@ -219,65 +222,95 @@ export function SchemaDetail({
 
       <AvailableOn envId={envId} registryId={registryId} subject={subject} />
 
-      {/* Two views of the same schema, not two sections of the page. The
-          collapsible this replaces had one of them hidden behind a disclosure,
-          which made "what does it say now" and "what changed" feel like
-          different weights of question. They are the same question at two
-          version counts.
-
-          Radix unmounts the panel that is not shown, so the quadratic LCS
-          still does not run until you ask for it — the reason the collapsible
-          existed, kept, without anything being missing from the page. */}
-      <Tabs value={view} onValueChange={(next) => setView(next as SchemaView)}>
-        <TabsList>
-          <TabsTrigger value="actual">actual version</TabsTrigger>
-          {/* Absent rather than disabled on a single-version subject: there is
-              nothing to compare it with, and a tab that explains its own
-              uselessness is a row of noise on every new subject. */}
-          {versions.length > 1 ? (
-            <TabsTrigger value="compare">compare versions</TabsTrigger>
-          ) : null}
-        </TabsList>
-
-        <TabsContent value="actual" className="mt-4">
-          <SchemaText text={newest.schema} format={newest.format} />
-          <References schema={newest} />
-        </TabsContent>
-
-        <TabsContent value="compare" className="mt-4">
+      {/* One view, not two tabs. At its default — newest against newest —
+          there is nothing to diff, so it renders the schema whole: the
+          "actual version" tab was that state of this control all along, and
+          keeping both meant two places showing the same text. Move either end
+          and it becomes a diff. */}
+      <Section
+        title={versions.length > 1 ? "Compare versions" : "Schema"}
+        actions={
+          // Only once you have moved away from it. A reset that is always
+          // there is a control that does nothing most of the time, and this
+          // one has a real job: getting back to "just show me the schema"
+          // without working out which version that was.
+          atDefault ? null : (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setLeft(undefined)
+                setRight(undefined)
+              }}
+            >
+              <RotateCcw aria-hidden />
+              reset to v{newest.version}
+            </Button>
+          )
+        }
+      >
+        {versions.length > 1 ? (
           <div className="mb-2 flex flex-wrap items-center gap-4 text-xs">
             <VersionSelect
               label="From"
               versions={versions}
-              value={a?.version}
+              value={a.version}
               onChange={setLeft}
             />
             <VersionSelect
               label="To"
               versions={versions}
-              value={b?.version}
+              value={b.version}
               onChange={setRight}
             />
-            <Label className="text-ink-muted gap-1.5 self-end pb-1 text-[12px] font-normal">
+            {/* Nothing to collapse when nothing changed, and a checkbox that
+                would silently do nothing is worse than one that says it
+                cannot. */}
+            <Label
+              className={cn(
+                "gap-1.5 self-end pb-1 text-[12px] font-normal",
+                identical ? "text-ink-faint" : "text-ink-muted"
+              )}
+            >
               <input
                 type="checkbox"
-                checked={compact}
+                checked={compact && !identical}
+                disabled={identical}
                 onChange={(event) => setCompact(event.target.checked)}
               />
               compact
               <span
                 className="text-ink-faint"
-                title="Drop the unchanged lines, keeping three either side of every change"
+                title={
+                  identical
+                    ? "These two are the same schema, so there are no unchanged lines to drop"
+                    : "Drop the unchanged lines, keeping three either side of every change"
+                }
               >
-                (changes only)
+                {identical ? "(no changes)" : "(changes only)"}
               </span>
             </Label>
           </div>
-          {a && b ? (
-            <Diff before={a.schema} after={b.schema} compact={compact} />
-          ) : null}
-        </TabsContent>
-      </Tabs>
+        ) : null}
+
+        {identical ? (
+          <>
+            <SchemaText text={b.schema} format={b.format} />
+            <References schema={b} />
+            {/* Only when it is surprising. Two ends on the same version being
+                identical is arithmetic; two *different* versions being
+                identical is a fact about the registry worth stating. */}
+            {a.version !== b.version ? (
+              <p className="text-ink-muted mt-2 flex items-center gap-2 text-xs">
+                <FileWarning className="size-3.5" aria-hidden />v{a.version} and
+                v{b.version} are the same schema once formatting is ignored.
+              </p>
+            ) : null}
+          </>
+        ) : (
+          <Diff before={a.schema} after={b.schema} compact={compact} />
+        )}
+      </Section>
 
       {older.length ? (
         <Section title="Old versions">
@@ -632,15 +665,6 @@ function Diff({
   const right = prettyJson(after).split("\n")
   const lines = diffLines(left, right)
 
-  if (!lines.some((line) => line.kind !== "same")) {
-    return (
-      <p className="flex items-center gap-2 text-xs text-ink-muted">
-        <FileWarning className="size-3.5" aria-hidden />
-        These two versions are identical once formatting is ignored.
-      </p>
-    )
-  }
-
   const shown: DiffRow[] = compact
     ? collapse(lines)
     : lines.map((line) => ({ line }))
@@ -679,9 +703,6 @@ function Diff({
     </pre>
   )
 }
-
-/** Which of the two views of a schema is showing. */
-type SchemaView = "actual" | "compare"
 
 /** How many unchanged lines to keep either side of a change. */
 const CONTEXT = 3

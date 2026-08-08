@@ -52,9 +52,6 @@ environments:
       - id: apicurio
         name: Apicurio
         url: http://apicurio-registry.apicurio.svc.cluster.local:8080/apis/ccompat/v7
-      - id: apicurio2
-        name: Apicurio2
-        url: http://apicurio-registry.apicurio.svc.cluster.local:8080/apis/ccompat/v7
 
     kafka_clusters:
       - id: kaas
