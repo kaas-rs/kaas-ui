@@ -46,6 +46,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { highlight } from "@/lib/highlight"
 import { cn } from "@/lib/utils"
 
 /** How many topics to search when resolving a subject's topic. */
@@ -85,7 +86,13 @@ export function SchemaDetail({
   // its keep on the schema with ninety fields and one changed default, which
   // is exactly where scrolling a full diff stops being reading.
   const [compact, setCompact] = useState(false)
-  const [comparing, setComparing] = useState(false)
+  // Open. "Collapsible" is a thing you may fold, not a thing that starts
+  // folded — defaulting it shut deleted the diff from the page for anyone who
+  // was reading it, which is not a smaller version of the feature but the
+  // absence of one. The argument for shut was that a closed Radix panel
+  // unmounts, so the quadratic LCS never runs; that is true and it is worth
+  // less than the section being there.
+  const [comparing, setComparing] = useState(true)
 
   const back = (
     <Button variant="ghost" size="sm" asChild>
@@ -252,11 +259,10 @@ export function SchemaDetail({
         </Section>
       ) : null}
 
-      {/* Collapsed until asked for, and the reason is not tidiness: the diff
-          is a quadratic LCS over both schemas, and Radix unmounts a closed
-          panel, so a page nobody compares on does not compute one. It is the
-          last section on the page — reaching it is already deliberate, and one
-          click is cheap next to work done on every render for nobody. */}
+      {/* Foldable, and open. Closing it unmounts the panel, so the quadratic
+          LCS over both schemas stops running — which is the whole benefit, and
+          it belongs to the reader who decided they were done comparing rather
+          than to a default that hides the section from everyone who was not. */}
       {versions.length > 1 ? (
         <Collapsible open={comparing} onOpenChange={setComparing}>
           <Section
@@ -602,10 +608,14 @@ function References({ schema }: { schema: SubjectSchema }) {
  * source and is shown as it was registered.
  */
 function SchemaText({ text, format }: { text: string; format: string }) {
-  const shown = format === "protobuf" ? text : prettyJson(text)
+  const proto = format === "protobuf"
+  const shown = proto ? text : prettyJson(text)
   return (
     <pre className="max-h-[45vh] overflow-auto rounded-md border border-line bg-surface-sunken p-3 font-mono text-[11px] leading-relaxed whitespace-pre">
-      {shown}
+      {/* Coloured by the declared format rather than by sniffing the text: the
+          registry says which of the three this is, and a JSON schema that
+          happens to start with a brace is not a reason to guess. */}
+      {highlight(shown, proto ? "proto" : "json")}
     </pre>
   )
 }
