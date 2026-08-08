@@ -29,7 +29,8 @@ import {
 } from "@/pages/cluster"
 import { TopicDetail, Topics } from "@/pages/topics"
 import { GroupDetail, Groups } from "@/pages/groups"
-import { SchemaDetail, SchemaRegistry } from "@/pages/schema-registry"
+import { SchemaRegistry } from "@/pages/schema-registry"
+import { SchemaDetail } from "@/pages/schema-detail"
 import { EnvironmentPage } from "@/pages/environment"
 import {
   messageSearchSchema,
