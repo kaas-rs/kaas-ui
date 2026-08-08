@@ -14,7 +14,7 @@ import { useMemo, useState } from "react"
 import { Link } from "@tanstack/react-router"
 import { AlertTriangle } from "lucide-react"
 
-import { useSubjectDetails, useSubjects } from "@/api/client"
+import { useEnvironment, useSubjectDetails, useSubjects } from "@/api/client"
 import type { RegistryCard, SubjectRow } from "@/api/types"
 import { Empty, Mono, Spinner } from "@/components/domain"
 import { PageTitle } from "@/components/page-title"
@@ -51,6 +51,14 @@ export function SchemaRegistry({
   // so they arrive into a table that is already on screen.
   const subjects = useSubjects(envId, registryId, query)
   const details = useSubjectDetails(envId, registryId, query)
+  // Who reads these. A registry serves the *environment*, so every subject
+  // below is resolvable on every cluster that decodes against it — which is a
+  // fact about the whole table and belongs above it, not repeated per row.
+  const environment = useEnvironment(envId)
+  const usedBy =
+    environment.data?.items[0]?.schemaRegistries.find(
+      (entry) => entry.registry.id === registryId
+    )?.usedBy ?? []
 
   const described = useMemo(() => {
     const map = new Map<string, SubjectRow>()
@@ -110,7 +118,37 @@ export function SchemaRegistry({
           on a fleet with two registries, twice. */}
       <PageTitle
         title={registry.name}
-        subtitle={`schema registry — ${total} subject${total === 1 ? "" : "s"}`}
+        subtitle={
+          <span className="flex flex-wrap items-center gap-x-2">
+            <span>
+              schema registry — {total} subject{total === 1 ? "" : "s"}
+            </span>
+            {/* The plural is the point: these subjects are not one cluster's.
+                Naming the readers here is what stops the table reading as a
+                property of whichever cluster you arrived from. */}
+            {usedBy.length > 0 ? (
+              <span className="text-ink-faint">
+                · resolved on{" "}
+                {usedBy.map((clusterId, index) => (
+                  <span key={clusterId}>
+                    {index > 0 ? ", " : ""}
+                    <Link
+                      to="/environments/$envId/clusters/$clusterId"
+                      params={{ envId, clusterId }}
+                      className="font-mono hover:underline"
+                    >
+                      {clusterId}
+                    </Link>
+                  </span>
+                ))}
+              </span>
+            ) : (
+              <span className="text-ink-faint">
+                · no cluster here decodes against it
+              </span>
+            )}
+          </span>
+        }
       />
 
       {/* Only when it is not answering. A registry that cannot be reached

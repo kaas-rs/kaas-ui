@@ -13,7 +13,7 @@ import { useState } from "react"
 import { Link } from "@tanstack/react-router"
 import { AlertTriangle, ArrowLeft, FileWarning } from "lucide-react"
 
-import { useFleet, useSubjectVersions, useTopics } from "@/api/client"
+import { useEnvironment, useSubjectVersions, useTopics } from "@/api/client"
 import type { SubjectSchema } from "@/api/types"
 import { Empty, ErrorChips, Mono, Section, Spinner } from "@/components/domain"
 import { PageTitle } from "@/components/page-title"
@@ -158,12 +158,7 @@ export function SchemaDetail({
             </span>
           ) : undefined
         }
-        actions={
-          <span className="flex items-center gap-2">
-            <GoToTopic envId={envId} subject={subject} />
-            {back}
-          </span>
-        }
+        actions={<span className="flex items-center gap-2">{back}</span>}
       />
 
       {detail.data?.errors.length ? (
@@ -197,6 +192,8 @@ export function SchemaDetail({
           </dl>
         </Card>
       </div>
+
+      <AvailableOn envId={envId} registryId={registryId} subject={subject} />
 
       {older.length ? (
         <Section title="Old versions">
@@ -259,43 +256,153 @@ function Fact({
 }
 
 /**
- * A link to the topic this subject describes, when there is one to be sure of.
+ * Every cluster this schema resolves on, and where its topic actually is.
  *
- * The topic is looked up rather than assumed. `TopicNameStrategy` says
- * `orders-value` describes `orders`, but a subject can outlive its topic, and
- * a button that opens "the cluster did not describe this topic" is worse than
- * no button. The lookup is served from the metadata snapshot, so it costs no
- * broker round trip.
+ * The question the page could not answer before. A registry serves an
+ * *environment*, so a subject is not a fact about one cluster — every cluster
+ * that decodes against this registry resolves schema id 1 to this schema, from
+ * the same handle and the same cache. The old button picked the first such
+ * cluster and linked to it, which was a guess dressed as an answer: on a
+ * two-cluster environment it silently hid one of them.
+ *
+ * Two different claims, kept apart because they can disagree:
+ *
+ * * **the schema resolves here** — true of every cluster in `usedBy`, by
+ *   configuration, whether or not anything has ever produced against it;
+ * * **the topic is here** — only under `TopicNameStrategy`, and only where
+ *   the cluster actually holds it. A subject outlives its topic, and a link to
+ *   a topic that is not there is worse than no link.
  */
-function GoToTopic({ envId, subject }: { envId: string; subject: string }) {
-  const name = topicOf(subject)
-  // Which cluster? A registry serves the environment, so the subject names no
-  // cluster and cannot. Every cluster here that decodes against a registry is
-  // a candidate; the first one that actually holds the topic is the answer,
-  // and if none does there is no button.
-  const fleet = useFleet()
-  const candidates =
-    fleet.data?.items
-      .find((section) => section.id === envId)
-      ?.clusters.filter((card) => card.schemaRegistry !== null) ?? []
-  const clusterId = candidates[0]?.id ?? ""
-  const topics = useTopics(envId, clusterId, {
-    search: name ?? "",
-    limit: PAGE,
-  })
-  if (!name || !clusterId) return null
-  const exists = topics.data?.items.some((topic) => topic.name === name)
-  if (!exists) return null
+function AvailableOn({
+  envId,
+  registryId,
+  subject,
+}: {
+  envId: string
+  registryId: string
+  subject: string
+}) {
+  const environment = useEnvironment(envId)
+  const usedBy =
+    environment.data?.items[0]?.schemaRegistries.find(
+      (entry) => entry.registry.id === registryId
+    )?.usedBy ?? []
+  const topic = topicOf(subject)
+
+  if (usedBy.length === 0) {
+    return (
+      <Section title="Available on">
+        <Empty>
+          No cluster in this environment decodes against this registry, so
+          nothing resolves <Mono>{subject}</Mono> today. The subject is
+          registered all the same.
+        </Empty>
+      </Section>
+    )
+  }
 
   return (
-    <Button variant="outline" size="sm" asChild>
-      <Link
-        to="/environments/$envId/clusters/$clusterId/topics/$topic"
-        params={{ envId, clusterId, topic: name }}
-      >
-        go to topic <span className="font-mono">{name}</span>
-      </Link>
-    </Button>
+    <Section title="Available on">
+      <div className="rounded-md border">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>cluster</TableHead>
+              <TableHead>schema resolves</TableHead>
+              <TableHead>
+                {topic ? (
+                  <>
+                    topic <span className="font-mono">{topic}</span>
+                  </>
+                ) : (
+                  "topic"
+                )}
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {usedBy.map((clusterId) => (
+              <ClusterRow
+                key={clusterId}
+                envId={envId}
+                clusterId={clusterId}
+                topic={topic}
+              />
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+      <p className="mt-2 text-[11px] text-ink-faint">
+        Every cluster here holds the same <Mono>Arc&lt;RegistryHandle&gt;</Mono>
+        , so schema id {""}
+        <Mono>1</Mono> is genuinely the same schema on all of them — one set of
+        decoders, one id→schema cache.
+      </p>
+    </Section>
+  )
+}
+
+/**
+ * One cluster's row: the schema, and the topic if this is that kind of subject.
+ *
+ * A hook per row rather than one lookup for all of them, because `useTopics`
+ * is per cluster. It costs nothing at the broker — the topic list is served
+ * from the metadata snapshot — so the honest answer is worth the extra query.
+ */
+function ClusterRow({
+  envId,
+  clusterId,
+  topic,
+}: {
+  envId: string
+  clusterId: string
+  topic: string | null
+}) {
+  const topics = useTopics(envId, clusterId, {
+    search: topic ?? "",
+    limit: PAGE,
+  })
+  const exists = topic
+    ? topics.data?.items.some((entry) => entry.name === topic)
+    : undefined
+
+  return (
+    <TableRow>
+      <TableCell>
+        <Link
+          to="/environments/$envId/clusters/$clusterId"
+          params={{ envId, clusterId }}
+          className="font-mono hover:underline"
+          style={{ color: "var(--rust-ink)" }}
+        >
+          {clusterId}
+        </Link>
+      </TableCell>
+      <TableCell className="text-ok-ink text-[12px]">yes</TableCell>
+      <TableCell className="text-[12px]">
+        {topic === null ? (
+          <span
+            className="text-ink-faint"
+            title="Only TopicNameStrategy names a topic a subject can be undone into"
+          >
+            not derivable from this subject
+          </span>
+        ) : topics.isLoading ? (
+          <span className="text-ink-faint">·</span>
+        ) : exists ? (
+          <Link
+            to="/environments/$envId/clusters/$clusterId/topics/$topic"
+            params={{ envId, clusterId, topic }}
+            className="font-mono hover:underline"
+            style={{ color: "var(--rust-ink)" }}
+          >
+            {topic}
+          </Link>
+        ) : (
+          <span className="text-ink-faint">absent</span>
+        )}
+      </TableCell>
+    </TableRow>
   )
 }
 
