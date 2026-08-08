@@ -143,8 +143,8 @@ GET  /api/clusters/{id}/groups                                  [5]
 GET  /api/clusters/{id}/groups/{group}                          [5]
 GET  /api/clusters/{id}/groups/{group}/offsets                  [5] committed + lag
 
-GET  /api/clusters/{id}/schemas                                 [6]
-GET  /api/clusters/{id}/schemas/{subject}/versions              [6]
+GET  /api/clusters/{id}/schemas                                 [6] the registry answering, and its subjects
+GET  /api/clusters/{id}/schemas/{subject}/versions              [6] every version, with its text
 
 GET  /api/clusters/{id}/acls                                    [7]
 GET  /api/clusters/{id}/quotas                                  [7]
@@ -181,6 +181,7 @@ and no handler ever indexes the registry map directly.
 | `resolved` | what a time seek landed on, per partition | the "resolved to nothing" notice |
 | `dropped` | a running count | a banner, never suppressed |
 | `error` | a `ResourceError` | rendered with both version ranges intact |
+| `predicate` | the JS filter's counters | a line when it killed or threw on records |
 
 **Records are batched, not one per event.** One event per record saturates the
 connection and the browser's parser long before the list is the bottleneck.
@@ -239,4 +240,59 @@ on it.
 **Two distinct malformed kinds, never conflated.** `ScanEvent::Malformed` is a
 batch that would not decode at the protocol level. A payload that is not valid
 Avro is an application-level failure on an otherwise fine record. Different
-causes, different fixes, different rows.
+causes, different fixes, different rows — and in the wire shape that is a
+`malformed` **row** for the first and a `record` row whose `value.note.kind` is
+`decodeError` for the second. The record is fine; its value is not.
+
+`predicate` is its own event rather than a field on `progress` because a
+backward mode emits no progress at all — `tail` buffers its whole window — and
+a filter's counters are exactly as interesting there. It carries `evaluated`,
+`matched`, `timedOut`, `failed` and the last error, so a filter that dropped a
+thousand records for exceeding its per-record budget does not look like a
+filter that matched nothing.
+
+## The schema browser is rooted at a cluster
+
+`/api/clusters/{id}/schemas`, and there is deliberately **no**
+`/api/schema-registries/{id}`. A registry is shared by every cluster in an
+environment, so "which clusters use this registry" is a list that can name a
+cluster the caller may not see — and registry ids would become a second
+enumerable namespace beside cluster ids. A caller reaches a registry only
+through a cluster they can already see, through the same registry lookup as
+everything else.
+
+Neither route requires a **connected** cluster. A registry serves an
+environment and knows nothing about brokers, so subjects stay browsable while
+the cluster whose nav you arrived through is down.
+
+Three things that are not errors here, because each is an ordinary state:
+
+- a cluster that references no registry → `200` with `registry: null`;
+- a registry that cannot be reached → `200`, the card carrying `unreachable`
+  and its error, and an empty list;
+- a registry answering the wrong API → `200`, the card carrying
+  `misconfigured` and a message naming `/apis/ccompat/v7`.
+
+A subject named on a cluster with no registry at all is the one `404`, and it
+says so in words — the other `404` on that path is "no such cluster", and a
+reader has to be able to tell them apart.
+
+## Payloads say how they were read
+
+`Payload` carries the codec that produced its text, and — where a registry was
+involved — a `schema` naming the id, the format, the **registry id**, the
+subject and the version. A schema id means nothing without the registry it is
+an id in, which is why the registry is on the payload rather than implied by
+the cluster.
+
+`note` is why a payload is not what was asked for, and its `kind` is one of
+`decodeError`, `registryUnavailable`, `registryAbsent`,
+`registryMisconfigured`, `overrideRefused` or `nonConforming`. They are kept
+apart because they want different things done about them: an outage heals on
+its own, a `url` pointing at the wrong API does not.
+
+`raw` is the original bytes as hex, present exactly when the text is a
+*decoded* rendering. It is what makes `?keyCodec=hex` a browser-side render
+rather than a refetch — and the reason the override is free downward and
+refused upward, since nothing can invent a schema id for a payload that does
+not carry one.

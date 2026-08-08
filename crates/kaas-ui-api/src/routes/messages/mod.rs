@@ -23,6 +23,7 @@ pub mod stream;
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use futures::StreamExt;
+use kaas_ui_core::decode::{CodecOverride, PayloadDecoder};
 use kaas_ui_core::dto::{
     MalformedDetail, Message, MessageDetail, Payload, ResolvedSeek, StreamRow,
 };
@@ -54,6 +55,20 @@ pub struct TailQuery {
     pub limit: Option<usize>,
     /// Restrict to these partitions, comma-separated.
     pub partitions: Option<String>,
+    /// How to read keys, overriding the per-topic configuration.
+    pub key_codec: Option<kaas_ui_serde::Codec>,
+    /// How to read values, overriding the per-topic configuration.
+    pub value_codec: Option<kaas_ui_serde::Codec>,
+}
+
+impl TailQuery {
+    /// The chip in the message list, as this request set it.
+    fn codecs(&self) -> CodecOverride {
+        CodecOverride {
+            key: self.key_codec,
+            value: self.value_codec,
+        }
+    }
 }
 
 /// `GET /api/clusters/{id}/topics/{topic}/messages/tail`
@@ -72,6 +87,8 @@ pub struct TailQuery {
         ("topic" = String, Path, description = "Topic name"),
         ("limit" = Option<usize>, Query, description = "Records to return after merging"),
         ("partitions" = Option<String>, Query, description = "Comma-separated partition list"),
+        ("keyCodec" = Option<kaas_ui_serde::Codec>, Query, description = "Override how keys are read"),
+        ("valueCodec" = Option<kaas_ui_serde::Codec>, Query, description = "Override how values are read"),
     ),
     responses((status = 200, description = "The tail of a topic", body = Envelope<Message>)),
     tag = "messages",
@@ -114,11 +131,18 @@ pub async fn tail(
 
     let tails = crate::call("tail", kafka_read::tail(admin.cluster(), &spec)).await?;
 
+    // Built once per request, not once per record: the registry client it
+    // holds is the shared one, and a decoder per record would be a decoder
+    // with no cache.
+    let decoder = PayloadDecoder::new(&handle, &topic, query.codecs());
+
     let mut malformed = 0usize;
     let mut messages: Vec<Message> = Vec::new();
     for partition in &tails {
         malformed += partition.malformed;
-        messages.extend(partition.records.iter().map(Message::from));
+        for record in &partition.records {
+            messages.push(Message::of(record, &decoder).await);
+        }
     }
 
     let fetched = messages.len();
@@ -180,6 +204,12 @@ pub struct MessagePage {
     /// modes. See [`resolve`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resolved: Option<ResolvedSeek>,
+    /// What the JS predicate did, where one was given.
+    ///
+    /// Present so that a filter which dropped a thousand records for
+    /// exceeding its budget does not look like a filter that matched nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub predicate: Option<kaas_ui_serde::PredicateStats>,
 }
 
 /// `GET /api/clusters/{id}/topics/{topic}/messages`
@@ -200,6 +230,9 @@ pub struct MessagePage {
         ("visibility" = Option<String>, Query, description = "all | committed"),
         ("filter" = Option<String>, Query, description = "Substring match on the value"),
         ("limit" = Option<usize>, Query, description = "Records in this page"),
+        ("keyCodec" = Option<kaas_ui_serde::Codec>, Query, description = "Override how keys are read"),
+        ("valueCodec" = Option<kaas_ui_serde::Codec>, Query, description = "Override how values are read"),
+        ("predicate" = Option<String>, Query, description = "JavaScript expression over the decoded value"),
     ),
     responses((status = 200, description = "One page of messages", body = MessagePage)),
     tag = "messages",
@@ -232,6 +265,10 @@ pub async fn page(
     let resolved =
         resolve::resolve(&admin, &topic, plan.partitions(), mode.timestamp_of(&query)).await;
 
+    // Compiled before the read, so a broken expression costs no round trip.
+    let decoder = PayloadDecoder::new(&handle, &topic, query.codecs())
+        .with_predicate(query.compile_predicate()?);
+
     let mut rows = Vec::new();
     let mut errors = Vec::new();
 
@@ -241,7 +278,13 @@ pub async fn page(
             let mut malformed = 0usize;
             for partition in &tails {
                 malformed += partition.malformed;
-                rows.extend(partition.records.iter().map(StreamRow::of));
+                for record in &partition.records {
+                    if let Some(decoded) =
+                        decoder.accept(record, kaas_ui_serde::PREVIEW_CHARS).await
+                    {
+                        rows.push(StreamRow::render(record, decoded));
+                    }
+                }
             }
             if malformed > 0 {
                 errors.push(kaas_ui_core::ResourceError {
@@ -258,7 +301,7 @@ pub async fn page(
             rows.sort_by_key(|row| std::cmp::Reverse(sort_key(row)));
         }
         Plan::Forward { spec, floor } => {
-            rows = collect_forward(admin.cluster(), *spec, floor, limit).await?;
+            rows = collect_forward(admin.cluster(), *spec, floor, limit, &decoder).await?;
             rows.sort_by_key(sort_key);
         }
     }
@@ -283,6 +326,7 @@ pub async fn page(
         has_more,
         next_offset,
         resolved,
+        predicate: decoder.predicate_stats(),
     }))
 }
 
@@ -292,6 +336,7 @@ async fn collect_forward(
     spec: ScanSpec,
     floor: Option<i64>,
     limit: usize,
+    decoder: &PayloadDecoder,
 ) -> ApiResult<Vec<StreamRow>> {
     let scan = crate::call("scan", kafka_read::scan(cluster, spec)).await?;
     let mut stream = Box::pin(scan);
@@ -303,7 +348,11 @@ async fn collect_forward(
                 if floor.is_some_and(|floor| record.offset < floor) {
                     continue;
                 }
-                rows.push(StreamRow::of(&record));
+                // The floor is a cheap filter and is checked above, so a
+                // record below it never reaches the predicate.
+                if let Some(decoded) = decoder.accept(&record, kaas_ui_serde::PREVIEW_CHARS).await {
+                    rows.push(StreamRow::render(&record, decoded));
+                }
             }
             Ok(ScanEvent::Malformed {
                 partition,
@@ -368,6 +417,8 @@ fn next_anchor(mode: SeekMode, rows: &[StreamRow]) -> Option<i64> {
         ("topic" = String, Path, description = "Topic name"),
         ("partition" = i32, Path, description = "Partition"),
         ("offset" = i64, Path, description = "Offset"),
+        ("keyCodec" = Option<kaas_ui_serde::Codec>, Query, description = "Override how keys are read"),
+        ("valueCodec" = Option<kaas_ui_serde::Codec>, Query, description = "Override how values are read"),
     ),
     responses(
         (status = 200, description = "The record, or the batch that covered it", body = MessageDetail),
@@ -379,6 +430,7 @@ pub async fn one(
     State(state): State<AppState>,
     caller: Caller,
     Path((id, topic, partition, offset)): Path<(String, String, i32, i64)>,
+    Query(query): Query<TailQuery>,
 ) -> ApiResult<Json<MessageDetail>> {
     let (handle, admin) = state.connected(&id, &caller)?;
     // Payloads are the sensitive surface, so this is where the `messages`
@@ -413,7 +465,8 @@ pub async fn one(
                         .reading(&id, &topic, Kind::Record)
                         .with_record(partition, offset),
                 )?;
-                return Ok(Json(MessageDetail::of(&record)));
+                let decoder = PayloadDecoder::new(&handle, &topic, query.codecs());
+                return Ok(Json(MessageDetail::of(&record, &decoder).await));
             }
             Ok(ScanEvent::Malformed {
                 offset: base,
@@ -431,13 +484,16 @@ pub async fn one(
                         .reading(&id, &topic, Kind::Record)
                         .with_record(partition, offset),
                 )?;
-                return Ok(Json(MessageDetail::Malformed(MalformedDetail {
+                return Ok(Json(MessageDetail::Malformed(Box::new(MalformedDetail {
                     partition,
                     offset: base,
                     last_offset: end,
                     reason: reason.to_string(),
-                    raw: Payload::full(&raw),
-                })));
+                    // The one place the raw bytes of a batch are shown, and
+                    // they are shown as hex whatever they look like: a batch
+                    // that did not decode has no codec to have been read with.
+                    raw: Payload::hex(&raw, kaas_ui_serde::DETAIL_PAYLOAD_CHARS),
+                }))));
             }
             Ok(ScanEvent::Done(_)) => break,
             Ok(_) => {}
@@ -454,7 +510,7 @@ mod tests {
     use kaas_ui_core::dto::{MalformedRow, StreamRecord};
 
     fn record(partition: i32, offset: i64, timestamp: i64) -> StreamRow {
-        StreamRow::Record(StreamRecord {
+        StreamRow::Record(Box::new(StreamRecord {
             partition,
             offset,
             timestamp,
@@ -462,7 +518,7 @@ mod tests {
             key: None,
             value: None,
             transactional: false,
-        })
+        }))
     }
 
     #[test]

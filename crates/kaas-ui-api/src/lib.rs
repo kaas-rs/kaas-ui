@@ -242,7 +242,7 @@ pub fn router(state: AppState) -> Router {
 }
 
 fn api_router() -> Router<AppState> {
-    use routes::{capabilities, clusters, configs, groups, me, messages, spec, topics};
+    use routes::{capabilities, clusters, configs, groups, me, messages, schemas, spec, topics};
 
     Router::new()
         // The document that describes everything below it, including itself.
@@ -300,6 +300,11 @@ fn api_router() -> Router<AppState> {
             "/clusters/{id}/groups/{group}/offsets",
             get(groups::offsets),
         )
+        .route("/clusters/{id}/schemas", get(schemas::list))
+        .route(
+            "/clusters/{id}/schemas/{subject}/versions",
+            get(schemas::versions),
+        )
 }
 
 #[cfg(test)]
@@ -319,7 +324,9 @@ clusters:
         )
         .unwrap();
         AppState::new(
-            Arc::new(ArcSwap::from_pointee(Registry::from_config(&config))),
+            Arc::new(ArcSwap::from_pointee(
+                Registry::from_config(&config).unwrap(),
+            )),
             policy,
         )
     }

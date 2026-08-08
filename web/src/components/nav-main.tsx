@@ -79,6 +79,16 @@ const CLUSTER_NAV: {
   feature?: Feature
   /** The permission this item needs `view` on. */
   resource?: Resource
+  /**
+   * Whether the item is worth showing on a cluster that is not connected.
+   *
+   * True for everything the *brokers* answer, which is everything but one: a
+   * schema registry serves an environment and knows nothing about brokers, so
+   * its subjects stay browsable while the cluster you arrived through is down.
+   */
+  needsConnection?: boolean
+  /** Only rendered when the cluster references a registry. */
+  needsRegistry?: boolean
 }[] = [
   {
     label: "topics",
@@ -101,6 +111,13 @@ const CLUSTER_NAV: {
     label: "capabilities",
     to: "/clusters/$clusterId/capabilities",
     resource: "cluster_config",
+  },
+  {
+    label: "schemas",
+    to: "/clusters/$clusterId/schemas",
+    resource: "topic",
+    needsConnection: false,
+    needsRegistry: true,
   },
 ]
 
@@ -129,7 +146,11 @@ function ClusterItem({ card, active }: { card: ClusterCard; active: boolean }) {
   const unreachable = card.status === "unreachable"
 
   const items = CLUSTER_NAV.filter((item) => {
-    if (unreachable) return false
+    if (unreachable && item.needsConnection !== false) return false
+    // A registry is referenced by name, and most clusters reference none. An
+    // item whose only content would be an explanation of its own absence is
+    // one row of noise per cluster.
+    if (item.needsRegistry && !card.schemaRegistry) return false
     // Two reasons an item can be absent, and they are different claims: the
     // broker cannot answer it, or this caller may not ask. Both end as "no
     // item" rather than an item that errors on click.

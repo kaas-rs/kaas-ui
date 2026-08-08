@@ -184,7 +184,9 @@ clusters:
 ",
         )
         .expect("the fixture config parses");
-        let registry = Arc::new(ArcSwap::from_pointee(Registry::from_config(&config)));
+        let registry = Arc::new(ArcSwap::from_pointee(
+            Registry::from_config(&config).unwrap(),
+        ));
         AppState::new(registry, policy)
     }
 

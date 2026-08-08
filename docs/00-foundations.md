@@ -82,31 +82,28 @@ kaas-ui/
     kaas-ui-core/       config, cluster registry, domain DTOs, capability projection
     kaas-ui-api/        axum routers, request/response DTOs, utoipa
     kaas-ui-server/     the binary: wiring, embedded frontend
-    kaas-ui-serde/      payload decoding                      — not created; see below
+    kaas-ui-serde/      payload decoding, the registry client, the JS sandbox
     kaas-ui-auth/       identity and RBAC; OIDC and audit pending
   web/                  vite + react
   docs/
   xtask/
 ```
 
-PLAN.md §3 lists all five crates. Four exist — kaas-lib's rule 3 forbids stubs,
-and an empty crate that compiles is a stub with a manifest. `kaas-ui-auth` was
-created by Phase 4's first slice and holds what that slice filled it with:
-`Principal`, `Role`, `Policy` and `Access`. The OIDC exchange, sessions and the
-access audit are the slices after it, and each arrives with its module rather
-than ahead of it.
+PLAN.md §3 lists all five crates, and all five now exist — but two of them
+arrived late on purpose. kaas-lib's rule 3 forbids stubs, and an empty crate
+that compiles is a stub with a manifest, so each was created by the phase that
+filled it: `kaas-ui-auth` by Phase 4, `kaas-ui-serde` by Phase 6.
 
-**`kaas-ui-serde` is the exception, and it is a decision rather than an
-omission.** Phase 3 has run without it: payload rendering is `Payload::of` in
-`kaas-ui-core::dto` — UTF-8 where the bytes are text, hex where they are not,
-with the encoding named in the response so the reader can tell the producer's
-text from kaas-ui's guess. That is Phase 3's sniff order minus the JSON step
-and minus the per-topic override. The crate becomes worth its own boundary when
-Phase 6 adds Avro and Protobuf behind a trait; creating it early to hold two
-functions would have been the stub the rule forbids.
+For three phases payload rendering was `Payload::of` in `kaas-ui-core::dto` —
+UTF-8 where the bytes are text, hex where they are not, with the encoding
+named so the reader can tell the producer's text from kaas-ui's guess. Creating
+a crate early to hold two functions would have been the stub the rule forbids.
 
-Strictly layered, no cycles: `core` knows about kaas-lib and nothing about HTTP;
-`api` knows about `core` and axum and never opens a socket; `server` wires them.
+Strictly layered, no cycles: `serde` knows about neither kaas-lib nor HTTP and
+is the leaf; `core` knows about kaas-lib and `serde` and nothing about HTTP;
+`api` knows about `core` and axum and never opens a socket; `server` wires
+them. `serde` being *below* `core` rather than beside it is what lets one
+`RegistryHandle` be shared by every cluster that names the same registry id.
 
 ## Dependency pins
 
@@ -132,12 +129,36 @@ Phase 3 added `async-stream` 0.3 and `bytes` 1.12 to `kaas-ui-api`, and the
 frontend gained `@tanstack/react-virtual`, `zod`, `react-day-picker`,
 `date-fns`/`date-fns-tz` and `react-resizable-panels`.
 
-Later phases add:
-`openidconnect` 4.0, `tower-sessions` 0.15, `sqlx` 0.9 (Phase 4),
-`schema_registry_converter` 4.10 — the serde library for all three registry
-formats, bringing the per-format crates with it — and `jsonschema` 0.49 for
-display-time conformance (Phase 6), `rquickjs` 0.12 (Phase 6, JS predicates),
-`notify` 8.2 (config reload; 9.0 is still a release candidate).
+Phase 4 added `openidconnect` 4.0. Phase 6 added, in `kaas-ui-serde`:
+
+| crate | version | why |
+|---|---|---|
+| `schema_registry_converter` | 4.10 | resolves schema ids and decodes all three registry formats. **No TLS feature** — see below |
+| `apache-avro` | 0.21 | the value type the Avro decoder hands back, and its JSON conversion |
+| `protofish` | 0.5 | the value tree the Protobuf decoder hands back |
+| `reqwest` | 0.13 | the browser's own ccompat calls, and where TLS is turned on for both |
+| `rustls` | 0.23 | only to install the `ring` provider, once |
+| `rquickjs` | 0.12 | the JS predicate sandbox. `parallel` is required — the runtime has to be `Send` |
+
+**`reqwest/rustls-no-provider` rather than `rustls`.** The latter forces
+`aws-lc-rs`, which needs cmake and turns the two-line musl builder in the
+Dockerfile into a C project; the rest of the workspace is already on `ring`
+through kaas-lib. "No provider" obliges somebody to install one, and that
+somebody is `kaas-ui-serde` — behind a `Once`, in `RegistryHandle::new` — so
+the crate that needs TLS arranges for it rather than `main` remembering on its
+behalf.
+
+The tree therefore carries **two** reqwest majors: 0.12 under `openidconnect`
+and 0.13 under the converter. Accepted rather than forced together, because
+pinning them means either an OIDC library that is behind or a schema library
+that is.
+
+`jsonschema` 0.49 was planned for display-time conformance and is **not** in
+the tree: the converter's `json` feature already brings a validator, and one
+library resolving *and* validating beats two that can disagree about which
+schema a record was checked against.
+
+Still to come: `notify` 8.2 (config reload; 9.0 is still a release candidate).
 
 ### Frontend
 
@@ -172,9 +193,9 @@ missing_debug_implementations = "warn"
 Each crate opts in with `[lints] workspace = true`. Tests may unwrap freely via
 the same `#![cfg_attr(test, allow(...))]` header kaas-lib uses.
 
-## The three CI invariants
+## The CI invariants
 
-`cargo xtask ci` runs fmt, clippy, unit tests, and these three greps. Each
+`cargo xtask ci` runs fmt, clippy, unit tests, and these greps. Each
 corresponds to a claim PLAN.md makes that is only true if mechanically checked.
 
 **1. One construction site.** `Admin::connect(` appears nowhere;
@@ -217,7 +238,7 @@ preserved rather than flattened:
 ## Verification
 
 ```sh
-cargo xtask ci            # fmt + clippy + unit tests + the three greps
+cargo xtask ci            # fmt + clippy + unit tests + the invariant greps
 cargo xtask live          # the phase acceptance runs, against both clusters
 cargo xtask docs          # openapi spec + regenerate the TS client
 cargo xtask link|unlink   # kaas-lib local override

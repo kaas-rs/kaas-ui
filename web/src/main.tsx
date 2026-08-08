@@ -29,6 +29,7 @@ import {
 } from "@/pages/cluster"
 import { TopicDetail, Topics } from "@/pages/topics"
 import { GroupDetail, Groups } from "@/pages/groups"
+import { Schemas } from "@/pages/schemas"
 import {
   messageSearchSchema,
   topicSearchSchema,
@@ -162,6 +163,22 @@ const capabilitiesRoute = createRoute({
   },
 })
 
+/**
+ * The schema browser.
+ *
+ * Under a cluster and not under a registry id: registry ids are deliberately
+ * not a second enumerable namespace, and a caller reaches a registry only
+ * through a cluster they can already see.
+ */
+const schemasRoute = createRoute({
+  getParentRoute: () => clusterRoute,
+  path: "schemas",
+  component: function SchemasPage() {
+    const { clusterId } = useParams({ from: "/clusters/$clusterId" })
+    return <Schemas clusterId={clusterId} />
+  },
+})
+
 const routeTree = rootRoute.addChildren([
   indexRoute,
   accountRoute,
@@ -175,6 +192,7 @@ const routeTree = rootRoute.addChildren([
     groupRoute,
     configsRoute,
     capabilitiesRoute,
+    schemasRoute,
   ]),
 ])
 

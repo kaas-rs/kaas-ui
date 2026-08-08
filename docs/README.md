@@ -11,12 +11,12 @@ in [11-built.md](11-built.md).
 
 ## Status
 
-**Phases 0–5 are done.**
-The workspace is four crates, a frontend and an xtask.
+**Phases 0–6 are done.**
+The workspace is five crates, a frontend and an xtask.
 
 ```sh
-cargo xtask ci      # green: fmt, clippy, 136 unit tests, four invariant greps
-cargo xtask live    # green: 49 assertions against kaas, strimzi and a dead cluster
+cargo xtask ci      # green: fmt, clippy, 213 unit tests, five invariant greps
+cargo xtask live    # green: 52 assertions against kaas, strimzi and a dead cluster
 cargo xtask login   # 11 assertions, a real login. Needs the dex-test app
                     # synced; it is currently out of the cluster, so this
                     # command reports that and does nothing.
@@ -30,7 +30,7 @@ cargo xtask login   # 11 assertions, a real login. Needs the dex-test app
 | 3 — messages | **done** — seven seek modes over SSE, virtualised list, detail panel, URL state |
 | 4 — auth | **done** — Dex deployed, people sign in, roles enforced, reads audited, and `cargo xtask login` performs a real login against a second Dex in the cluster |
 | 5 — groups | **done** — four kinds, members, committed offsets, lag as states rather than a subtraction |
-| 6 — schema registry | not started |
+| 6 — schema registry | **done** — one registry per environment, Avro/Protobuf/JSON Schema, the codec chip, the schema browser, the sandboxed JS predicate |
 | 7 — read-only admin | not started — ACLs, quotas, SCRAM, reassignments, transactions |
 | 8 — cross-cluster | not started — fleet topic search, cluster comparison, capability diff |
 
@@ -41,8 +41,7 @@ Phase *n* is milestone M*n* in PLAN.md §8. One numbering, not two.
 | | | |
 |---|---|---|
 | [00](00-foundations.md) | **Foundations** | workspace, dependency pins, how kaas-lib is consumed, the invariants CI enforces |
-| [11](11-built.md) | **What is built** | phases 0–5: what each decided differently from its plan, what was measured, what is still unproven |
-| [07](07-phase-6-schema-registry.md) | **Phase 6 — schema registry** | Avro, Protobuf, JSON Schema, per-topic overrides |
+| [11](11-built.md) | **What is built** | phases 0–6: what each decided differently from its plan, what was measured, what is still unproven |
 | [08](08-phase-7-read-only-admin.md) | **Phase 7 — read-only admin** | ACLs, quotas, SCRAM, reassignments, transactions |
 | [09](09-phase-8-cross-cluster.md) | **Phase 8 — cross-cluster** | fleet topic search, cluster comparison, capability diff |
 
@@ -62,18 +61,17 @@ Running alongside all of them:
 | [reference/design-system.md](reference/design-system.md) | the mdbook `rust` palette as an application design system |
 | [reference/upstream-asks.md](reference/upstream-asks.md) | kaas-lib changes the UI wants, sequenced against the phases |
 
-## Two crates that look missing and are not
+## Two crates that arrived late, on purpose
 
-- **`kaas-ui-serde` does not exist although Phase 3 has run.** Payload
-  rendering lives in `kaas-ui-core::dto` and is deliberately smaller than the
-  plan: UTF-8 or hex with the encoding named, no JSON step, no per-topic
-  override. The crate earns its boundary in
-  [Phase 6](07-phase-6-schema-registry.md), where Avro and Protobuf go behind a
-  trait. See [00](00-foundations.md).
+- **`kaas-ui-serde` did not exist until Phase 6.** Payload rendering lived in
+  `kaas-ui-core::dto` for three phases — UTF-8 or hex with the encoding named
+  — and the crate was created by the phase that filled it, which is rule 6
+  rather than an oversight. It now holds the Confluent framing, the registry
+  client, the codecs and the JS predicate sandbox, and `kaas-ui-core` depends
+  on it.
 - **`kaas-ui-auth` holds no OIDC in the version some of these documents
-  describe.** It does now — see [11-built.md](11-built.md). Rule 6 is why it
-  arrived in slices rather than as a stub: the crate is created by the phase
-  that fills it.
+  describe.** It does now — see [11-built.md](11-built.md). Same rule, same
+  reason: the crate is created by the phase that fills it.
 
 Three things were established before writing this plan, by running code rather
 than by reading docs, and they shape everything above:

@@ -13,6 +13,7 @@ use std::time::Duration;
 use figment::Figment;
 use figment::providers::{Env, Format, Yaml};
 use kaas_ui_auth::{OidcConfig, Resource, Role};
+use kaas_ui_serde::{Codec, RegistryAuth, RegistrySettings};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -34,6 +35,19 @@ pub struct Config {
     pub environments: Vec<EnvironmentEntry>,
     /// Everything in an environment that is not a Kafka cluster.
     pub resources: Vec<ResourceEntry>,
+    /// The schema registries, declared once and referenced by id.
+    ///
+    /// A registry serves an **environment**, not a cluster: every cluster in
+    /// `dev` resolves schema id 42 to the same schema, because it is the same
+    /// registry answering. So it is declared here and clusters name one with
+    /// [`ClusterEntry::schema_registry`] — reference, not membership, because
+    /// a cluster in an environment need not use that environment's registry.
+    ///
+    /// The binding is that explicit line and **not** the `env` label, which
+    /// stays what it is: free-form display metadata. A typo in a label would
+    /// silently point a cluster at nothing; an unknown registry id is a
+    /// startup error naming the id.
+    pub schema_registries: Vec<SchemaRegistryEntry>,
     /// Where the login provider is, when kaas-ui serves it under its own
     /// hostname.
     ///
@@ -176,6 +190,163 @@ pub struct ClusterEntry {
     /// SASL credentials.
     #[serde(default)]
     pub sasl: Option<SaslSettings>,
+    /// Which declared schema registry this cluster's payloads resolve against.
+    ///
+    /// Absent is a normal path, not a degraded one: a kaas instance with no
+    /// registry and a Strimzi cluster with Apicurio coexist in one
+    /// environment, and every code path that touches a registry has to have
+    /// an absent branch anyway.
+    ///
+    /// Naming a registry that was not declared is a **startup error** with the
+    /// id in it, because the alternative is a deployment that starts
+    /// successfully with decoding silently off.
+    #[serde(default)]
+    pub schema_registry: Option<String>,
+    /// Per-topic codec overrides, in configuration.
+    ///
+    /// The registry is shared across an environment; the decision that
+    /// `orders` on `strimzi` is JSON is not. This is the configured half of
+    /// the override — the other half is the chip in the message list, which
+    /// is a query parameter and wins over anything here.
+    #[serde(default)]
+    pub codecs: Vec<TopicCodec>,
+}
+
+/// One declared schema registry.
+///
+/// Confluent-compatible only. Apicurio's native `/apis/registry/v3` is not
+/// supported and that is a decision rather than a gap: one wire format and one
+/// client is what buys three formats for one integration. A `url` pointing at
+/// the native API is reported on first use as a configuration error naming the
+/// endpoint that was expected.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "snake_case")]
+pub struct SchemaRegistryEntry {
+    /// Stable identifier, unique among registries. What a cluster's
+    /// `schema_registry:` names, and what every decoded payload reports as
+    /// the registry that answered.
+    ///
+    /// It never appears in a URL: the schema browser is rooted at
+    /// `/api/clusters/{id}/schemas`, deliberately, so registry ids do not
+    /// become a second enumerable namespace beside cluster ids.
+    pub id: String,
+    /// Human-readable name. Defaults to the id.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// The ccompat base url, as in
+    /// `http://apicurio-registry.apicurio.svc.cluster.local:8080/apis/ccompat/v7`.
+    pub url: String,
+    /// Basic-auth principal. On Confluent Cloud this is the API key.
+    #[serde(default)]
+    pub username: Option<String>,
+    /// Basic-auth secret, inline. Prefer `password_file`.
+    #[serde(default)]
+    pub password: Option<String>,
+    /// Basic-auth secret read from a file — a mounted Secret key, usually.
+    #[serde(default)]
+    pub password_file: Option<PathBuf>,
+    /// A bearer token, sent verbatim. Mutually exclusive with basic auth.
+    #[serde(default)]
+    pub bearer_token: Option<String>,
+    /// A bearer token read from a file.
+    #[serde(default)]
+    pub bearer_token_file: Option<PathBuf>,
+    /// Per-call timeout. A schema fetch sits on a request path.
+    #[serde(default, with = "humantime_serde::option")]
+    pub request_timeout: Option<Duration>,
+    /// How long a subject listing is believed.
+    ///
+    /// Schemas are immutable and cached by id forever; *listings* are not, so
+    /// a subject registered a moment ago has to appear without a restart.
+    #[serde(default, with = "humantime_serde::option")]
+    pub subjects_ttl: Option<Duration>,
+}
+
+impl SchemaRegistryEntry {
+    /// The name to render.
+    #[must_use]
+    pub fn display_name(&self) -> &str {
+        self.name.as_deref().unwrap_or(&self.id)
+    }
+
+    /// Turn the configured entry into the client's settings.
+    ///
+    /// Reads whatever was pointed at a file. A Secret that is not mounted
+    /// where the config says it is fails here, at startup, rather than on the
+    /// first record of the first Avro topic somebody opens.
+    pub fn to_settings(&self) -> Result<RegistrySettings, ConfigError> {
+        let mut settings = RegistrySettings::new(self.id.clone(), self.url.clone())
+            .with_name(self.display_name().to_owned());
+
+        if let Some(timeout) = self.request_timeout {
+            settings = settings.with_request_timeout(timeout);
+        }
+        if let Some(ttl) = self.subjects_ttl {
+            settings = settings.with_subjects_ttl(ttl);
+        }
+
+        let read = |path: &PathBuf| -> Result<String, ConfigError> {
+            std::fs::read_to_string(path)
+                .map(|text| text.trim().to_owned())
+                // The path is the whole diagnosis when a Secret is not mounted
+                // where the config says it is.
+                .map_err(|source| {
+                    ConfigError::Invalid(format!(
+                        "schema registry {:?}: {}: {source}",
+                        self.id,
+                        path.display()
+                    ))
+                })
+        };
+
+        if let Some(username) = &self.username {
+            let password = match (&self.password, &self.password_file) {
+                (Some(inline), _) => Some(inline.clone()),
+                (None, Some(path)) => Some(read(path)?),
+                (None, None) => None,
+            };
+            settings = settings.with_auth(RegistryAuth::Basic {
+                username: username.clone(),
+                password,
+            });
+        } else if let Some(token) = &self.bearer_token {
+            settings = settings.with_auth(RegistryAuth::Bearer(token.clone()));
+        } else if let Some(path) = &self.bearer_token_file {
+            settings = settings.with_auth(RegistryAuth::Bearer(read(path)?));
+        }
+
+        Ok(settings)
+    }
+}
+
+/// A configured codec override for one topic.
+///
+/// The override is only free in one direction. `hex` and `string` need no
+/// schema and are always honoured; naming a registry-backed codec here cannot
+/// invent a schema id for a payload that carries none, and is refused per
+/// record with a reason rather than silently producing nothing.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "snake_case")]
+pub struct TopicCodec {
+    /// The topic name, or a prefix ending in `*`.
+    pub topic: String,
+    /// How to read keys. Absent leaves keys alone.
+    #[serde(default)]
+    pub key: Option<Codec>,
+    /// How to read values. Absent leaves values alone.
+    #[serde(default)]
+    pub value: Option<Codec>,
+}
+
+impl TopicCodec {
+    /// Whether this entry covers `topic`.
+    #[must_use]
+    pub fn matches(&self, topic: &str) -> bool {
+        match self.topic.strip_suffix('*') {
+            Some(prefix) => topic.starts_with(prefix),
+            None => self.topic == topic,
+        }
+    }
 }
 
 /// One section of the fleet.
@@ -422,6 +593,49 @@ impl Config {
             ));
         }
 
+        let mut registries: BTreeMap<&str, ()> = BTreeMap::new();
+        for registry in &self.schema_registries {
+            if registry.id.is_empty() {
+                return Err(ConfigError::Invalid(
+                    "a schema registry has an empty id: it is what a cluster's `schema_registry` \
+                     names"
+                        .into(),
+                ));
+            }
+            if registries.insert(registry.id.as_str(), ()).is_some() {
+                return Err(ConfigError::Invalid(format!(
+                    "duplicate schema registry id {:?}",
+                    registry.id
+                )));
+            }
+            if !registry.url.starts_with("http://") && !registry.url.starts_with("https://") {
+                return Err(ConfigError::Invalid(format!(
+                    "schema registry {:?} has url {:?}, which is not an http(s) url",
+                    registry.id, registry.url
+                )));
+            }
+            // Whether the url is *ccompat* cannot be settled here — it takes
+            // asking the registry, and connecting is lazy. What can be settled
+            // here is the shape of the credentials.
+            if registry.username.is_none()
+                && (registry.password.is_some() || registry.password_file.is_some())
+            {
+                return Err(ConfigError::Invalid(format!(
+                    "schema registry {:?} configures a password with no username",
+                    registry.id
+                )));
+            }
+            if registry.username.is_some()
+                && (registry.bearer_token.is_some() || registry.bearer_token_file.is_some())
+            {
+                return Err(ConfigError::Invalid(format!(
+                    "schema registry {:?} configures both basic auth and a bearer token: only one \
+                     of them can be sent",
+                    registry.id
+                )));
+            }
+        }
+
         let mut seen: BTreeMap<&str, ()> = BTreeMap::new();
         for cluster in &self.clusters {
             if cluster.id.is_empty() {
@@ -467,6 +681,46 @@ impl Config {
                      key_file go together",
                     cluster.id
                 )));
+            }
+            // The reference has to name something. Starting with decoding
+            // silently off is the failure this exists to prevent, and it is
+            // invisible: every Avro topic renders as hex and nothing says why.
+            if let Some(registry) = &cluster.schema_registry
+                && !registries.contains_key(registry.as_str())
+            {
+                return Err(ConfigError::Invalid(format!(
+                    "cluster {:?} references schema registry {:?}, which no `schema_registries:` \
+                     entry declares{}",
+                    cluster.id,
+                    registry,
+                    if registries.is_empty() {
+                        " — there are none".to_owned()
+                    } else {
+                        format!(
+                            " (declared: {})",
+                            registries
+                                .keys()
+                                .map(|id| format!("{id:?}"))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
+                    }
+                )));
+            }
+            for codec in &cluster.codecs {
+                if codec.topic.is_empty() {
+                    return Err(ConfigError::Invalid(format!(
+                        "cluster {:?} has a `codecs` entry with an empty topic",
+                        cluster.id
+                    )));
+                }
+                if codec.key.is_none() && codec.value.is_none() {
+                    return Err(ConfigError::Invalid(format!(
+                        "cluster {:?} has a `codecs` entry for {:?} that sets neither `key` nor \
+                         `value`",
+                        cluster.id, codec.topic
+                    )));
+                }
             }
         }
 
@@ -812,6 +1066,176 @@ resources:
         )
         .unwrap();
         assert_eq!(config.resources.len(), 1);
+    }
+
+    /// The shape the phase is about: declared once, referenced by id, and a
+    /// cluster in the same environment that uses none.
+    #[test]
+    fn a_registry_is_declared_once_and_referenced_by_id() {
+        let config = Config::from_yaml(
+            r#"
+schema_registries:
+  - id: dev
+    name: Apicurio (dev)
+    url: http://apicurio-registry.apicurio.svc.cluster.local:8080/apis/ccompat/v7
+    subjects_ttl: 15s
+
+clusters:
+  - id: strimzi
+    bootstrap: ["a:9092"]
+    labels: { env: dev }
+    schema_registry: dev
+  - id: kaas
+    bootstrap: ["b:9092"]
+    labels: { env: dev }
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.schema_registries.len(), 1);
+        assert_eq!(config.schema_registries[0].display_name(), "Apicurio (dev)");
+        assert_eq!(config.clusters[0].schema_registry.as_deref(), Some("dev"));
+        // Reference, not membership: a cluster in `dev` need not use `dev`'s
+        // registry, and absence is a normal path rather than a mistake.
+        assert_eq!(config.clusters[1].schema_registry, None);
+
+        let settings = config.schema_registries[0].to_settings().unwrap();
+        assert_eq!(settings.subjects_ttl, Duration::from_secs(15));
+        assert_eq!(settings.name, "Apicurio (dev)");
+    }
+
+    #[test]
+    fn an_unknown_schema_registry_reference_fails_startup_with_the_id_named() {
+        // The alternative is a deployment that starts successfully with
+        // decoding silently off: every Avro topic renders as hex and nothing
+        // anywhere says why.
+        let err = Config::from_yaml(
+            r#"
+schema_registries:
+  - id: dev
+    url: http://apicurio:8080/apis/ccompat/v7
+
+clusters:
+  - id: strimzi
+    bootstrap: ["a:9092"]
+    schema_registry: dve
+"#,
+        )
+        .unwrap_err();
+        let message = format!("{err}");
+        assert!(message.contains("\"dve\""), "{message}");
+        assert!(message.contains("\"dev\""), "{message}");
+    }
+
+    #[test]
+    fn a_registry_id_nobody_declared_at_all_says_there_are_none() {
+        let err = Config::from_yaml(
+            r#"
+clusters:
+  - id: strimzi
+    bootstrap: ["a:9092"]
+    schema_registry: dev
+"#,
+        )
+        .unwrap_err();
+        assert!(format!("{err}").contains("there are none"), "{err}");
+    }
+
+    #[test]
+    fn half_a_credential_is_rejected() {
+        let err = Config::from_yaml(
+            r#"
+schema_registries:
+  - id: dev
+    url: http://apicurio:8080/apis/ccompat/v7
+    password: hunter2
+
+clusters:
+  - id: strimzi
+    bootstrap: ["a:9092"]
+"#,
+        )
+        .unwrap_err();
+        assert!(format!("{err}").contains("no username"), "{err}");
+
+        let err = Config::from_yaml(
+            r#"
+schema_registries:
+  - id: dev
+    url: http://apicurio:8080/apis/ccompat/v7
+    username: someone
+    bearer_token: abc
+
+clusters:
+  - id: strimzi
+    bootstrap: ["a:9092"]
+"#,
+        )
+        .unwrap_err();
+        assert!(format!("{err}").contains("only one of them"), "{err}");
+    }
+
+    #[test]
+    fn a_registry_url_that_is_not_a_url_is_rejected_at_load() {
+        // Whether it is *ccompat* takes asking, and asking is lazy. Whether it
+        // is an http url does not.
+        let err = Config::from_yaml(
+            r#"
+schema_registries:
+  - id: dev
+    url: apicurio-registry.apicurio.svc.cluster.local:8080
+
+clusters:
+  - id: strimzi
+    bootstrap: ["a:9092"]
+"#,
+        )
+        .unwrap_err();
+        assert!(format!("{err}").contains("not an http(s) url"), "{err}");
+    }
+
+    #[test]
+    fn a_topic_codec_matches_exactly_or_by_prefix() {
+        let config = Config::from_yaml(
+            r#"
+clusters:
+  - id: strimzi
+    bootstrap: ["a:9092"]
+    codecs:
+      - topic: raw-bytes-v1
+        value: hex
+      - topic: "orders-*"
+        key: string
+        value: json
+"#,
+        )
+        .unwrap();
+
+        let codecs = &config.clusters[0].codecs;
+        assert!(codecs[0].matches("raw-bytes-v1"));
+        assert!(!codecs[0].matches("raw-bytes-v10"));
+        assert!(codecs[1].matches("orders-eu"));
+        assert!(!codecs[1].matches("shipments"));
+        assert_eq!(codecs[0].value, Some(Codec::Hex));
+        assert_eq!(codecs[1].key, Some(Codec::String));
+    }
+
+    #[test]
+    fn a_codec_entry_that_sets_nothing_is_rejected() {
+        let err = Config::from_yaml(
+            r#"
+clusters:
+  - id: strimzi
+    bootstrap: ["a:9092"]
+    codecs:
+      - topic: orders
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            format!("{err}").contains("neither `key` nor `value`"),
+            "{err}"
+        );
     }
 
     #[test]

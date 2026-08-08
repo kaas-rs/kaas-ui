@@ -31,6 +31,21 @@ const fields = z.object({
   visibility: z.enum(["all", "committed"]).default("all"),
   filter: z.string().optional(),
   limit: z.coerce.number().int().positive().max(10_000).optional(),
+  /**
+   * How to read keys and values, overriding the per-topic configuration.
+   *
+   * In the URL because the chip is a *view* decision, exactly like the seek
+   * mode: someone who worked out that a topic reads better as hex should be
+   * able to send that view, not a description of it.
+   *
+   * Only the four that need no schema are accepted. `avro` here would be a URL
+   * asking the server to invent a schema id, which it refuses — better to keep
+   * it unrepresentable in the link than to explain the refusal.
+   */
+  keyCodec: z.enum(["auto", "string", "hex", "json"]).optional(),
+  valueCodec: z.enum(["auto", "string", "hex", "json"]).optional(),
+  /** A JavaScript expression over the decoded value. */
+  predicate: z.string().optional(),
   /** `{partition}-{offset}` — the same id everything else keys on. */
   selected: z.string().optional(),
 })

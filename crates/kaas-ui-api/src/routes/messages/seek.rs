@@ -132,6 +132,52 @@ pub struct SeekQuery {
     pub filter: Option<String>,
     /// How many records. Ignored by `live`.
     pub limit: Option<usize>,
+    /// How to read keys, overriding the per-topic configuration.
+    ///
+    /// The chip in the message list, travelling as a query parameter so the
+    /// URL stays the shareable artifact. It can always fall *back* — hex and
+    /// string need no schema, so they work with the registry down — and it
+    /// cannot invent a schema id to move up.
+    pub key_codec: Option<kaas_ui_serde::Codec>,
+    /// How to read values, overriding the per-topic configuration.
+    pub value_codec: Option<kaas_ui_serde::Codec>,
+    /// A JavaScript expression over the decoded value.
+    ///
+    /// The **second** tier of filtering, and never the first: `filter`,
+    /// `partitions`, `offset` and the timestamps above are cheap and go into
+    /// the scan spec, where kaas-lib applies them before a record is ever
+    /// deserialised. This one runs on the decoded value, after them, in a
+    /// sandbox with a memory cap and an interrupt handler.
+    pub predicate: Option<String>,
+}
+
+impl SeekQuery {
+    /// Compile the user predicate, if this request carries one.
+    ///
+    /// A `Result`, so an expression that does not compile is a `400` naming
+    /// the syntax error rather than a filter that silently matches nothing.
+    pub fn compile_predicate(&self) -> crate::ApiResult<Option<kaas_ui_serde::Predicate>> {
+        let Some(source) = self
+            .predicate
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        else {
+            return Ok(None);
+        };
+        kaas_ui_serde::Predicate::compile(source)
+            .map(Some)
+            .map_err(|error| ApiError::bad_request(error.to_string()))
+    }
+
+    /// The codec chips, as this request set them.
+    #[must_use]
+    pub fn codecs(&self) -> kaas_ui_core::decode::CodecOverride {
+        kaas_ui_core::decode::CodecOverride {
+            key: self.key_codec,
+            value: self.value_codec,
+        }
+    }
 }
 
 /// A validated read, in the shape the library takes.

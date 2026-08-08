@@ -44,9 +44,8 @@ pub fn watch(path: PathBuf, registry: Arc<ArcSwap<Registry>>) {
             }
             last = Some(current);
 
-            match Config::load(&path) {
-                Ok(config) => {
-                    let reloaded = registry.load().reloaded(&config);
+            match Config::load(&path).and_then(|config| registry.load().reloaded(&config)) {
+                Ok(reloaded) => {
                     let count = reloaded.len();
                     registry.store(Arc::new(reloaded));
                     tracing::info!(clusters = count, "configuration reloaded");

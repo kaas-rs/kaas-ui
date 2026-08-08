@@ -252,6 +252,46 @@ The third entry is not padding. Phase 0's acceptance is that it renders as an
 unreachable card without delaying the other two, and it is the cheapest possible
 regression test for lazy connection.
 
+## The schema registry
+
+**Apicurio Registry 3.2.4**, in namespace `apicurio`, at
+`http://apicurio-registry.apicurio.svc.cluster.local:8080`. Both the Confluent
+compatibility API and Apicurio's native one are served:
+
+| | |
+|---|---|
+| `…/apis/ccompat/v7` | what kaas-ui speaks. `GET /subjects` answers a JSON array |
+| `…/apis/registry/v3` | Apicurio's own. **Not supported**, and pointing `url` at it is a configuration error |
+
+One registry for the whole `dev` environment, referenced by both live clusters,
+which is the fixture the "shared, not owned" design is asserted against: the
+same schema id resolves to the same schema on both sides because it is the
+same registry answering.
+
+### The canary is the Avro fixture
+
+`kaas-producer-canary` runs against **each** cluster and produces
+Confluent-framed Avro to `kaas-canary-v1`, registering
+`kaas-canary-v1-value` — schema id **1** — through the ccompat endpoint:
+
+```
+--bootstrap kaas.kaas.svc.cluster.local:9092
+--topic kaas-canary-v1
+--schema-registry http://apicurio-registry.apicurio.svc.cluster.local:8080/apis/ccompat/v7
+```
+
+`rs.kaas.canary.Heartbeat` has five fields, and `sequence` increases by exactly
+one per record within a run — which is what makes an even/odd JS predicate over
+a window arithmetic rather than luck. Its headers (`content-type`,
+`canary-run`, `canary-version`) are ordinary **unframed** payloads on a
+registry-backed record, which is the live fixture for "absence of framing is
+not a failure".
+
+There is no Protobuf and no JSON Schema topic here, and no subject with a
+reference. Those three paths are asserted against a stub registry in
+`crates/kaas-ui-serde/tests/registry.rs` — see `docs/11-built.md`, "What is
+still unproven".
+
 ## Also running here
 
 `kafbat-ui` is deployed in namespace `kafbat-ui`, pointed at both clusters, with

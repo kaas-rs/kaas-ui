@@ -8,7 +8,8 @@ repository.workspace   = true
 rust-version.workspace = true
 
 [dependencies]
-kaas-ui-auth = { workspace = true }
+kaas-ui-auth  = { workspace = true }
+kaas-ui-serde = { workspace = true }
 
 kafka-admin = { workspace = true }
 kafka-conn  = { workspace = true }
@@ -19,13 +20,15 @@ arc-swap        = { workspace = true }
 figment         = { workspace = true }
 humantime-serde = { workspace = true }
 serde           = { workspace = true }
+serde_json      = { workspace = true }
 thiserror       = { workspace = true }
 tokio           = { workspace = true }
 tracing         = { workspace = true }
 utoipa          = { workspace = true }
 
 [dev-dependencies]
-serde_json = { workspace = true }
+# The record fixtures the payload tests are built from.
+bytes = { workspace = true }
 # `Jail` isolates environment variables and the working directory, which is the
 # only honest way to test an overlay that reads the real environment.
 figment = { workspace = true, features = ["test"] }

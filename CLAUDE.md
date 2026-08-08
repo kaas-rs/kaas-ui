@@ -13,7 +13,7 @@ multi-cluster from day one, OIDC via Dex.
   plan, and what was measured. **A phase that lands loses its plan file**; what
   outlived it is here.
 
-Read `docs/README.md` first. Phases 0–5 are done; 6, 7 and 8 are not started.
+Read `docs/README.md` first. Phases 0–6 are done; 7 and 8 are not started.
 
 ## Relationship to kaas-lib and kaas
 
@@ -78,8 +78,8 @@ errors, never a 500.
 
 **6. No stubs, no `todo!()`.** If a task cannot be completed, stop and say so
 rather than leaving a placeholder that looks finished. This applies to empty
-crates too: `kaas-ui-serde` and `kaas-ui-auth` are created by the phase that
-fills them, not up front.
+crates too: `kaas-ui-auth` and `kaas-ui-serde` were created by the phases that
+filled them — 4 and 6 — not up front.
 
 **7. Conventional commits, work lands on `main`.**
 
@@ -191,3 +191,20 @@ active nav, focus ring, selected edge. For accent text on light use
   table in kaas-ui, which is rule 2 with extra steps — the fix is a
   `kafka-protocol` bump in kaas-lib. Same for `brokerAhead` rows. See
   `docs/reference/environment.md`.
+- **A schema registry serves an *environment*, not a cluster.** It is declared
+  once under `schema_registries:` and clusters reference one by id, so two
+  clusters in `dev` hold the same `Arc<RegistryHandle>` — the same decoders and
+  the same id→schema cache. Building one per cluster is a second cache for one
+  registry's ids. Absence is a normal path, not a degraded one.
+- **ccompat only.** Apicurio's native `/apis/registry/v3` is not supported, and
+  a `url` pointing at it is a **configuration** error reported on first use,
+  naming `/apis/ccompat/v7`. The failure to design against is every record on
+  every Avro topic rendering as hex because of one missing path segment.
+- **The codec override is free in one direction only.** Falling back to hex or
+  string needs no schema and no refetch — the raw bytes travel beside the
+  decoded value. Overriding *up* to Avro cannot invent a schema id and is
+  refused with a reason.
+- **The JS predicate never runs on a record a cheap filter could have
+  dropped.** `PayloadDecoder::accept` is the one place that ordering lives, and
+  two counters hold it. Its memory cap and interrupt handler are installed
+  before the first evaluation, including before the user's source is compiled.

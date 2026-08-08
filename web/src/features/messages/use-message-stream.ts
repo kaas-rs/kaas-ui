@@ -15,7 +15,12 @@ import {
   useSyncExternalStore,
 } from "react"
 
-import type { ResolvedSeek, ResourceError, StreamProgress } from "@/api/types"
+import type {
+  PredicateStats,
+  ResolvedSeek,
+  ResourceError,
+  StreamProgress,
+} from "@/api/types"
 import { withBase } from "@/api/base"
 import { SEEK_MODES, insertsAtTop, type SeekMode } from "./seek-modes"
 import { createMessageStore, type MessageStoreState } from "./message-store"
@@ -31,12 +36,17 @@ export interface MessageStreamQuery {
   filter?: string
   visibility?: "all" | "committed"
   limit?: number
+  keyCodec?: string
+  valueCodec?: string
+  predicate?: string
 }
 
 export interface MessageStreamResult extends MessageStoreState {
   progress: StreamProgress | null
   resolved: ResolvedSeek | null
   error: ResourceError | null
+  /** What the JS filter did, where one was given. */
+  predicate: PredicateStats | null
   /** The connection dropped and `EventSource` is retrying by itself. */
   reconnecting: boolean
   /** Tell the store whether the reader is parked where new rows arrive. */
@@ -56,6 +66,9 @@ export function streamUrl(query: MessageStreamQuery): string {
     params.set("partitions", query.partitions.trim())
   if (query.filter?.trim()) params.set("filter", query.filter.trim())
   if (query.visibility) params.set("visibility", query.visibility)
+  if (query.keyCodec) params.set("keyCodec", query.keyCodec)
+  if (query.valueCodec) params.set("valueCodec", query.valueCodec)
+  if (query.predicate?.trim()) params.set("predicate", query.predicate.trim())
   if (query.limit !== undefined && !SEEK_MODES[query.mode].live) {
     params.set("limit", String(query.limit))
   }
@@ -87,6 +100,7 @@ export function useMessageStream(
   const [resolved, setResolved] = useState<ResolvedSeek | null>(null)
   const [error, setError] = useState<ResourceError | null>(null)
   const [reconnecting, setReconnecting] = useState(false)
+  const [predicate, setPredicate] = useState<PredicateStats | null>(null)
 
   // One store per (url, generation). Recreating it on a mode change is the
   // point: sort order and semantics differ between modes, so merging two
@@ -104,9 +118,14 @@ export function useMessageStream(
     setResolved(null)
     setError(null)
     setReconnecting(false)
+    // Stats belong to one stream. A new stream without a predicate emits no
+    // predicate events at all, so leaving these standing would keep asserting
+    // a removed filter's timeouts over a window it never saw.
+    setPredicate(null)
 
     const handle = openMessageStream(url, store, {
       onProgress: setProgress,
+      onPredicate: setPredicate,
       onResolved: setResolved,
       onError: (next) => {
         setError(next)
@@ -146,6 +165,7 @@ export function useMessageStream(
     resolved,
     error,
     reconnecting,
+    predicate,
     setAtEdge,
     append,
     restart,

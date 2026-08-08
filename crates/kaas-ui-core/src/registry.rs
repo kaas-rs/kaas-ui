@@ -23,11 +23,14 @@ use std::time::{Duration, SystemTime};
 
 use arc_swap::{ArcSwap, ArcSwapOption};
 use kaas_ui_auth::Access;
+use kaas_ui_serde::{Codec, RegistryHandle};
 use kafka_admin::{Admin, ClusterConfig};
 use kafka_conn::{ConnectionConfig, Error, SaslConfig, SaslMechanism, TlsConfig};
 use tokio::sync::Notify;
 
-use crate::config::{ClusterEntry, Config, EnvironmentEntry, ResourceEntry, SaslMechanismName};
+use crate::config::{
+    ClusterEntry, Config, ConfigError, EnvironmentEntry, ResourceEntry, SaslMechanismName,
+};
 use crate::error::ErrorKind;
 use crate::health::ClusterHealth;
 
@@ -48,6 +51,17 @@ pub struct ClusterHandle {
     /// Grouping labels.
     pub labels: BTreeMap<String, String>,
     entry: ClusterEntry,
+    /// The schema registry this cluster's payloads resolve against.
+    ///
+    /// **Shared, not owned.** Two clusters in `dev` naming the same registry
+    /// id hold the same `Arc`, and therefore the same decoders and the same
+    /// id→schema cache. A handle built per cluster would be a second cache
+    /// for one registry's ids, which is the mistake this type exists to make
+    /// unrepresentable.
+    ///
+    /// `None` is a normal path, not a degraded one: a kaas instance with no
+    /// registry sits in the same environment as a Strimzi cluster with one.
+    registry: Option<Arc<RegistryHandle>>,
     /// `None` until the first successful connect.
     admin: ArcSwapOption<Admin>,
     health: ArcSwap<ClusterHealth>,
@@ -61,17 +75,55 @@ pub struct ClusterHandle {
 }
 
 impl ClusterHandle {
-    fn new(entry: &ClusterEntry) -> Self {
+    fn new(entry: &ClusterEntry, registry: Option<Arc<RegistryHandle>>) -> Self {
         Self {
             id: entry.id.clone(),
             name: entry.display_name().to_owned(),
             labels: entry.labels.clone(),
             entry: entry.clone(),
+            registry,
             admin: ArcSwapOption::empty(),
             health: ArcSwap::from_pointee(ClusterHealth::connecting()),
             retry_now: Notify::new(),
             retired: AtomicBool::new(false),
         }
+    }
+
+    /// The schema registry this cluster's payloads resolve against, if any.
+    ///
+    /// Every caller has an absent branch, because absence is the common case
+    /// on a cluster that was never given one.
+    pub fn schema_registry(&self) -> Option<&Arc<RegistryHandle>> {
+        self.registry.as_ref()
+    }
+
+    /// The configured codec for one topic's keys and values.
+    ///
+    /// First match wins, in configured order, so a specific entry can precede
+    /// a `prefix*` one. What comes back is the *configured* choice; the chip
+    /// in the message list is a query parameter and overrides it per request.
+    pub fn configured_codecs(&self, topic: &str) -> (Codec, Codec) {
+        let mut key = Codec::Auto;
+        let mut value = Codec::Auto;
+        let mut key_set = false;
+        let mut value_set = false;
+        for codec in &self.entry.codecs {
+            if !codec.matches(topic) {
+                continue;
+            }
+            if let (false, Some(chosen)) = (key_set, codec.key) {
+                key = chosen;
+                key_set = true;
+            }
+            if let (false, Some(chosen)) = (value_set, codec.value) {
+                value = chosen;
+                value_set = true;
+            }
+            if key_set && value_set {
+                break;
+            }
+        }
+        (key, value)
     }
 
     /// The admin client, if this cluster has ever connected.
@@ -288,6 +340,13 @@ fn read_pem(path: &std::path::Path) -> Result<Vec<u8>, Error> {
 #[derive(Debug)]
 pub struct Registry {
     clusters: BTreeMap<String, Arc<ClusterHandle>>,
+    /// One client per declared registry, whatever the clusters do with them.
+    ///
+    /// Held here rather than reachable only through the clusters that name
+    /// one, because the schema browser has to be able to say *which* registry
+    /// answered, and because a registry with no clusters is a configuration
+    /// mistake worth being able to see rather than one that vanishes.
+    registries: BTreeMap<String, Arc<RegistryHandle>>,
     /// Declared environments, in declaration order — which is display order.
     environments: Vec<EnvironmentEntry>,
     /// The non-cluster inventory. Held here rather than beside the config so
@@ -296,18 +355,44 @@ pub struct Registry {
 }
 
 impl Registry {
-    /// Build from configuration. Connects to nothing.
-    pub fn from_config(config: &Config) -> Self {
+    /// Build from configuration. Connects to nothing, and dials nothing.
+    ///
+    /// Fallible only because credentials can be pointed at a file that is not
+    /// mounted. Nothing here reaches a network: a registry is dialled on first
+    /// use, for the same reason a cluster is.
+    pub fn from_config(config: &Config) -> Result<Self, ConfigError> {
+        let registries = build_registries(config, &BTreeMap::new())?;
         let clusters = config
             .clusters
             .iter()
-            .map(|entry| (entry.id.clone(), Arc::new(ClusterHandle::new(entry))))
+            .map(|entry| {
+                let registry = entry
+                    .schema_registry
+                    .as_ref()
+                    .and_then(|id| registries.get(id))
+                    .map(Arc::clone);
+                (
+                    entry.id.clone(),
+                    Arc::new(ClusterHandle::new(entry, registry)),
+                )
+            })
             .collect();
-        Self {
+        Ok(Self {
             clusters,
+            registries,
             environments: config.environments.clone(),
             resources: config.resources.clone(),
-        }
+        })
+    }
+
+    /// Every declared schema registry, by id.
+    ///
+    /// For the process's own business — the fleet card's registry state, a
+    /// reload. A handler reaches a registry only through a cluster it can
+    /// already see, because "which clusters use this registry" is a list that
+    /// can name a cluster the caller may not.
+    pub fn schema_registries(&self) -> impl Iterator<Item = &Arc<RegistryHandle>> {
+        self.registries.values()
     }
 
     /// The declared environments, in the order they were declared.
@@ -397,21 +482,40 @@ impl Registry {
     /// did not change, so an unchanged entry keeps its `Arc<ClusterHandle>`,
     /// its connection and its snapshot. A changed entry is rebuilt; a dropped
     /// one is retired, which is what stops its connector.
-    pub fn reloaded(&self, config: &Config) -> Self {
+    pub fn reloaded(&self, config: &Config) -> Result<Self, ConfigError> {
+        // A registry whose settings did not change keeps its handle, and
+        // therefore its warm id→schema cache. Adding a cluster to `dev` must
+        // not cost `dev` every schema it had already resolved.
+        let registries = build_registries(config, &self.registries)?;
+
         let mut clusters = BTreeMap::new();
         for entry in &config.clusters {
+            let registry = entry
+                .schema_registry
+                .as_ref()
+                .and_then(|id| registries.get(id))
+                .map(Arc::clone);
+            // A cluster whose entry is unchanged can still need rebuilding: if
+            // the registry it names was rebuilt, keeping the old handle would
+            // leave it decoding against a client the reload replaced.
+            let registry_unchanged =
+                |existing: &ClusterHandle| match (&existing.registry, &registry) {
+                    (None, None) => true,
+                    (Some(before), Some(after)) => Arc::ptr_eq(before, after),
+                    _ => false,
+                };
             match self.clusters.get(&entry.id) {
-                Some(existing) if existing.entry == *entry => {
+                Some(existing) if existing.entry == *entry && registry_unchanged(existing) => {
                     clusters.insert(entry.id.clone(), Arc::clone(existing));
                 }
                 Some(existing) => {
                     existing.retire();
-                    let handle = Arc::new(ClusterHandle::new(entry));
+                    let handle = Arc::new(ClusterHandle::new(entry, registry));
                     tokio::spawn(Arc::clone(&handle).run());
                     clusters.insert(entry.id.clone(), handle);
                 }
                 None => {
-                    let handle = Arc::new(ClusterHandle::new(entry));
+                    let handle = Arc::new(ClusterHandle::new(entry, registry));
                     tokio::spawn(Arc::clone(&handle).run());
                     clusters.insert(entry.id.clone(), handle);
                 }
@@ -426,12 +530,38 @@ impl Registry {
 
         // Sections and inventory hold no connection, so they are simply taken
         // from the new configuration: nothing to reuse, nothing to retire.
-        Self {
+        Ok(Self {
             clusters,
+            registries,
             environments: config.environments.clone(),
             resources: config.resources.clone(),
-        }
+        })
     }
+}
+
+/// Build one client per declared registry, reusing the unchanged ones.
+///
+/// The reuse is what makes a reload cheap: a `RegistryHandle` holds the
+/// id→schema cache, so rebuilding one that nobody edited would throw away
+/// every schema the environment had resolved.
+fn build_registries(
+    config: &Config,
+    existing: &BTreeMap<String, Arc<RegistryHandle>>,
+) -> Result<BTreeMap<String, Arc<RegistryHandle>>, ConfigError> {
+    let mut registries = BTreeMap::new();
+    for entry in &config.schema_registries {
+        let settings = entry.to_settings()?;
+        if let Some(handle) = existing.get(&entry.id)
+            && *handle.settings() == settings
+        {
+            registries.insert(entry.id.clone(), Arc::clone(handle));
+            continue;
+        }
+        let handle =
+            RegistryHandle::new(settings).map_err(|e| ConfigError::Invalid(e.to_string()))?;
+        registries.insert(entry.id.clone(), Arc::new(handle));
+    }
+    Ok(registries)
 }
 
 #[cfg(test)]
@@ -462,7 +592,7 @@ clusters:
 
     #[test]
     fn a_new_registry_has_connected_to_nothing() {
-        let registry = Registry::from_config(&config());
+        let registry = Registry::from_config(&config()).unwrap();
         assert_eq!(registry.len(), 2);
         for handle in registry.all() {
             assert!(handle.admin().is_none());
@@ -475,14 +605,204 @@ clusters:
 
     #[test]
     fn an_unconfigured_cluster_is_absent_rather_than_forbidden() {
-        let registry = Registry::from_config(&config());
+        let registry = Registry::from_config(&config()).unwrap();
         assert!(registry.get("nope", &anyone()).is_none());
         assert!(registry.get("kaas", &anyone()).is_some());
     }
 
+    /// The registry is declared once and clusters reference it — so two of
+    /// them hold the *same* client, and therefore the same id→schema cache.
+    fn shared_registry_config() -> Config {
+        Config::from_yaml(
+            r#"
+schema_registries:
+  - id: dev
+    url: http://apicurio-registry.apicurio.svc.cluster.local:8080/apis/ccompat/v7
+
+clusters:
+  - id: kaas
+    bootstrap: ["kaas.kaas.svc.cluster.local:9092"]
+    labels: { env: dev }
+  - id: strimzi
+    bootstrap: ["strimzi:9092"]
+    labels: { env: dev }
+    schema_registry: dev
+  - id: second-strimzi
+    bootstrap: ["strimzi-2:9092"]
+    labels: { env: dev }
+    schema_registry: dev
+"#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn two_clusters_naming_one_registry_hold_one_client_between_them() {
+        let registry = Registry::from_config(&shared_registry_config()).unwrap();
+
+        let first = registry
+            .get("strimzi", &anyone())
+            .unwrap()
+            .schema_registry()
+            .expect("strimzi names a registry");
+        let second = registry
+            .get("second-strimzi", &anyone())
+            .unwrap()
+            .schema_registry()
+            .expect("so does the second one");
+
+        assert!(
+            Arc::ptr_eq(first, second),
+            "one registry id, two clients: that is a second cache for one \
+             registry's ids, and one of them will answer a stale schema"
+        );
+        assert_eq!(first.id(), "dev");
+
+        // And absence is a normal path, not a degraded one.
+        assert!(
+            registry
+                .get("kaas", &anyone())
+                .unwrap()
+                .schema_registry()
+                .is_none()
+        );
+        assert_eq!(registry.schema_registries().count(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_reload_that_adds_a_cluster_keeps_the_registrys_warm_cache() {
+        let registry = Registry::from_config(&shared_registry_config()).unwrap();
+        let before = Arc::clone(
+            registry
+                .get("strimzi", &anyone())
+                .unwrap()
+                .schema_registry()
+                .unwrap(),
+        );
+
+        // A fourth cluster, in the same environment, naming the same registry.
+        let grown = Config::from_yaml(
+            r#"
+schema_registries:
+  - id: dev
+    url: http://apicurio-registry.apicurio.svc.cluster.local:8080/apis/ccompat/v7
+
+clusters:
+  - id: kaas
+    bootstrap: ["kaas.kaas.svc.cluster.local:9092"]
+    labels: { env: dev }
+  - id: strimzi
+    bootstrap: ["strimzi:9092"]
+    labels: { env: dev }
+    schema_registry: dev
+  - id: second-strimzi
+    bootstrap: ["strimzi-2:9092"]
+    labels: { env: dev }
+    schema_registry: dev
+  - id: third-strimzi
+    bootstrap: ["strimzi-3:9092"]
+    labels: { env: dev }
+    schema_registry: dev
+"#,
+        )
+        .unwrap();
+
+        let reloaded = registry.reloaded(&grown).unwrap();
+        let after = reloaded
+            .get("strimzi", &anyone())
+            .unwrap()
+            .schema_registry()
+            .unwrap();
+
+        assert!(
+            Arc::ptr_eq(&before, after),
+            "adding a cluster to `dev` threw away every schema `dev` had resolved"
+        );
+        // The unchanged clusters kept their connections too.
+        assert!(!before.settings().url.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_registry_whose_url_changed_rebuilds_the_clusters_that_name_it() {
+        // The cache is keyed by (registry, schema id) and the registry just
+        // became a different registry. Keeping the old client would decode
+        // `staging` ids against `dev`'s answers.
+        let registry = Registry::from_config(&shared_registry_config()).unwrap();
+        let before = Arc::clone(registry.get("strimzi", &anyone()).unwrap());
+
+        let moved = Config::from_yaml(
+            r#"
+schema_registries:
+  - id: dev
+    url: http://somewhere-else:8080/apis/ccompat/v7
+
+clusters:
+  - id: kaas
+    bootstrap: ["kaas.kaas.svc.cluster.local:9092"]
+    labels: { env: dev }
+  - id: strimzi
+    bootstrap: ["strimzi:9092"]
+    labels: { env: dev }
+    schema_registry: dev
+  - id: second-strimzi
+    bootstrap: ["strimzi-2:9092"]
+    labels: { env: dev }
+    schema_registry: dev
+"#,
+        )
+        .unwrap();
+
+        let reloaded = registry.reloaded(&moved).unwrap();
+        let after = reloaded.get("strimzi", &anyone()).unwrap();
+        assert!(!Arc::ptr_eq(&before, after));
+        assert!(before.is_retired());
+        assert_eq!(
+            after.schema_registry().unwrap().settings().url,
+            "http://somewhere-else:8080/apis/ccompat/v7"
+        );
+    }
+
+    #[test]
+    fn a_configured_codec_matches_the_topic_and_the_first_entry_wins() {
+        let config = Config::from_yaml(
+            r#"
+clusters:
+  - id: strimzi
+    bootstrap: ["a:9092"]
+    codecs:
+      - topic: orders-legacy
+        value: hex
+      - topic: "orders-*"
+        key: string
+        value: json
+"#,
+        )
+        .unwrap();
+        let registry = Registry::from_config(&config).unwrap();
+        let cluster = registry.get("strimzi", &anyone()).unwrap();
+
+        // The specific entry precedes the pattern, and wins the field it sets.
+        // The pattern still fills in the field the specific one left alone,
+        // which is what makes a narrowing entry a narrowing rather than a
+        // replacement.
+        assert_eq!(
+            cluster.configured_codecs("orders-legacy"),
+            (Codec::String, Codec::Hex)
+        );
+        assert_eq!(
+            cluster.configured_codecs("orders-eu"),
+            (Codec::String, Codec::Json)
+        );
+        // Anything unmatched is the Phase 3 rendering: text where it is text.
+        assert_eq!(
+            cluster.configured_codecs("shipments"),
+            (Codec::Auto, Codec::Auto)
+        );
+    }
+
     #[tokio::test]
     async fn reload_keeps_the_handles_it_did_not_change() {
-        let registry = Registry::from_config(&config());
+        let registry = Registry::from_config(&config()).unwrap();
         let before = Arc::clone(registry.get("kaas", &anyone()).unwrap());
 
         let grown = Config::from_yaml(
@@ -498,7 +818,7 @@ clusters:
         )
         .unwrap();
 
-        let reloaded = registry.reloaded(&grown);
+        let reloaded = registry.reloaded(&grown).unwrap();
         assert_eq!(reloaded.len(), 3);
         // Same allocation: the connection is not disturbed.
         assert!(Arc::ptr_eq(
@@ -510,7 +830,7 @@ clusters:
 
     #[tokio::test]
     async fn reload_retires_a_dropped_cluster() {
-        let registry = Registry::from_config(&config());
+        let registry = Registry::from_config(&config()).unwrap();
         let dropped = Arc::clone(registry.get("strimzi", &anyone()).unwrap());
 
         let shrunk = Config::from_yaml(
@@ -522,7 +842,7 @@ clusters:
         )
         .unwrap();
 
-        let reloaded = registry.reloaded(&shrunk);
+        let reloaded = registry.reloaded(&shrunk).unwrap();
         assert_eq!(reloaded.len(), 1);
         assert!(dropped.is_retired());
         assert!(!registry.get("kaas", &anyone()).unwrap().is_retired());
@@ -530,7 +850,7 @@ clusters:
 
     #[tokio::test]
     async fn a_changed_entry_is_rebuilt() {
-        let registry = Registry::from_config(&config());
+        let registry = Registry::from_config(&config()).unwrap();
         let before = Arc::clone(registry.get("kaas", &anyone()).unwrap());
 
         let moved = Config::from_yaml(
@@ -544,7 +864,7 @@ clusters:
         )
         .unwrap();
 
-        let reloaded = registry.reloaded(&moved);
+        let reloaded = registry.reloaded(&moved).unwrap();
         assert!(!Arc::ptr_eq(
             &before,
             reloaded.get("kaas", &anyone()).unwrap()

@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "xtask",
     "crates/kaas-ui-auth",
+    "crates/kaas-ui-serde",
     "crates/kaas-ui-core",
     "crates/kaas-ui-api",
     "crates/kaas-ui-server",
@@ -62,10 +63,50 @@ rust-embed = "8.12"
 mime_guess = "2"
 bytes      = "1.12"
 
+# payload decoding. One library resolves schema ids and decodes all three
+# registry-backed formats, because all three are the same Confluent wire
+# format — see docs/11-built.md, "Phase 6 — the decisions".
+#
+# **No TLS feature here, deliberately.** Both of the converter's are wrong for
+# this build: `native_tls` wants OpenSSL, which the distroless image has none
+# of, and `rustls_tls` maps to `reqwest/rustls`, which forces `aws-lc-rs` and
+# turns the two-line musl builder in the Dockerfile into a cmake project. TLS
+# comes from the `reqwest` features below instead, on the one copy of reqwest
+# the whole graph shares.
+schema_registry_converter = { version = "4.10", default-features = false, features = [
+    "futures",
+    "avro",
+    "json",
+    "proto_decoder",
+] }
+# The value types the three decoders hand back. Pulled in beside the converter
+# rather than instead of it: converting them to JSON is ours, decoding is not.
+apache-avro = { version = "0.21", default-features = false }
+protofish   = "0.5"
+# The schema browser's own calls — subjects, versions, compatibility — which
+# the converter's API does not cover. Pinned to the major the converter
+# already brings so the tree carries one copy of it rather than two, and it is
+# where TLS is turned on for both.
+#
+# `rustls-no-provider` rather than `rustls`: the latter pulls `aws-lc-rs`, and
+# the rest of this workspace is already on `ring` through kaas-lib. "No
+# provider" means kaas-ui-serde installs one — see `RegistryHandle::new` — so
+# the crate that needs TLS is the crate that arranges for it, rather than
+# `main` having to remember on its behalf.
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
+# Only to install that provider, once, behind a `Once`.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+
+# The sandbox the user filter expression runs in. `parallel` is what makes the
+# runtime `Send`: the message stream owns its interpreter and lives on a
+# spawned task, so a `!Send` one could not be used there at all.
+rquickjs = { version = "0.12", default-features = false, features = ["std", "parallel"] }
+
 # internal
-kaas-ui-auth = { path = "crates/kaas-ui-auth" }
-kaas-ui-core = { path = "crates/kaas-ui-core" }
-kaas-ui-api  = { path = "crates/kaas-ui-api" }
+kaas-ui-auth  = { path = "crates/kaas-ui-auth" }
+kaas-ui-serde = { path = "crates/kaas-ui-serde" }
+kaas-ui-core  = { path = "crates/kaas-ui-core" }
+kaas-ui-api   = { path = "crates/kaas-ui-api" }
 
 [workspace.lints.clippy]
 unwrap_used              = "deny"

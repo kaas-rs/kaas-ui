@@ -19,10 +19,58 @@ use serde::Serialize;
 use utoipa::ToSchema;
 
 use kaas_ui_auth::{Access, Action, Principal, Resource};
+use kaas_ui_serde::{DETAIL_PAYLOAD_CHARS, MAX_PAYLOAD_CHARS, PREVIEW_CHARS};
 
 use crate::config::{ResourceEntry, ResourceKind};
+use crate::decode::{DecodedRecord, PayloadDecoder};
 use crate::health::{ClusterHealth, ClusterStatus};
 use crate::registry::{ClusterHandle, Registry};
+
+/// A key or value, rendered with the codec that was used said out loud.
+///
+/// Defined in `kaas-ui-serde` rather than here, and re-exported so the wire
+/// contract still reads as one document. That crate is where the conversion
+/// from an upstream value happens — an `apache_avro::types::Value` becomes
+/// `serde_json`, then text — so this **is** kaas-ui's own decoded-value type
+/// rather than a rename of somebody else's.
+pub use kaas_ui_serde::Payload;
+
+/// One schema registry, as the browser and the fleet render it.
+///
+/// A view of a **registry**, reached through a cluster. Two clusters that
+/// reference `dev` show the same subjects, so the card says which registry is
+/// answering rather than implying the subjects belong to the cluster whose nav
+/// you arrived through.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RegistryCard {
+    /// The configured id, which is what a cluster's `schema_registry:` names.
+    pub id: String,
+    /// The name to render.
+    pub name: String,
+    /// Where it is. Shown because a registry that is answering the wrong API
+    /// is diagnosed by looking at its url.
+    pub url: String,
+    /// Whether it has been reached, and how it failed if it has not.
+    pub status: kaas_ui_serde::RegistryStatus,
+    /// What went wrong, where something did.
+    pub error: Option<String>,
+}
+
+impl RegistryCard {
+    /// Project a live handle.
+    #[must_use]
+    pub fn of(registry: &kaas_ui_serde::RegistryHandle) -> Self {
+        let health = registry.health();
+        Self {
+            id: registry.id().to_owned(),
+            name: registry.name().to_owned(),
+            url: registry.url().to_owned(),
+            status: health.status(),
+            error: health.error().map(str::to_owned),
+        }
+    }
+}
 
 /// The caller, for the header and for deciding what to offer them.
 ///
@@ -182,6 +230,13 @@ pub struct ClusterCard {
     /// notices.
     #[schema(value_type = std::collections::BTreeMap<Resource, Vec<Action>>)]
     pub grants: std::collections::BTreeMap<Resource, std::collections::BTreeSet<Action>>,
+    /// The schema registry this cluster references, by its configured id.
+    ///
+    /// `None` is a normal path — a kaas instance beside a Strimzi cluster in
+    /// the same environment — and the sidebar reads it to decide whether a
+    /// schemas item exists at all, rather than offering one that explains its
+    /// own absence.
+    pub schema_registry: Option<String>,
 }
 
 impl ClusterCard {
@@ -217,6 +272,9 @@ impl ClusterCard {
             snapshot_age_ms: None,
             max_staleness_ms: millis(handle.max_staleness()),
             grants: who.permissions(&handle.id, &handle.labels),
+            schema_registry: handle
+                .schema_registry()
+                .map(|registry| registry.id().to_owned()),
         };
 
         if let Some(admin) = handle.admin() {
@@ -1137,42 +1195,33 @@ pub struct Message {
 }
 
 impl Message {
-    /// Render a record, choosing how much of each payload to include.
-    fn render(record: &Record, payload: fn(&[u8]) -> Payload) -> Self {
+    /// Render a record whose payloads have already been decoded.
+    ///
+    /// Decoding is separate because it is **async** — it can resolve a schema
+    /// id against a registry — and because a JS predicate runs over the
+    /// decoded value before this row is built, or in place of building it.
+    pub fn render(record: &Record, decoded: DecodedRecord) -> Self {
         Self {
             partition: record.partition,
             offset: record.offset,
             timestamp: record.timestamp,
             timestamp_type: render_timestamp_type(record.timestamp_type),
-            key: record.key.as_ref().map(|bytes| payload(bytes)),
-            value: record.value.as_ref().map(|bytes| payload(bytes)),
-            headers: record
-                .headers
-                .iter()
-                .map(|(name, value)| Header {
-                    name: name.clone(),
-                    value: value.as_ref().map(|bytes| payload(bytes)),
-                })
-                .collect(),
+            key: decoded.key.map(|decoded| decoded.payload),
+            value: decoded.value.map(|decoded| decoded.payload),
+            headers: decoded.headers,
             transactional: record.transactional,
             size_bytes: record.payload_len(),
         }
     }
 
     /// A record for the one-shot tail, where a list of them is returned.
-    pub fn of(record: &Record) -> Self {
-        Self::render(record, Payload::of)
+    pub async fn of(record: &Record, decoder: &PayloadDecoder) -> Self {
+        Self::render(record, decoder.record(record, MAX_PAYLOAD_CHARS).await)
     }
 
     /// A record for the detail panel, where exactly one was asked for.
-    pub fn full(record: &Record) -> Self {
-        Self::render(record, Payload::full)
-    }
-}
-
-impl From<&Record> for Message {
-    fn from(record: &Record) -> Self {
-        Self::of(record)
+    pub async fn full(record: &Record, decoder: &PayloadDecoder) -> Self {
+        Self::render(record, decoder.record(record, DETAIL_PAYLOAD_CHARS).await)
     }
 }
 
@@ -1186,109 +1235,6 @@ pub struct Header {
     pub value: Option<Payload>,
 }
 
-/// A key or value, rendered with the encoding that was used said out loud.
-///
-/// Auto-detection that cannot be seen is worse than none: the reader has to
-/// know whether they are looking at text the producer wrote or at kaas-ui's
-/// guess.
-#[derive(Debug, Clone, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct Payload {
-    /// `utf8` or `hex`.
-    pub encoding: String,
-    /// The rendering.
-    pub text: String,
-    /// Length in bytes of the original.
-    pub bytes: usize,
-    /// Whether `text` was cut short.
-    pub truncated: bool,
-}
-
-/// Above this, a payload is cut short: one oversized record must not be able
-/// to blow up a browser tab that asked for five hundred of them.
-const MAX_PAYLOAD_CHARS: usize = 8192;
-
-/// The ceiling on a payload that rides in a *stream*.
-///
-/// Much smaller than [`MAX_PAYLOAD_CHARS`], and not a tuning knob. A topic
-/// carrying 1 KB values at ten thousand records a second is 10 MB/s the
-/// browser would parse, hold in a ring buffer and never draw — the list shows
-/// one truncated line per row whatever arrives. The rest is fetched for the
-/// one record someone actually selected.
-const PREVIEW_CHARS: usize = 256;
-
-/// The ceiling on the one payload someone actually opened.
-///
-/// A whole megabyte, because this is the answer to "show me this record" and
-/// cutting it at the list's budget would make the detail panel useless for the
-/// large records that are the reason anyone opens it. Still a ceiling: a
-/// response is not allowed to be as large as a producer felt like being.
-const DETAIL_PAYLOAD_CHARS: usize = 1024 * 1024;
-
-impl Payload {
-    /// Render bytes as text where they are text, and as hex where they are not.
-    pub fn of(bytes: &[u8]) -> Self {
-        Self::rendered(bytes, MAX_PAYLOAD_CHARS)
-    }
-
-    /// The same rendering, cut to what a single list row can show.
-    pub fn preview(bytes: &[u8]) -> Self {
-        Self::rendered(bytes, PREVIEW_CHARS)
-    }
-
-    /// The same rendering, for the one record that was selected.
-    pub fn full(bytes: &[u8]) -> Self {
-        Self::rendered(bytes, DETAIL_PAYLOAD_CHARS)
-    }
-
-    fn rendered(bytes: &[u8], ceiling: usize) -> Self {
-        let len = bytes.len();
-        match std::str::from_utf8(bytes) {
-            Ok(text) => {
-                let (text, truncated) = truncate(text, ceiling);
-                Self {
-                    encoding: "utf8".to_owned(),
-                    text,
-                    bytes: len,
-                    truncated,
-                }
-            }
-            Err(_) => {
-                let mut hex = String::new();
-                let mut truncated = false;
-                for byte in bytes {
-                    if hex.len() >= ceiling {
-                        truncated = true;
-                        break;
-                    }
-                    // Writing into a String cannot fail.
-                    let _ = write!(hex, "{byte:02x}");
-                }
-                Self {
-                    encoding: "hex".to_owned(),
-                    text: hex,
-                    bytes: len,
-                    truncated,
-                }
-            }
-        }
-    }
-}
-
-fn truncate(text: &str, ceiling: usize) -> (String, bool) {
-    if text.len() <= ceiling {
-        return (text.to_owned(), false);
-    }
-    let mut end = ceiling;
-    while end > 0 && !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    match text.get(..end) {
-        Some(head) => (head.to_owned(), true),
-        None => (String::new(), true),
-    }
-}
-
 /// One row of the message list, as it crosses an SSE connection.
 ///
 /// Two variants, never conflated. A batch that would not decode at the
@@ -1300,7 +1246,12 @@ fn truncate(text: &str, ceiling: usize) -> (String, bool) {
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum StreamRow {
     /// A record that decoded.
-    Record(StreamRecord),
+    ///
+    /// Boxed because a decoded payload is much larger than a malformed row —
+    /// it carries the schema it resolved against and the bytes it came from —
+    /// and a `Vec<StreamRow>` of a thousand rows should not pay a record's
+    /// size for every batch that did not decode.
+    Record(Box<StreamRecord>),
     /// A batch that did not. The scan continued past it.
     Malformed(MalformedRow),
 }
@@ -1342,17 +1293,27 @@ pub struct MalformedRow {
 }
 
 impl StreamRow {
-    /// A row for a decoded record.
-    pub fn of(record: &Record) -> Self {
-        Self::Record(StreamRecord {
+    /// A row for a record whose payloads have already been decoded.
+    ///
+    /// Split from [`Self::of`] because a JS predicate runs *between* decoding
+    /// and rendering: the predicate sees the decoded value, and a record it
+    /// rejects never becomes a row at all.
+    #[must_use]
+    pub fn render(record: &Record, decoded: DecodedRecord) -> Self {
+        Self::Record(Box::new(StreamRecord {
             partition: record.partition,
             offset: record.offset,
             timestamp: record.timestamp,
             timestamp_type: render_timestamp_type(record.timestamp_type),
-            key: record.key.as_ref().map(|bytes| Payload::preview(bytes)),
-            value: record.value.as_ref().map(|bytes| Payload::preview(bytes)),
+            key: decoded.key.map(|decoded| decoded.payload),
+            value: decoded.value.map(|decoded| decoded.payload),
             transactional: record.transactional,
-        })
+        }))
+    }
+
+    /// A row for a decoded record, cut to what a single list row can show.
+    pub async fn of(record: &Record, decoder: &PayloadDecoder) -> Self {
+        Self::render(record, decoder.record(record, PREVIEW_CHARS).await)
     }
 
     /// A row for a batch that did not decode.
@@ -1493,7 +1454,7 @@ pub enum MessageDetail {
     /// The record, with its key, value and headers whole.
     Record(Box<Message>),
     /// The batch that covered the offset, as hex.
-    Malformed(MalformedDetail),
+    Malformed(Box<MalformedDetail>),
 }
 
 /// A batch that would not decode, with its bytes.
@@ -1514,8 +1475,8 @@ pub struct MalformedDetail {
 
 impl MessageDetail {
     /// A detail for a record.
-    pub fn of(record: &Record) -> Self {
-        Self::Record(Box::new(Message::full(record)))
+    pub async fn of(record: &Record, decoder: &PayloadDecoder) -> Self {
+        Self::Record(Box::new(Message::full(record, decoder).await))
     }
 }
 
@@ -1592,7 +1553,7 @@ resources:
 "#,
         )
         .unwrap();
-        (Registry::from_config(&config), Access::admin())
+        (Registry::from_config(&config).unwrap(), Access::admin())
     }
 
     fn arrange(registry: &Registry, who: &Access) -> Vec<EnvironmentSection> {
@@ -1686,7 +1647,7 @@ roles:
         )
         .unwrap();
 
-        let registry = Registry::from_config(&config);
+        let registry = Registry::from_config(&config).unwrap();
         let policy = kaas_ui_auth::Policy::enforcing(config.roles.clone());
         let who = policy.access(&Principal::new("u").with_groups(["dev-team".to_owned()]));
 
@@ -1744,25 +1705,10 @@ roles:
         );
     }
 
-    #[test]
-    fn text_payloads_are_text_and_binary_payloads_are_hex() {
-        let text = Payload::of(b"hello");
-        assert_eq!(text.encoding, "utf8");
-        assert_eq!(text.text, "hello");
-
-        let binary = Payload::of(&[0xff, 0x00, 0x10]);
-        assert_eq!(binary.encoding, "hex");
-        assert_eq!(binary.text, "ff0010");
-        assert_eq!(binary.bytes, 3);
-    }
-
-    #[test]
-    fn an_oversized_payload_is_cut_at_a_char_boundary() {
-        let long = "é".repeat(MAX_PAYLOAD_CHARS);
-        let payload = Payload::of(long.as_bytes());
-        assert!(payload.truncated);
-        assert!(payload.text.len() <= MAX_PAYLOAD_CHARS);
-    }
+    // Payload rendering itself is tested where it lives, in `kaas-ui-serde`:
+    // the codecs, the truncation and the Confluent framing are that crate's,
+    // and testing them again through a re-export would only assert that the
+    // re-export exists.
 
     #[test]
     fn a_never_committed_offset_is_not_rendered_as_minus_one() {

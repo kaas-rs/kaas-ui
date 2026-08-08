@@ -13,10 +13,11 @@
 import { AlertTriangle, Loader2 } from "lucide-react"
 
 import { useMessageDetail } from "@/api/client"
-import type { Payload, StreamRow } from "@/api/types"
+import type { StreamRow } from "@/api/types"
 import { Badge } from "@/components/ui/badge"
 import { Empty, Mono, bytes } from "@/components/domain"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { PayloadBlock } from "./payload"
 
 export interface MessageDetailPanelProps {
   clusterId: string
@@ -27,6 +28,13 @@ export interface MessageDetailPanelProps {
   retained?: StreamRow
   /** Whether that row is still in the buffer. */
   present: boolean
+  /**
+   * The toolbar's codec override, so the panel reads the record the same way
+   * as the row that was clicked. A list rendered as hex opening into a
+   * registry-decoded panel would be the view disagreeing with itself.
+   */
+  keyCodec?: string
+  valueCodec?: string
 }
 
 export function MessageDetailPanel({
@@ -35,8 +43,13 @@ export function MessageDetailPanel({
   selectedId,
   retained,
   present,
+  keyCodec,
+  valueCodec,
 }: MessageDetailPanelProps) {
-  const detail = useMessageDetail(clusterId, topic, selectedId)
+  const detail = useMessageDetail(clusterId, topic, selectedId, {
+    keyCodec,
+    valueCodec,
+  })
 
   if (!selectedId) {
     return (
@@ -163,35 +176,6 @@ export function MessageDetailPanel({
           </Tabs>
         ) : null}
       </div>
-    </div>
-  )
-}
-
-function PayloadBlock({
-  payload,
-  label,
-}: {
-  payload: Payload
-  label?: string
-}) {
-  return (
-    <div className="space-y-1 py-2">
-      <div className="flex items-center gap-2 text-[11px] text-ink-faint">
-        {label ? <span>{label}</span> : null}
-        {/* What the encoding was is said out loud: auto-detection nobody can
-            see is worse than none, because the reader cannot tell text the
-            producer wrote from kaas-ui's guess. */}
-        <Badge variant="outline" className="h-4 px-1 text-[10px]">
-          {payload.encoding}
-        </Badge>
-        <span className="tabular-nums">{bytes(payload.bytes)}</span>
-        {payload.truncated ? (
-          <span className="text-warn-ink">truncated</span>
-        ) : null}
-      </div>
-      <pre className="max-h-full overflow-auto rounded-md border border-line bg-surface-sunken p-3 font-mono text-[11px] leading-relaxed break-all whitespace-pre-wrap">
-        {payload.text}
-      </pre>
     </div>
   )
 }

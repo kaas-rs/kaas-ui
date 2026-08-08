@@ -38,6 +38,20 @@ environments:
     name: Production
     description: "Placeholders, and the tone the `env: prod` label forces on a cluster chip."
 
+# A registry serves an environment, and every cluster in it references the same
+# one by id. Declared once, so the two `dev` clusters below share one client,
+# one set of decoders and one id→schema cache — the canary produces the same
+# Avro to `kaas-canary-v1` on both, against this registry, so schema id 1 is
+# genuinely the same schema on both sides.
+#
+# ccompat only. `/apis/registry/v3` is Apicurio's native API and is not
+# supported; pointing this at it is reported on first use as a configuration
+# error rather than rediscovered once per record.
+schema_registries:
+  - id: dev
+    name: Apicurio (ccompat)
+    url: http://apicurio-registry.apicurio.svc.cluster.local:8080/apis/ccompat/v7
+
 clusters:
   # --- dev: the two real ones, and the fixture ----------------------------
   - id: kaas
@@ -47,6 +61,7 @@ clusters:
       env: dev
       kind: kaas
     refresh_interval: 30s
+    schema_registry: dev
 
   - id: strimzi
     name: kafka-cluster (strimzi)
@@ -55,6 +70,7 @@ clusters:
       env: dev
       kind: strimzi
     refresh_interval: 30s
+    schema_registry: dev
 
   - id: dead
     name: nonexistent
@@ -126,16 +142,20 @@ clusters:
 # Everything in an environment that is not a Kafka cluster.
 #
 # kaas-ui dials none of these: the card says what is configured and where, and
-# says "not probed" rather than inventing a health it never asked about. The
-# schema registry stops being inventory in Phase 6, which is when it gets a
-# status worth rendering — see docs/07-phase-6-schema-registry.md.
+# says "not probed" rather than inventing a health it never asked about.
+#
+# The schema registry is the one that is no longer only inventory. It is
+# declared above under `schema_registries:` as well, which is what actually
+# decodes payloads and what the schema browser reads; this entry is the card
+# beside the brokers, and the two are deliberately separate — a registry
+# somebody wants listed and a registry kaas-ui talks to are different claims.
 resources:
   - id: apicurio-dev
     name: Apicurio (ccompat)
     kind: schema_registry
     environment: dev
     endpoint: http://apicurio-registry.apicurio.svc.cluster.local:8080/apis/ccompat/v7
-    note: Not deployed in this cluster yet — the URL kafbat-ui points at resolves to nothing.
+    note: Declared above as `schema_registries[dev]`, which is what actually decodes payloads. This card is the inventory entry beside it.
 
   - id: connect-staging
     name: Kafka Connect

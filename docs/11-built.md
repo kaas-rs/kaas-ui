@@ -1,6 +1,6 @@
 # What is built
 
-Phases 0–5 are done, and their plan files are gone — a plan for work already
+Phases 0–6 are done, and their plan files are gone — a plan for work already
 finished is a document that can only go stale. What could not go
 with them is here: **what each phase decided differently from its plan**, the
 numbers that were measured rather than predicted, and the things that were
@@ -18,15 +18,16 @@ is surprising.
 | 3 — messages | seven seek modes over SSE, virtualised list, detail panel, URL state |
 | 4 — auth | OIDC via Dex, encrypted-cookie sessions, roles in kafbat's shape, the access audit |
 | 5 — groups | four group kinds, members, committed offsets, lag as states rather than a subtraction |
+| 6 — schema registry | one registry per environment, Avro/Protobuf/JSON Schema, the codec chip, the schema browser, the sandboxed JS predicate |
 
-Still open: [Phase 6](07-phase-6-schema-registry.md),
-[Phase 7](08-phase-7-read-only-admin.md), [Phase 8](09-phase-8-cross-cluster.md).
+Still open: [Phase 7](08-phase-7-read-only-admin.md),
+[Phase 8](09-phase-8-cross-cluster.md).
 
 ## Acceptance, as it stands
 
 ```sh
-cargo xtask ci      # green: fmt, clippy, 136 unit tests, four invariant greps
-cargo xtask live    # green: 49 assertions against kaas, strimzi and dead
+cargo xtask ci      # green: fmt, clippy, 213 unit tests, five invariant greps
+cargo xtask live    # green: 52 assertions against kaas, strimzi and dead
 cargo xtask login   # 11 assertions, a real login. Dormant — see below.
 ```
 
@@ -36,8 +37,17 @@ architecture from being edited away: exactly one `Admin::connect_read_only`
 anywhere, no committed `xtask link` fence, and sign-in being an `<a href>`
 rather than a `fetch` — see Phase 4.
 
-Unit tests: 56 in `kaas-ui-api`, 40 in `kaas-ui-core`, 30 in `kaas-ui-auth`,
-10 in `kaas-ui-server`.
+Unit tests: 63 in `kaas-ui-api`, 57 in `kaas-ui-core`, 40 in `kaas-ui-auth`,
+40 in `kaas-ui-serde` (32 unit, 8 against a stub registry), 10 in
+`kaas-ui-server`, 3 in `xtask`.
+
+`cargo xtask live` gained a third outcome in Phase 6: **skip**. The seek-mode
+assertions name concrete offsets — 1000000 and 1000037 — because the properties
+they check are off-by-one properties, and an off-by-one on a "somewhere near
+the end" offset is invisible. The cost is a fixture that ages, and `kperf-bench`
+on `kaas` has now aged out of retention. That is an unmet precondition, not a
+regression, and reporting it as a failure would train everyone to ignore the
+run. It is reported as a skip naming the range the topic still holds.
 
 ## Measured
 
@@ -219,13 +229,12 @@ batch containing the offset and only the backward walk was filtering. The first
 two add public fields to structs that are not `#[non_exhaustive]`, which is why
 a set of additive features was a minor rather than a patch.
 
-**`kaas-ui-serde` was not created.** Payload rendering is `Payload::of` in
+**`kaas-ui-serde` was not created.** Payload rendering was `Payload::of` in
 `kaas-ui-core::dto` — UTF-8 where the bytes are text, hex where they are not,
 with the encoding said out loud. That is Phase 3's sniff order minus the JSON
 step and minus the per-topic override, and the crate is created by the phase
-that fills it rather than up front. It earns its boundary in
-[Phase 6](07-phase-6-schema-registry.md), where Avro and Protobuf go behind a
-trait.
+that fills it rather than up front. It earned its boundary in Phase 6, below,
+where `Payload` moved into it and grew a codec, a schema reference and a note.
 
 ## Phase 4 — the decisions
 
@@ -398,6 +407,140 @@ by navigation instead of by an expander.
 **No offset-reset view.** It appears in kafbat-ui and it is a write; there is no
 code path here that could perform one.
 
+## Phase 6 — the decisions
+
+**A registry is declared once and referenced by id, and that is the whole
+design.** `schema_registries:` is a top-level block; a cluster names one with
+`schema_registry: dev`. The binding is that explicit line and **not** the `env`
+label, which stays free-form display metadata — a typo in a label would point a
+cluster at nothing, while an unknown registry id fails startup with the id in
+the message *and* the list of ids that were declared.
+
+Sharing is therefore a property of **construction**: `Registry::from_config`
+builds one `RegistryHandle` per declared registry and hands the same `Arc` to
+every cluster that names it. There is no way to build a second cache for `dev`,
+and no way to hand `dev`'s decoder `prod`'s settings. `two_clusters_naming_one_
+registry_hold_one_client_between_them` asserts the pointer equality, and the
+stub-registry test asserts the consequence: after the first cluster resolves
+schema id 1, the second decodes a record carrying it with **zero** requests
+reaching the registry.
+
+**One library, and the TLS feature is not its own.** `schema_registry_converter`
+4.10 resolves ids and decodes all three formats, because all three are the same
+Confluent wire format. Neither of its TLS features could be used: `native_tls`
+wants OpenSSL, which the distroless image has none of, and `rustls_tls` maps to
+`reqwest/rustls`, which forces `aws-lc-rs` and would turn the two-line musl
+builder in the Dockerfile into a cmake project. So the converter is built with
+no TLS feature at all and TLS comes from `reqwest/rustls-no-provider` on the
+one copy of reqwest the graph shares — with `kaas-ui-serde` installing the
+`ring` provider itself, behind a `Once`, in `RegistryHandle::new`. The crate
+that needs TLS arranges for it; a `main` that forgot would produce a registry
+that worked over HTTP and failed to build a client over HTTPS.
+
+The tree does carry **two** reqwest majors: 0.12 under `openidconnect`, 0.13
+under the converter. Not free, and not worth forcing: pinning them together
+means either an OIDC library that is behind or a schema library that is.
+
+**`jsonschema` 0.49 is not in the tree, and that is the plan being taken
+seriously rather than ignored.** `docs/00-foundations.md` listed it for
+display-time conformance; the converter's `json` feature already brings a
+validator, and using it means one library resolving *and* validating rather
+than two disagreeing about which schema a record was checked against. The
+non-conforming path is asserted against a stub: a record that parses as JSON
+and violates its subject comes back decoded, with a `nonConforming` note.
+
+**Six note kinds, not one error.** A payload that is not what the reader asked
+for carries a `note`, and the kinds are kept apart because they want different
+things done about them: `decodeError`, `registryUnavailable`,
+`registryAbsent`, `registryMisconfigured`, `overrideRefused`, `nonConforming`.
+The one the phase plan cared most about is the fourth — a `url` pointing at
+Apicurio's native API answers real requests and has no `/subjects`, so every
+Avro topic would render as hex with nothing saying why. It is caught on first
+use, reported as **configuration** rather than as an outage, and the message
+names `/apis/ccompat/v7` as the endpoint expected.
+
+**`RegistryAbsent` is a sixth kind the plan did not have.** A cluster with no
+registry that receives a framed payload is neither an outage nor a
+misconfiguration — it is `kaas` in the example config, doing exactly what it
+was set up to do — and it still needs a sentence saying why that record is hex.
+
+**Connecting is lazy and the backoff is per registry, with no background
+task.** Unlike a cluster, a registry has no persistent connection to keep
+warm: "connecting" is one ccompat probe. So there is no connector loop, and
+`ready()` is a fast path plus a `tokio::sync::Mutex` — ten clusters naming
+`dev` are ten callers of one function, not ten schedules. A registry that is
+down costs one probe per backoff interval for the whole process, asserted by
+decoding ten records against a dead registry and finding the request counter
+unchanged. Nothing dials at startup, so `/health` is untouched.
+
+**A `Misconfigured` registry is retried at the ceiling rather than never.**
+A wrong path does not heal on its own, but a registry answering 404 while it
+starts up does, and a fault that could only be cleared by a restart would be
+the wrong trade.
+
+**Apicurio does not return a subject with a schema id, and Confluent does.**
+`GET /schemas/ids/1` on Apicurio 3.2.4 answers with the schema and nothing
+else, so the chip would read `avro #1` with no subject — most of the useful
+information missing. `GET /schemas/ids/{id}/versions` is the ccompat way to
+ask, and it costs one request per **id**, cached beside the format and never
+fetched again.
+
+**The override is free in one direction, and the raw bytes are what make it
+free.** A registry-backed payload carries `raw.hex` beside its decoded value,
+so dropping to hex or string in the detail panel is a render rather than a
+refetch — and asking for `valueCodec=hex` on a framed topic does not consult
+the registry at all, which is the half of the override that has to work while
+the registry is down. Upward is refused with a reason: nothing can invent a
+schema id. The registry is also authoritative about what an id *is* — asking
+for Protobuf and getting Avro is answered with Avro and an `overrideRefused`
+note, not with a failure.
+
+**Decode-then-filter is one operation.** `PayloadDecoder::accept` is the only
+way a row is built, and the predicate lives inside the decoder rather than
+beside it, so there is no arrangement of calls that runs the expensive filter
+on a record the cheap ones would have dropped. Two counters hold it:
+`the_predicate_is_evaluated_zero_times_for_a_record_a_cheap_filter_dropped`
+drives `forward()` over a synthetic stream with an offset floor, and the live
+run asserts that a partition-restricted scan evaluates the predicate exactly as
+many times as that partition had records.
+
+**`rquickjs` needs its `parallel` feature, and that is not about parallelism.**
+The message stream owns its interpreter and runs on a spawned task, so a
+`!Send` runtime could not be used there at all. The memory cap and the
+interrupt handler are installed on the runtime *before the context exists*, and
+therefore before the user's own source is compiled — a pathological expression
+can hang a parser as easily as a loop can hang an interpreter.
+
+The predicate accepts an arrow function **or** a bare expression over `value`,
+because the second is what people type first. It sees the decoded value where
+there is one, the rendered **string** where there is not — so
+`v.includes("boom")` works on a topic with no schema — and `null` for a
+tombstone. A predicate returning an object or a promise is an error rather
+than a match: `!!promise` is `true`, so an `async` filter would otherwise
+match every record and look like it worked.
+
+Measured, live: `while (true) {}` over a ten-record window was killed four
+times in **44 ms** and the request returned normally; RSS afterwards was
+4.4 MB.
+
+**No Monaco.** The phase plan named it for the schema text and the diff.
+`@monaco-editor/react` is around 2.5 MB gzipped for a viewer that never edits,
+against a frontend bundle that is 250 kB gzipped in total, and the filter
+editor is a one-line expression input. The schema browser pretty-prints JSON —
+which Avro and JSON Schema both are — shows `.proto` as registered, and takes
+a line diff between two versions with a 40-line longest-common-subsequence
+implementation. Both sides are normalised before diffing, so a version that
+differs only in the registry's whitespace shows as unchanged. Syntax
+highlighting is the one thing genuinely not delivered.
+
+**The schema browser is guarded like the topic list**, `Resource::Topic` +
+`Action::View`, and it does **not** require a connected cluster. A registry
+serves an environment and knows nothing about brokers, so its subjects stay
+browsable while the cluster you arrived through is down — which is why the
+sidebar's schemas item is the one entry that survives an unreachable cluster.
+A new `Resource::Schema` was considered and rejected: every role granting `all`
+today would silently stop covering the browser.
+
 ## What is still unproven
 
 Named rather than left implied, because each of these is a thing a reader would
@@ -448,6 +591,25 @@ otherwise assume was covered:
   a browser. The live run shows `kaas` projecting 7 available features against
   Strimzi's 16; that the rendered tab sets differ accordingly has been seen but
   not automated.
+- **Protobuf and JSON Schema have no live fixture.** Both decode paths are
+  asserted against a stub registry — including a `.proto` with a repeated
+  field, an enum, bytes, a nested message and a field the descriptor does not
+  know — and the only registry-backed topic in this cluster is the canary's
+  Avro one. Getting a real Protobuf topic means a second canary; the Avro half
+  is genuinely end to end and the other two are not.
+- **Schema references resolve transitively against a stub, not a registry.**
+  The Avro reference case uses `schema_registry_converter`'s own fixture and
+  asserts the referenced subject was fetched. Apicurio holds no subject with a
+  reference to point this at.
+- **The schema browser has not been driven in a browser.** The routes, the
+  subject list, the version history and the diff are exercised over HTTP; the
+  page that renders them is typechecked and built and has not been clicked
+  through.
+- **Nothing measures what decoding costs a stream.** The protobuf decoder
+  rebuilds its `protofish` context per record — the schema list is cached, the
+  parsed context is not, because the converter does not expose it — and on a
+  fast Protobuf topic that could matter. Avro and JSON parse from a cached
+  schema and do not have the problem.
 
 ## Upstream asks these phases raised
 

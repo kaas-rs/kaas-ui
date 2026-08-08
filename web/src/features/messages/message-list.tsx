@@ -15,8 +15,9 @@ import { useCallback, useEffect, useLayoutEffect, useRef } from "react"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { AlertTriangle } from "lucide-react"
 
-import type { StreamRow } from "@/api/types"
+import type { Payload, StreamRow } from "@/api/types"
 import { cn } from "@/lib/utils"
+import { CodecChip } from "./payload"
 import { insertsAtTop, type SeekMode } from "./seek-modes"
 
 /** Declared once, shared by the CSS and the virtualizer. */
@@ -249,26 +250,53 @@ function Row({
       <span role="gridcell" className="font-mono text-[11px] text-ink-muted">
         {formatTimestamp(row.timestamp)}
       </span>
-      <span
-        role="gridcell"
-        className="truncate font-mono text-[11px] text-ink-muted"
-      >
-        {row.key ? row.key.text : <span className="text-ink-faint">—</span>}
-      </span>
-      <span
-        role="gridcell"
-        className="truncate font-mono text-[11px] text-ink-muted"
-      >
-        {row.value === null ? (
+      <PayloadCell
+        payload={row.key}
+        empty={<span className="text-ink-faint">—</span>}
+      />
+      <PayloadCell
+        payload={row.value}
+        empty={
           // A tombstone is not an empty value, and compaction turns on the
           // difference. Rendering both as blank loses the only thing worth
           // knowing about that record.
           <span className="text-warn-ink italic">tombstone</span>
-        ) : (
-          row.value.text
-        )}
-      </span>
+        }
+      />
     </div>
+  )
+}
+
+/**
+ * One payload cell: the text, and a chip saying how it was read.
+ *
+ * The chip is silent when there is nothing to say — an `auto` rendering with
+ * no schema and no note — so a topic with no registry looks exactly as it did
+ * before this phase. Where a schema *was* resolved, or something went wrong,
+ * the mark is on the row rather than only in the panel: a reader scanning a
+ * list has to be able to see that one record in five hundred did not decode.
+ */
+function PayloadCell({
+  payload,
+  empty,
+}: {
+  payload: Payload | null
+  empty: React.ReactNode
+}) {
+  return (
+    <span
+      role="gridcell"
+      className="flex min-w-0 items-center gap-1.5 font-mono text-[11px] text-ink-muted"
+    >
+      {payload === null ? (
+        empty
+      ) : (
+        <>
+          <CodecChip payload={payload} />
+          <span className="truncate">{payload.text}</span>
+        </>
+      )}
+    </span>
   )
 }
 

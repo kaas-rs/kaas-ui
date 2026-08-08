@@ -17,7 +17,12 @@ import {
   useOldestTimestamp,
   usePartitionBounds,
 } from "@/api/client"
-import type { ResolvedSeek, StreamProgress, StreamRow } from "@/api/types"
+import type {
+  PredicateStats,
+  ResolvedSeek,
+  StreamProgress,
+  StreamRow,
+} from "@/api/types"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
@@ -77,6 +82,9 @@ export function MessageBrowser({
     filter: search.filter,
     visibility: search.visibility,
     limit: search.limit,
+    keyCodec: search.keyCodec,
+    valueCodec: search.valueCodec,
+    predicate: search.predicate,
   })
 
   const bounds = usePartitionBounds(clusterId, topic)
@@ -148,6 +156,9 @@ export function MessageBrowser({
         filter={search.filter}
         partitions={search.partitions}
         visibility={search.visibility}
+        keyCodec={search.keyCodec}
+        valueCodec={search.valueCodec}
+        predicate={search.predicate}
         bounds={bounds.data?.items ?? []}
         retentionStart={retentionStart}
         timeZone={displayTimeZone()}
@@ -158,6 +169,10 @@ export function MessageBrowser({
         }
         onVisibilityChange={(visibility) =>
           onSearch({ visibility, selected: undefined })
+        }
+        onCodecChange={(next) => onSearch({ ...next, selected: undefined })}
+        onPredicateChange={(predicate) =>
+          onSearch({ predicate, selected: undefined })
         }
         onRestart={stream.restart}
       />
@@ -182,6 +197,7 @@ export function MessageBrowser({
         resolved={stream.resolved}
         error={stream.error}
         phase={stream.phase}
+        predicate={stream.predicate}
       />
 
       <ResizablePanelGroup
@@ -240,6 +256,8 @@ export function MessageBrowser({
                 selectedId={selectedId}
                 retained={retained}
                 present={!!selectedId && rowsById.has(selectedId)}
+                keyCodec={search.keyCodec}
+                valueCodec={search.valueCodec}
               />
             </ResizablePanel>
           </>
@@ -259,6 +277,8 @@ export function MessageBrowser({
               selectedId={selectedId}
               retained={retained}
               present={!!selectedId && rowsById.has(selectedId)}
+              keyCodec={search.keyCodec}
+              valueCodec={search.valueCodec}
             />
           </SheetContent>
         </Sheet>
@@ -344,12 +364,14 @@ function Notices({
   resolved,
   error,
   phase,
+  predicate,
 }: {
   dropped: number
   progress: StreamProgress | null
   resolved: ResolvedSeek | null
   error: { message: string } | null
   phase: string | null
+  predicate: PredicateStats | null
 }) {
   // The bar is an in-flight indicator, not a result, so it goes when the scan
   // does. A window that has been read already says so twice — the "window
@@ -363,11 +385,17 @@ function Notices({
     phase === "streaming" &&
     progress?.fraction !== null &&
     progress?.fraction !== undefined
+  // A filter that killed records for exceeding its budget, or threw on them,
+  // is worth a line: without one it looks exactly like a filter that matched
+  // nothing, and the two want opposite things done about them.
+  const filterTrouble =
+    predicate && (predicate.timedOut > 0 || predicate.failed > 0)
   const noticeCount =
     (dropped > 0 ? 1 : 0) +
     (error ? 1 : 0) +
     (resolved?.unresolved ? 1 : 0) +
-    (progress?.orderingDegraded ? 1 : 0)
+    (progress?.orderingDegraded ? 1 : 0) +
+    (filterTrouble ? 1 : 0)
   if (!noticeCount && !showBar) return null
 
   return (
@@ -383,6 +411,22 @@ function Notices({
           <p className="flex items-start gap-2 text-[11px] text-danger">
             <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
             {error.message}
+          </p>
+        ) : null}
+        {filterTrouble && predicate ? (
+          <p className="flex items-start gap-2 text-[11px] text-warn-ink">
+            <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+            <span>
+              The filter expression was evaluated {count(predicate.evaluated)}{" "}
+              time{predicate.evaluated === 1 ? "" : "s"} and matched{" "}
+              {count(predicate.matched)}.{" "}
+              {predicate.timedOut > 0
+                ? `${count(predicate.timedOut)} record${predicate.timedOut === 1 ? "" : "s"} ran past the per-record budget and ${predicate.timedOut === 1 ? "was" : "were"} skipped. `
+                : ""}
+              {predicate.failed > 0
+                ? `${count(predicate.failed)} threw${predicate.lastError ? `: ${predicate.lastError}` : ""}.`
+                : ""}
+            </span>
           </p>
         ) : null}
         {dropped > 0 ? (
@@ -440,6 +484,9 @@ function Terminal({
     partitions?: string
     filter?: string
     limit?: number
+    keyCodec?: string
+    valueCodec?: string
+    predicate?: string
   }
   onAppend(rows: StreamRow[]): void
 }) {
@@ -473,6 +520,12 @@ function Terminal({
       })
       if (search.partitions) params.set("partitions", search.partitions)
       if (search.filter) params.set("filter", search.filter)
+      // The same decode and filter rules as the stream that filled the list:
+      // a page appended under different ones would sit in the same table
+      // rendering the same values differently.
+      if (search.keyCodec) params.set("keyCodec", search.keyCodec)
+      if (search.valueCodec) params.set("valueCodec", search.valueCodec)
+      if (search.predicate) params.set("predicate", search.predicate)
 
       const page = await fetchMessagePage(clusterId, topic, params)
       if (!page.items.length) {

@@ -35,6 +35,7 @@ use axum::response::IntoResponse;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use futures::{Stream, StreamExt};
 use kaas_ui_core::ResourceError;
+use kaas_ui_core::decode::PayloadDecoder;
 use kaas_ui_core::dto::{Dropped, ResolvedSeek, StreamPhase, StreamProgress, StreamRow};
 use kafka_read::{ScanEvent, ScanProgress};
 use serde::Serialize;
@@ -77,6 +78,12 @@ enum Frame {
     Phase(StreamPhase),
     Resolved(Box<ResolvedSeek>),
     Failed(Box<ResourceError>),
+    /// What the user predicate has done so far.
+    ///
+    /// Its own event rather than a field on `progress`, because a backward
+    /// mode emits no progress at all — it buffers its whole window — and a
+    /// filter's counters are exactly as interesting there.
+    Predicate(Box<kaas_ui_serde::PredicateStats>),
 }
 
 /// `GET /api/clusters/{id}/topics/{topic}/messages/stream`
@@ -164,6 +171,14 @@ pub async fn stream(
     let seek_instant = mode.timestamp_of(&query);
     let resumed_from = resume.clone();
     let topic_for_pump = topic.clone();
+    // Built here, on the request, and moved into the pump: the stream outlives
+    // the handler, and the registry client it holds is the shared one rather
+    // than a copy.
+    // The predicate is compiled here, on the request, so a syntax error is a
+    // `400` the browser can show beside the editor rather than a stream that
+    // opens and filters nothing.
+    let decoder = PayloadDecoder::new(&handle, &topic, query.codecs())
+        .with_predicate(query.compile_predicate()?);
 
     tokio::spawn(async move {
         // The pump owns the scan. Selecting on the reader going away is what
@@ -191,7 +206,7 @@ pub async fn stream(
             () = tokio::time::sleep(MAX_LIFETIME) => {
                 tx.push(Frame::Phase(StreamPhase::Done));
             }
-            () = pump(admin, topic_for_pump, plan, seek_instant, &tx, resumed_from) => {}
+            () = pump(admin, topic_for_pump, plan, seek_instant, &tx, resumed_from, decoder) => {}
         }
         drop(permit);
     });
@@ -219,6 +234,7 @@ pub async fn stream(
                 Frame::Phase(phase) => encode("phase", &PhaseEvent { phase }, None),
                 Frame::Resolved(resolved) => encode("resolved", &resolved, None),
                 Frame::Failed(error) => encode("error", &error, None),
+                Frame::Predicate(stats) => encode("predicate", &stats, None),
             });
         }
     };
@@ -293,6 +309,7 @@ async fn pump(
     seek_instant: Option<i64>,
     tx: &streaming::Sender<Frame>,
     resume: Option<String>,
+    decoder: PayloadDecoder,
 ) {
     tx.push(Frame::Phase(StreamPhase::Seeking));
 
@@ -318,7 +335,13 @@ async fn pump(
                     let mut malformed = 0usize;
                     for partition in &tails {
                         malformed += partition.malformed;
-                        rows.extend(partition.records.iter().map(StreamRow::of));
+                        for record in &partition.records {
+                            if let Some(decoded) =
+                                decoder.accept(record, kaas_ui_serde::PREVIEW_CHARS).await
+                            {
+                                rows.push(StreamRow::render(record, decoded));
+                            }
+                        }
                     }
                     // Newest first, which is what every backward mode renders.
                     rows.sort_by_key(|row| std::cmp::Reverse(super::sort_key(row)));
@@ -330,6 +353,9 @@ async fn pump(
                     }
                     for chunk in rows.chunks(MAX_ROWS_PER_EVENT) {
                         tx.push(Frame::Rows(chunk.to_vec()));
+                    }
+                    if let Some(stats) = decoder.predicate_stats() {
+                        tx.push(Frame::Predicate(Box::new(stats)));
                     }
                 }
                 Err(error) => {
@@ -373,7 +399,7 @@ async fn pump(
             });
 
             tx.push(Frame::Phase(StreamPhase::Streaming));
-            forward(scan, tx, floor, budget, limit, width).await;
+            forward(scan, tx, floor, budget, limit, width, &decoder).await;
             tx.push(Frame::Phase(StreamPhase::Done));
         }
     }
@@ -387,6 +413,7 @@ async fn forward(
     budget: usize,
     limit: Option<usize>,
     width: usize,
+    decoder: &PayloadDecoder,
 ) {
     let mut scan = Box::pin(scan);
     let mut ticker = tokio::time::interval(FLUSH_INTERVAL);
@@ -402,6 +429,7 @@ async fn forward(
         tokio::select! {
             _ = ticker.tick() => {
                 flush(&mut batch, tx);
+                push_predicate_stats(decoder, tx);
                 if tx.is_closed() {
                     return;
                 }
@@ -415,7 +443,15 @@ async fn forward(
                     if floor.is_some_and(|floor| record.offset < floor) {
                         continue;
                     }
-                    batch.push(StreamRow::of(&record));
+                    // The floor above is a cheap filter and runs first, so a
+                    // record below it is never decoded and never reaches the
+                    // predicate. That ordering is the correctness property —
+                    // see `PayloadDecoder::accept`.
+                    if let Some(decoded) =
+                        decoder.accept(&record, kaas_ui_serde::PREVIEW_CHARS).await
+                    {
+                        batch.push(StreamRow::render(&record, decoded));
+                    }
                     if batch.len() >= MAX_ROWS_PER_EVENT {
                         flush(&mut batch, tx);
                     }
@@ -434,6 +470,7 @@ async fn forward(
                 }
                 Some(Ok(ScanEvent::Done(progress))) => {
                     flush(&mut batch, tx);
+                    push_predicate_stats(decoder, tx);
                     widest = widest.max(progress.partitions_active);
                     tx.push(Frame::Progress(render_progress(
                         &progress, budget, widest, limit,
@@ -443,11 +480,13 @@ async fn forward(
                 Some(Ok(ScanEvent::PartitionComplete { .. })) => {}
                 Some(Err(error)) => {
                     flush(&mut batch, tx);
+                    push_predicate_stats(decoder, tx);
                     tx.push(Frame::Failed(Box::new(ResourceError::new("scan", &error))));
                     return;
                 }
                 None => {
                     flush(&mut batch, tx);
+                    push_predicate_stats(decoder, tx);
                     return;
                 }
             },
@@ -460,6 +499,16 @@ fn flush(batch: &mut Vec<StreamRow>, tx: &streaming::Sender<Frame>) {
         return;
     }
     tx.push(Frame::Rows(std::mem::take(batch)));
+}
+
+/// The counters, as they stand. Pushed on every flush tick *and* on every exit
+/// path: a window that completes between ticks — a bounded scan on a fast
+/// broker routinely does — must not lose the very numbers that distinguish "the
+/// filter matched nothing" from "the filter killed everything it touched".
+fn push_predicate_stats(decoder: &PayloadDecoder, tx: &streaming::Sender<Frame>) {
+    if let Some(stats) = decoder.predicate_stats() {
+        tx.push(Frame::Predicate(Box::new(stats)));
+    }
 }
 
 /// Where a resumed stream picks up, if it can pick up at all.
@@ -780,6 +829,56 @@ mod tests {
         // A zero limit cannot be a denominator. `limit_for` rejects one, so
         // this is the guard holding rather than a case anyone can reach.
         assert_eq!(fraction(&progress, Some(0)), Some(0.25));
+    }
+
+    /// The property most likely to regress silently, asserted with a counter.
+    ///
+    /// The expensive filter must never see a record a cheap one could have
+    /// dropped. Partition selection is in the scan spec — the broker never
+    /// sends those records at all — so the one cheap filter *this* loop
+    /// applies is the offset floor, and that is what this drives: a stream in
+    /// which two of five records are below the floor, and a predicate that
+    /// counts every evaluation.
+    #[tokio::test]
+    async fn the_predicate_is_evaluated_zero_times_for_a_record_a_cheap_filter_dropped() {
+        fn record(partition: i32, offset: i64) -> kafka_read::Record {
+            kafka_read::Record {
+                topic: "orders".to_owned(),
+                partition,
+                offset,
+                timestamp: 1_000 + offset,
+                timestamp_type: kafka_read::TimestampType::Creation,
+                key: None,
+                value: Some(bytes::Bytes::from(format!("{{\"n\":{offset}}}"))),
+                headers: Vec::new(),
+                producer_id: None,
+                transactional: false,
+                leader_epoch: None,
+            }
+        }
+
+        // Keep the receiver alive: a closed ring makes `forward` return early
+        // and the test would pass for the wrong reason.
+        let (tx, _rx) = streaming::ring::<Frame>(64);
+        let decoder = kaas_ui_core::decode::PayloadDecoder::plain().with_predicate(Some(
+            kaas_ui_serde::Predicate::compile("v => true").unwrap(),
+        ));
+
+        let events = futures::stream::iter(
+            [10, 11, 12, 13, 14]
+                .into_iter()
+                .map(|offset| Ok(ScanEvent::Record(record(0, offset))))
+                .collect::<Vec<_>>(),
+        );
+
+        forward(events, &tx, Some(12), 100, Some(10), 1, &decoder).await;
+
+        let stats = decoder.predicate_stats().expect("a predicate was set");
+        assert_eq!(
+            stats.evaluated, 3,
+            "the predicate ran on a record the floor had already dropped: {stats:?}"
+        );
+        assert_eq!(stats.matched, 3);
     }
 
     #[test]

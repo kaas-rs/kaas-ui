@@ -22,6 +22,7 @@
 
 pub mod capabilities;
 pub mod config;
+pub mod decode;
 pub mod dto;
 pub mod envelope;
 pub mod error;

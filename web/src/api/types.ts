@@ -75,6 +75,13 @@ export interface ClusterCard {
    * cannot answer.
    */
   grants: Partial<Record<Resource, Action[]>>
+  /**
+   * The schema registry this cluster references, by its configured id.
+   *
+   * `null` is a normal path, not a degraded one — and it is what the sidebar
+   * reads to decide whether a schemas item exists at all.
+   */
+  schemaRegistry: string | null
 }
 
 /** What a non-cluster resource is. Decides the icon and the wording. */
@@ -372,11 +379,71 @@ export interface GroupOffset {
   lag: Lag
 }
 
+/**
+ * How a payload was read.
+ *
+ * The chip in the message list **is** this value, and the chip is the override
+ * control rather than a label: auto-detection that cannot be corrected is
+ * worse than none. The last three cannot be chosen — nothing can invent a
+ * schema id for a payload that does not carry one — so the picker offers the
+ * first four and the server refuses the rest with a reason.
+ */
+export type Codec =
+  "auto" | "string" | "hex" | "json" | "avro" | "protobuf" | "jsonSchema"
+
+/** The four a reader may ask for. Falling back never needs a schema. */
+export const CHOOSABLE_CODECS: Codec[] = ["auto", "string", "hex", "json"]
+
+export type SchemaFormat = "avro" | "protobuf" | "json"
+
+/** Which schema decoded a payload, and which registry answered. */
+export interface SchemaRef {
+  id: number
+  format: SchemaFormat
+  /** The configured registry id. A schema id means nothing without it. */
+  registry: string
+  subject: string | null
+  version: number | null
+  /** The record or message name inside the schema. */
+  name: string | null
+}
+
+/**
+ * Why a payload is not what the reader asked for.
+ *
+ * Five causes, kept apart because they want five different things done about
+ * them — and because the alternative is a topic that silently renders as hex
+ * with no way to tell a broken registry from a broken URL.
+ */
+export type NoteKind =
+  | "decodeError"
+  | "registryUnavailable"
+  | "registryAbsent"
+  | "registryMisconfigured"
+  | "overrideRefused"
+  | "nonConforming"
+
+export interface PayloadNote {
+  kind: NoteKind
+  message: string
+}
+
 export interface Payload {
-  encoding: "utf8" | "hex"
+  codec: Codec
+  encoding: "utf8" | "hex" | "json"
   text: string
   bytes: number
   truncated: boolean
+  /**
+   * The bytes as they arrived, hex-encoded.
+   *
+   * Present only for a registry-backed decode, which is the only rendering the
+   * original cannot be recovered from — and it is what makes dropping to hex
+   * or string a client-side change rather than a refetch.
+   */
+  raw?: { hex: string; truncated: boolean }
+  schema?: SchemaRef
+  note?: PayloadNote
 }
 
 export interface Message {
@@ -484,6 +551,71 @@ export interface MessagePage {
   hasMore: boolean
   nextOffset: number | null
   resolved?: ResolvedSeek
+  predicate?: PredicateStats
+}
+
+/**
+ * What the JS predicate has done.
+ *
+ * Rendered because a filter that dropped a thousand records for exceeding its
+ * budget looks exactly like a filter that matched nothing.
+ */
+export interface PredicateStats {
+  evaluated: number
+  matched: number
+  /** Killed by the per-record budget. Nobody knows whether these matched. */
+  timedOut: number
+  failed: number
+  lastError?: string
+}
+
+// --- the schema registry --------------------------------------------------
+
+export type RegistryStatus =
+  "unprobed" | "ready" | "unreachable" | "misconfigured"
+
+/**
+ * The registry answering for a cluster.
+ *
+ * Named on every page it backs, because a registry serves an *environment*:
+ * two clusters showing the same subjects are not a coincidence to explain
+ * away, they are the same registry answering both.
+ */
+export interface RegistryCard {
+  id: string
+  name: string
+  url: string
+  status: RegistryStatus
+  error: string | null
+}
+
+export interface SchemaReference {
+  name: string
+  subject: string
+  version: number
+}
+
+export interface SubjectSchema {
+  subject: string
+  version: number
+  id: number
+  format: SchemaFormat
+  schema: string
+  references: SchemaReference[]
+}
+
+export interface SubjectList {
+  /** `null` where the cluster references no registry, which is normal. */
+  registry: RegistryCard | null
+  subjects: string[]
+}
+
+export interface SubjectDetail {
+  registry: RegistryCard | null
+  subject: string
+  compatibility: string | null
+  versions: SubjectSchema[]
+  errors: ResourceError[]
 }
 
 /** The full payload of one record. */

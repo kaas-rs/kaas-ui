@@ -351,6 +351,79 @@
         }
       }
     },
+    "/api/clusters/{id}/schemas": {
+      "get": {
+        "tags": [
+          "schemas"
+        ],
+        "summary": "`GET /api/clusters/{id}/schemas`",
+        "operationId": "list",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Cluster id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The subjects of the registry this cluster uses",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubjectList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/clusters/{id}/schemas/{subject}/versions": {
+      "get": {
+        "tags": [
+          "schemas"
+        ],
+        "summary": "`GET /api/clusters/{id}/schemas/{subject}/versions`",
+        "operationId": "versions",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Cluster id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "subject",
+            "in": "path",
+            "description": "Subject name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every registered version of a subject",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubjectDetail"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/clusters/{id}/topics": {
       "get": {
         "tags": [
@@ -641,6 +714,33 @@
               "type": "integer",
               "minimum": 0
             }
+          },
+          {
+            "name": "keyCodec",
+            "in": "query",
+            "description": "Override how keys are read",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Codec"
+            }
+          },
+          {
+            "name": "valueCodec",
+            "in": "query",
+            "description": "Override how values are read",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Codec"
+            }
+          },
+          {
+            "name": "predicate",
+            "in": "query",
+            "description": "JavaScript expression over the decoded value",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -809,6 +909,24 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "keyCodec",
+            "in": "query",
+            "description": "Override how keys are read",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Codec"
+            }
+          },
+          {
+            "name": "valueCodec",
+            "in": "query",
+            "description": "Override how values are read",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Codec"
+            }
           }
         ],
         "responses": {
@@ -870,6 +988,24 @@
             "schema": {
               "type": "integer",
               "format": "int64"
+            }
+          },
+          {
+            "name": "keyCodec",
+            "in": "query",
+            "description": "Override how keys are read",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Codec"
+            }
+          },
+          {
+            "name": "valueCodec",
+            "in": "query",
+            "description": "Override how values are read",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Codec"
             }
           }
         ],
@@ -1370,6 +1506,13 @@
             "description": "Partitions across all topics.",
             "minimum": 0
           },
+          "schemaRegistry": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The schema registry this cluster references, by its configured id.\n\n`None` is a normal path — a kaas instance beside a Strimzi cluster in\nthe same environment — and the sidebar reads it to decide whether a\nschemas item exists at all, rather than offering one that explains its\nown absence."
+          },
           "snapshotAgeMs": {
             "type": [
               "integer",
@@ -1455,6 +1598,19 @@
           "connecting",
           "ready",
           "unreachable"
+        ]
+      },
+      "Codec": {
+        "type": "string",
+        "description": "How a payload was read.\n\nThe chip in the message list is this value, and the chip is the **override\ncontrol**, not a label: auto-detection that cannot be corrected is worse\nthan none.",
+        "enum": [
+          "auto",
+          "string",
+          "hex",
+          "json",
+          "avro",
+          "protobuf",
+          "jsonSchema"
         ]
       },
       "ConfigEntryDto": {
@@ -1770,6 +1926,13 @@
                   "type": "integer",
                   "description": "Partitions across all topics.",
                   "minimum": 0
+                },
+                "schemaRegistry": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The schema registry this cluster references, by its configured id.\n\n`None` is a normal path — a kaas instance beside a Strimzi cluster in\nthe same environment — and the sidebar reads it to decide whether a\nschemas item exists at all, rather than offering one that explains its\nown absence."
                 },
                 "snapshotAgeMs": {
                   "type": [
@@ -3905,6 +4068,17 @@
             "format": "int64",
             "description": "The anchor to ask for next, or `None` at the end of the window.\n\nOne number for every partition, because that is what the seek modes\ntake: partitions are at different offsets, so this is where to *start*\nthe next page and not a claim about any particular partition."
           },
+          "predicate": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PredicateStats",
+                "description": "What the JS predicate did, where one was given.\n\nPresent so that a filter which dropped a thousand records for\nexceeding its budget does not look like a filter that matched nothing."
+              }
+            ]
+          },
           "resolved": {
             "oneOf": [
               {
@@ -3917,6 +4091,18 @@
             ]
           }
         }
+      },
+      "NoteKind": {
+        "type": "string",
+        "description": "Why a payload is not what the reader asked for.\n\nFive distinct causes, kept apart because they want five different things\ndone about them — and because the alternative is a topic that silently\nrenders as hex with no way to tell a broken registry from a broken URL.",
+        "enum": [
+          "decodeError",
+          "registryUnavailable",
+          "registryAbsent",
+          "registryMisconfigured",
+          "overrideRefused",
+          "nonConforming"
+        ]
       },
       "Partition": {
         "type": "object",
@@ -4041,8 +4227,9 @@
       },
       "Payload": {
         "type": "object",
-        "description": "A key or value, rendered with the encoding that was used said out loud.\n\nAuto-detection that cannot be seen is worse than none: the reader has to\nknow whether they are looking at text the producer wrote or at kaas-ui's\nguess.",
+        "description": "A key or value, rendered with the codec that was used said out loud.\n\nAuto-detection that cannot be seen is worse than none: the reader has to\nknow whether they are looking at text the producer wrote, at kaas-ui's\nguess, or at a schema the registry resolved.",
         "required": [
+          "codec",
           "encoding",
           "text",
           "bytes",
@@ -4054,9 +4241,46 @@
             "description": "Length in bytes of the original.",
             "minimum": 0
           },
+          "codec": {
+            "$ref": "#/components/schemas/Codec",
+            "description": "What produced [`Self::text`]."
+          },
           "encoding": {
             "type": "string",
-            "description": "`utf8` or `hex`."
+            "description": "How to read it: `utf8`, `hex` or `json`."
+          },
+          "note": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PayloadNote",
+                "description": "Why this is not what was asked for."
+              }
+            ]
+          },
+          "raw": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RawBytes",
+                "description": "The original bytes, for a codec change with no refetch."
+              }
+            ]
+          },
+          "schema": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SchemaRef",
+                "description": "Which schema decoded it, when a registry was involved."
+              }
+            ]
           },
           "text": {
             "type": "string",
@@ -4067,6 +4291,130 @@
             "description": "Whether `text` was cut short."
           }
         }
+      },
+      "PayloadNote": {
+        "type": "object",
+        "description": "A note attached to a payload, with the sentence to render.",
+        "required": [
+          "kind",
+          "message"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/NoteKind",
+            "description": "What kind of note this is."
+          },
+          "message": {
+            "type": "string",
+            "description": "What to tell the reader."
+          }
+        }
+      },
+      "PredicateStats": {
+        "type": "object",
+        "description": "What a predicate has done so far.\n\nReported beside the scan's own progress, because a filter that silently\ndropped a thousand records for exceeding its budget looks exactly like a\nfilter that matched nothing.",
+        "required": [
+          "evaluated",
+          "matched",
+          "timedOut",
+          "failed"
+        ],
+        "properties": {
+          "evaluated": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Records the predicate was run on.",
+            "minimum": 0
+          },
+          "failed": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Records whose evaluation threw — a bad field access on one odd record,\nor the memory cap firing.",
+            "minimum": 0
+          },
+          "lastError": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The most recent failure, so one bad expression is diagnosable without\na log."
+          },
+          "matched": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Records it accepted.",
+            "minimum": 0
+          },
+          "timedOut": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Records killed by the per-record budget. **Not** the same as rejected:\nnobody knows whether these matched.",
+            "minimum": 0
+          }
+        }
+      },
+      "RawBytes": {
+        "type": "object",
+        "description": "The bytes as they arrived, so a codec can be changed without a refetch.\n\nPresent exactly when [`Payload::text`] is a *decoded* rendering — Avro,\nProtobuf or JSON Schema — because those are the only renderings the\noriginal bytes cannot be recovered from. A hex rendering is already the\nbytes, and a UTF-8 one is losslessly convertible to hex in the browser.",
+        "required": [
+          "hex",
+          "truncated"
+        ],
+        "properties": {
+          "hex": {
+            "type": "string",
+            "description": "Lowercase hex of the record as it arrived, framing included."
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "Whether the hex was cut short."
+          }
+        }
+      },
+      "RegistryCard": {
+        "type": "object",
+        "description": "One schema registry, as the browser and the fleet render it.\n\nA view of a **registry**, reached through a cluster. Two clusters that\nreference `dev` show the same subjects, so the card says which registry is\nanswering rather than implying the subjects belong to the cluster whose nav\nyou arrived through.",
+        "required": [
+          "id",
+          "name",
+          "url",
+          "status"
+        ],
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What went wrong, where something did."
+          },
+          "id": {
+            "type": "string",
+            "description": "The configured id, which is what a cluster's `schema_registry:` names."
+          },
+          "name": {
+            "type": "string",
+            "description": "The name to render."
+          },
+          "status": {
+            "$ref": "#/components/schemas/RegistryStatus",
+            "description": "Whether it has been reached, and how it failed if it has not."
+          },
+          "url": {
+            "type": "string",
+            "description": "Where it is. Shown because a registry that is answering the wrong API\nis diagnosed by looking at its url."
+          }
+        }
+      },
+      "RegistryStatus": {
+        "type": "string",
+        "description": "The registry health state, flattened for the wire.",
+        "enum": [
+          "unprobed",
+          "ready",
+          "unreachable",
+          "misconfigured"
+        ]
       },
       "ResolvedPartition": {
         "type": "object",
@@ -4254,6 +4602,88 @@
           "other"
         ]
       },
+      "SchemaFormat": {
+        "type": "string",
+        "description": "Which of the three registry formats a schema is in.",
+        "enum": [
+          "avro",
+          "protobuf",
+          "json"
+        ]
+      },
+      "SchemaRef": {
+        "type": "object",
+        "description": "Which schema decoded a payload, and which registry answered.\n\nThe registry id is here rather than implied by the cluster because a\nregistry serves an *environment*: two clusters can show the same schema id\nand mean the same schema, and a reader has to be able to see that.",
+        "required": [
+          "id",
+          "format",
+          "registry"
+        ],
+        "properties": {
+          "format": {
+            "$ref": "#/components/schemas/SchemaFormat",
+            "description": "What the registry said the id is."
+          },
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The id the framing carried.",
+            "minimum": 0
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The record or message name inside the schema."
+          },
+          "registry": {
+            "type": "string",
+            "description": "The registry that answered, by its configured id."
+          },
+          "subject": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The subject the registry named, where it named one. A schema id can be\nregistered against more than one subject, so this is \"what the registry\nreturned\" rather than an authoritative single answer."
+          },
+          "version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The version within that subject, where the registry gave one.",
+            "minimum": 0
+          }
+        }
+      },
+      "SchemaReference": {
+        "type": "object",
+        "description": "A schema this one refers to, stored separately by the registry.\n\nA resolver that fetches only the id in the payload decodes the simple\ntopics and fails on the interesting ones — so these are shown, and they are\nfollowed when decoding.",
+        "required": [
+          "name",
+          "subject",
+          "version"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The name the referring schema uses — a fully-qualified Avro name, or a\n`.proto` import path."
+          },
+          "subject": {
+            "type": "string",
+            "description": "The subject the referenced schema is registered against."
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Its version.",
+            "minimum": 0
+          }
+        }
+      },
       "SeekMode": {
         "type": "string",
         "description": "How a window of a topic was asked for.",
@@ -4394,7 +4824,7 @@
             "allOf": [
               {
                 "$ref": "#/components/schemas/StreamRecord",
-                "description": "A record that decoded."
+                "description": "A record that decoded.\n\nBoxed because a decoded payload is much larger than a malformed row —\nit carries the schema it resolved against and the bytes it came from —\nand a `Vec<StreamRow>` of a thousand rows should not pay a record's\nsize for every batch that did not decode."
               },
               {
                 "type": "object",
@@ -4411,7 +4841,7 @@
                 }
               }
             ],
-            "description": "A record that decoded."
+            "description": "A record that decoded.\n\nBoxed because a decoded payload is much larger than a malformed row —\nit carries the schema it resolved against and the bytes it came from —\nand a `Vec<StreamRow>` of a thousand rows should not pay a record's\nsize for every batch that did not decode."
           },
           {
             "allOf": [
@@ -4438,6 +4868,125 @@
           }
         ],
         "description": "One row of the message list, as it crosses an SSE connection.\n\nTwo variants, never conflated. A batch that would not decode at the\nprotocol level is a **row**: kaas-lib's decoder keeps going past it, and\nsurfacing it is the entire reason that design exists. Folding it into the\nstream's `error` event would throw away the one thing the reader needs,\nwhich is *where* in the topic the damage is."
+      },
+      "SubjectDetail": {
+        "type": "object",
+        "description": "The versions of one subject, newest last.",
+        "required": [
+          "subject",
+          "versions",
+          "errors"
+        ],
+        "properties": {
+          "compatibility": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The compatibility mode, where the registry reports one."
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResourceError"
+            },
+            "description": "Versions the registry listed and would not hand over, with why.\n\nPartial failure is a result: a subject with thirty versions of which\none is unreadable renders twenty-nine and names the thirtieth."
+          },
+          "registry": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RegistryCard",
+                "description": "The registry answering."
+              }
+            ]
+          },
+          "subject": {
+            "type": "string",
+            "description": "The subject that was asked for."
+          },
+          "versions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SubjectSchema"
+            },
+            "description": "Every registered version, oldest first, with its text."
+          }
+        }
+      },
+      "SubjectList": {
+        "type": "object",
+        "description": "The subjects one registry holds, and which registry that is.",
+        "required": [
+          "subjects"
+        ],
+        "properties": {
+          "registry": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RegistryCard",
+                "description": "The registry answering, or `None` where this cluster references none."
+              }
+            ]
+          },
+          "subjects": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every subject, in the order the registry listed them."
+          }
+        }
+      },
+      "SubjectSchema": {
+        "type": "object",
+        "description": "One registered version of a subject.",
+        "required": [
+          "subject",
+          "version",
+          "id",
+          "format",
+          "schema",
+          "references"
+        ],
+        "properties": {
+          "format": {
+            "$ref": "#/components/schemas/SchemaFormat",
+            "description": "Which of the three formats."
+          },
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The global schema id — the number the wire format carries.",
+            "minimum": 0
+          },
+          "references": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SchemaReference"
+            },
+            "description": "Subjects this one refers to."
+          },
+          "schema": {
+            "type": "string",
+            "description": "The schema itself, as the registry stores it. Text rather than parsed,\nbecause this is what Monaco highlights and what a diff is taken over."
+          },
+          "subject": {
+            "type": "string",
+            "description": "The subject it is registered against."
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The version within that subject.",
+            "minimum": 0
+          }
+        }
       },
       "TopicDetail": {
         "type": "object",
@@ -4639,6 +5188,10 @@
     {
       "name": "messages",
       "description": "The message browser."
+    },
+    {
+      "name": "schemas",
+      "description": "The schema registry an environment shares, reached through a cluster."
     },
     {
       "name": "meta",

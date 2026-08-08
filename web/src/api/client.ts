@@ -15,6 +15,8 @@ import type {
   MessageDetail,
   MessagePage,
   PartitionOffsets,
+  SubjectDetail,
+  SubjectList,
   TopicDetail,
   TopicSummary,
 } from "./types"
@@ -248,19 +250,34 @@ export function useGroupOffsets(id: string, group: string) {
  *
  * `staleTime: Infinity` is not a cache-tuning choice: a Kafka record at a
  * given offset is immutable, so re-selecting a row must cost no request at
- * all. The query key is the same `{partition}-{offset}` the list keys on.
+ * all. The query key is the same `{partition}-{offset}` the list keys on —
+ * plus the codec override, because the *rendering* is not immutable: the same
+ * record read as hex and read as text are two answers, and pinning one under
+ * the other's key would show the wrong one forever.
  */
 export function useMessageDetail(
   id: string,
   topic: string,
-  rowId: string | undefined
+  rowId: string | undefined,
+  codecs?: { keyCodec?: string; valueCodec?: string }
 ) {
   const parsed = rowId ? parseRowId(rowId) : null
+  const params = new URLSearchParams()
+  if (codecs?.keyCodec) params.set("keyCodec", codecs.keyCodec)
+  if (codecs?.valueCodec) params.set("valueCodec", codecs.valueCodec)
+  const query = params.toString()
   return useQuery({
-    queryKey: ["message", id, topic, rowId],
+    queryKey: [
+      "message",
+      id,
+      topic,
+      rowId,
+      codecs?.keyCodec ?? null,
+      codecs?.valueCodec ?? null,
+    ],
     queryFn: () =>
       get<MessageDetail>(
-        `/api/clusters/${encode(id)}/topics/${encode(topic)}/messages/${parsed?.partition}/${parsed?.offset}`
+        `/api/clusters/${encode(id)}/topics/${encode(topic)}/messages/${parsed?.partition}/${parsed?.offset}${query ? `?${query}` : ""}`
       ),
     enabled: !!parsed,
     staleTime: Infinity,
@@ -283,6 +300,45 @@ export async function fetchMessagePage(
   return get<MessagePage>(
     `/api/clusters/${encode(id)}/topics/${encode(topic)}/messages?${params}`
   )
+}
+
+/**
+ * The subjects the registry this cluster references holds.
+ *
+ * Reached through a cluster and never through a registry id: registry ids are
+ * deliberately not a second enumerable namespace, and "which clusters use this
+ * registry" is a list that can name a cluster the caller may not see.
+ *
+ * A cluster with no registry answers `registry: null` rather than failing —
+ * that is `kaas`, and it is the common case.
+ */
+export function useSubjects(id: string) {
+  return useQuery({
+    queryKey: ["schemas", id],
+    queryFn: () => get<SubjectList>(`/api/clusters/${encode(id)}/schemas`),
+    // A subject registered a moment ago has to appear without a reload; the
+    // server caches the listing briefly for the same reason.
+    staleTime: 30_000,
+  })
+}
+
+/**
+ * Every registered version of one subject, with its text.
+ *
+ * Not `staleTime: Infinity` even though a registered version is immutable: the
+ * *list* is not, and a subject gains versions. The server caches the text by
+ * `(subject, version)` forever, so re-asking costs one listing call.
+ */
+export function useSubjectVersions(id: string, subject: string | undefined) {
+  return useQuery({
+    queryKey: ["schema", id, subject],
+    queryFn: () =>
+      get<SubjectDetail>(
+        `/api/clusters/${encode(id)}/schemas/${encode(subject ?? "")}/versions`
+      ),
+    enabled: !!subject,
+    staleTime: 30_000,
+  })
 }
 
 /**

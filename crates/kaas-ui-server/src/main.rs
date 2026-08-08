@@ -152,11 +152,14 @@ fn build_router(
 async fn serve(config_path: PathBuf, config: Config) -> Result<(), Box<dyn std::error::Error>> {
     let listen = config.server.listen;
 
-    let registry = Arc::new(ArcSwap::from_pointee(Registry::from_config(&config)));
-    // Connectors start here, on background tasks. Nothing below waits for one.
+    let registry = Arc::new(ArcSwap::from_pointee(Registry::from_config(&config)?));
+    // Connectors start here, on background tasks. Nothing below waits for one
+    // — and neither does a schema registry, which is dialled on first use for
+    // the same reason.
     registry.load().spawn_connectors();
     tracing::info!(
         clusters = registry.load().len(),
+        schema_registries = registry.load().schema_registries().count(),
         "registry built; connecting in the background"
     );
 
@@ -318,7 +321,9 @@ clusters:
         )
         .expect("the fixture config parses");
         AppState::new(
-            Arc::new(ArcSwap::from_pointee(Registry::from_config(&config))),
+            Arc::new(ArcSwap::from_pointee(
+                Registry::from_config(&config).unwrap(),
+            )),
             Policy::open(),
         )
     }

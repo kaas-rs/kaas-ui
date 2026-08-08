@@ -234,6 +234,27 @@ pub(crate) fn url(path: &str) -> String {
     format!("http://127.0.0.1:{PORT}{path}")
 }
 
+/// Percent-encode a query parameter value.
+///
+/// A JS predicate is full of characters a query string treats as structure —
+/// `&`, `=`, `+`, spaces — so it cannot be pasted into a URL raw. Hand-rolled
+/// rather than adding a dependency to the build tool for four lines.
+fn urlencode(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(char::from(byte));
+            }
+            other => {
+                use std::fmt::Write as _;
+                let _ = write!(out, "%{other:02X}");
+            }
+        }
+    }
+    out
+}
+
 async fn get(client: &reqwest::Client, path: &str) -> Result<Value, String> {
     let response = client
         .get(url(path))
@@ -519,18 +540,50 @@ async fn assertions() -> Result<Acceptance, String> {
             )
             .await?;
             let records = tail["items"].as_array().map_or(0, Vec::len);
-            acceptance.check(
-                &format!("{id}: the tail of a large topic comes back"),
-                if records > 0 {
-                    Ok(format!("{records} records, {} fetched", tail["total"]))
-                } else {
-                    Err("no records".into())
-                },
-            );
+            // An emptied fixture is a precondition, not a failure — see the
+            // seek-mode section below. But whether the fixture is empty is
+            // decided by the offsets endpoint, never by the response under
+            // test: a tail that comes back empty on a topic that *holds*
+            // records is exactly the regression this check exists to catch,
+            // and a skip keyed on the asserted response could never fail.
+            let bounds = get(
+                &client,
+                &format!("/api/clusters/{id}/topics/kperf-bench/offsets"),
+            )
+            .await?;
+            let held: i64 = bounds["items"].as_array().map_or(0, |list| {
+                list.iter()
+                    .map(|p| {
+                        p["latestOffset"].as_i64().unwrap_or(0)
+                            - p["earliestOffset"].as_i64().unwrap_or(0)
+                    })
+                    .filter(|len| *len > 0)
+                    .sum()
+            });
+            if held > 0 {
+                acceptance.check(
+                    &format!("{id}: the tail of a large topic comes back"),
+                    if records > 0 {
+                        Ok(format!("{records} records, {} fetched", tail["total"]))
+                    } else {
+                        Err(format!("0 records from a topic holding {held}"))
+                    },
+                );
+            } else {
+                println!("  skip  {id}: kperf-bench is empty; retention has moved past it");
+            }
         }
     }
 
     // --- messages: the seven seek modes -------------------------------------
+    //
+    // These name concrete offsets — 1000000 and 1000037 — because the two
+    // properties they check are off-by-one properties, and an off-by-one on a
+    // "somewhere near the end" offset is invisible. The cost is that the
+    // fixture ages: `kperf-bench` was written once and retention eventually
+    // takes it. A topic that no longer holds those offsets is an **unmet
+    // precondition**, not a regression, and reporting it as a failure would
+    // train everyone to ignore this run.
     for id in &ids {
         let topics = get(&client, &format!("/api/clusters/{id}/topics")).await?;
         let has_bench = topics["items"]
@@ -540,6 +593,26 @@ async fn assertions() -> Result<Acceptance, String> {
             continue;
         }
         let base = format!("/api/clusters/{id}/topics/kperf-bench");
+
+        let bounds = get(&client, &format!("{base}/offsets")).await?;
+        let partition_zero = bounds["items"]
+            .as_array()
+            .and_then(|list| list.iter().find(|p| p["partition"] == 0).cloned());
+        let retains = partition_zero.as_ref().is_some_and(|p| {
+            p["earliestOffset"].as_i64().unwrap_or(i64::MAX) <= 1_000_000
+                && p["latestOffset"].as_i64().unwrap_or(0) > 1_000_037
+        });
+        if !retains {
+            println!(
+                "  skip  {id}: the seek-mode fixture has aged out of kperf-bench-0 \
+                 (retains {}–{}); write it again to re-arm these",
+                partition_zero
+                    .as_ref()
+                    .map_or(Value::Null, |p| p["earliestOffset"].clone()),
+                partition_zero.map_or(Value::Null, |p| p["latestOffset"].clone()),
+            );
+            continue;
+        }
 
         // `toOffset` is the assertion the kaas-lib anchor change exists for,
         // and the one an off-by-one hides in: a window that stops one short
@@ -854,6 +927,334 @@ async fn assertions() -> Result<Acceptance, String> {
             );
         }
     }
+
+    // --- schemas and payload decoding ---------------------------------------
+    //
+    // One registry, referenced by both live clusters, with a canary producing
+    // Confluent-framed Avro to `kaas-canary-v1` on each. That is the whole
+    // fixture: the same schema id means the same schema on both sides, because
+    // it is the same registry answering.
+    const CANARY: &str = "kaas-canary-v1";
+
+    let mut decoded_on = Vec::new();
+    for cluster in ["strimzi", "kaas"] {
+        let tail = get(
+            &client,
+            &format!("/api/clusters/{cluster}/topics/{CANARY}/messages/tail?limit=1"),
+        )
+        .await;
+        let value = tail
+            .ok()
+            .and_then(|body| body["items"].get(0).cloned())
+            .map(|item| item["value"].clone());
+
+        acceptance.check(
+            &format!("an Avro topic on {cluster} decodes with its schema id resolved"),
+            match &value {
+                Some(value)
+                    if value["codec"] == "avro"
+                        && value["schema"]["id"].as_u64().is_some()
+                        && value["note"].is_null() =>
+                {
+                    decoded_on.push((cluster, value.clone()));
+                    Ok(format!(
+                        "schema {} ({}) from registry {}",
+                        value["schema"]["id"],
+                        value["schema"]["subject"],
+                        value["schema"]["registry"]
+                    ))
+                }
+                Some(value) => Err(format!("{value}")),
+                None => Err("no records on the canary topic".to_owned()),
+            },
+        );
+    }
+
+    // The same id, resolved by the one shared client. Two clusters answering
+    // with different subjects for one id would mean two caches, which is the
+    // mistake `RegistryHandle` exists to make unrepresentable.
+    acceptance.check(
+        "two clusters resolve the same schema id to the same schema",
+        match decoded_on.as_slice() {
+            [(_, first), (_, second)]
+                if first["schema"]["id"] == second["schema"]["id"]
+                    && first["schema"]["subject"] == second["schema"]["subject"]
+                    && first["schema"]["registry"] == second["schema"]["registry"] =>
+            {
+                Ok(format!(
+                    "id {} → {}",
+                    first["schema"]["id"], first["schema"]["subject"]
+                ))
+            }
+            [(_, first), (_, second)] => Err(format!("{first} vs {second}")),
+            _ => Err("one of the two clusters did not decode".to_owned()),
+        },
+    );
+
+    // Falling back is free and needs no schema: the raw bytes travelled beside
+    // the decoded value, so this is the same record read differently rather
+    // than a second read of it.
+    let overridden = get(
+        &client,
+        &format!("/api/clusters/strimzi/topics/{CANARY}/messages/tail?limit=1&valueCodec=hex"),
+    )
+    .await;
+    acceptance.check(
+        "the same topic renders as hex when the codec is overridden",
+        match overridden.map(|body| body["items"][0]["value"].clone()) {
+            Ok(value)
+                if value["codec"] == "hex"
+                    && value["note"].is_null()
+                    && value["text"].as_str().is_some_and(|text| {
+                        // Framed, so the rendering starts with the magic byte
+                        // and the four-byte id it carried.
+                        text.starts_with("00000000")
+                    }) =>
+            {
+                Ok(String::new())
+            }
+            Ok(value) => Err(format!("{value}")),
+            Err(error) => Err(error),
+        },
+    );
+
+    // A header is an ordinary unframed payload on a registry-backed record.
+    // Absence of framing is not a failure, and the two paths do not compete
+    // for the same bytes even inside one record.
+    let headers = get(
+        &client,
+        &format!("/api/clusters/strimzi/topics/{CANARY}/messages/tail?limit=1"),
+    )
+    .await
+    .map(|body| body["items"][0]["headers"].clone());
+    acceptance.check(
+        "an unframed payload renders without a decode-error",
+        match headers {
+            Ok(Value::Array(headers)) if !headers.is_empty() => {
+                let clean = headers.iter().all(|header| {
+                    header["value"]["note"].is_null() && header["value"]["codec"] == "auto"
+                });
+                if clean {
+                    Ok(format!("{} header(s)", headers.len()))
+                } else {
+                    Err(format!("{headers:?}"))
+                }
+            }
+            Ok(other) => Err(format!("no headers to check: {other}")),
+            Err(error) => Err(error),
+        },
+    );
+
+    // The browser: same registry, same subjects, named on both.
+    let mut subject_lists = Vec::new();
+    for cluster in ["strimzi", "kaas"] {
+        if let Ok(body) = get(&client, &format!("/api/clusters/{cluster}/schemas")).await {
+            subject_lists.push((cluster, body));
+        }
+    }
+    acceptance.check(
+        "the schema browser shows the same subjects from either cluster",
+        match subject_lists.as_slice() {
+            [(_, first), (_, second)]
+                if first["subjects"] == second["subjects"]
+                    && first["registry"]["id"] == second["registry"]["id"]
+                    && first["registry"]["status"] == "ready" =>
+            {
+                Ok(format!(
+                    "{} subject(s) from registry {}",
+                    first["subjects"].as_array().map_or(0, Vec::len),
+                    first["registry"]["id"]
+                ))
+            }
+            [(_, first), (_, second)] => Err(format!("{first} vs {second}")),
+            _ => Err("the browser answered on neither cluster".to_owned()),
+        },
+    );
+
+    let subject = subject_lists
+        .first()
+        .and_then(|(_, body)| body["subjects"][0].as_str().map(str::to_owned));
+    if let Some(subject) = subject {
+        let versions = get(
+            &client,
+            &format!("/api/clusters/kaas/schemas/{subject}/versions"),
+        )
+        .await;
+        acceptance.check(
+            "a subject's versions come back with their schema text",
+            match versions {
+                Ok(body) => {
+                    let first = body["versions"][0].clone();
+                    if first["schema"].as_str().is_some_and(|s| !s.is_empty())
+                        && first["id"].as_u64().is_some()
+                    {
+                        Ok(format!(
+                            "{} v{} (#{})",
+                            subject, first["version"], first["id"]
+                        ))
+                    } else {
+                        Err(format!("{body}"))
+                    }
+                }
+                Err(error) => Err(error),
+            },
+        );
+    }
+
+    // A cluster that references no registry is a normal path, and says so
+    // rather than failing.
+    acceptance.check(
+        "a cluster with no registry answers the browser with no registry",
+        match get(&client, "/api/clusters/dead/schemas").await {
+            Ok(body) if body["registry"].is_null() && body["subjects"] == Value::Array(vec![]) => {
+                Ok(String::new())
+            }
+            Ok(body) => Err(format!("{body}")),
+            Err(error) => Err(error),
+        },
+    );
+
+    // --- the JS predicate ---------------------------------------------------
+    //
+    // `sequence` increases by exactly one per record within a canary run, so
+    // an even/odd split over a window is arithmetic rather than luck.
+    let filtered = get(
+        &client,
+        &format!(
+            "/api/clusters/strimzi/topics/{CANARY}/messages\
+             ?mode=newest&limit=20&predicate={}",
+            urlencode("v => v.sequence % 2 === 0")
+        ),
+    )
+    .await;
+    acceptance.check(
+        "a JS predicate filters a decoded topic",
+        match filtered {
+            Ok(body) => {
+                let stats = body["predicate"].clone();
+                let evaluated = stats["evaluated"].as_u64().unwrap_or(0);
+                let matched = stats["matched"].as_u64().unwrap_or(0);
+                let rows = body["items"].as_array().map_or(0, Vec::len);
+                // Every row that came back matched, roughly half were rejected,
+                // and nothing was killed or thrown.
+                if evaluated > 0
+                    && matched as usize == rows
+                    && matched < evaluated
+                    && stats["timedOut"] == 0
+                    && stats["failed"] == 0
+                {
+                    Ok(format!("{matched}/{evaluated} matched"))
+                } else {
+                    Err(format!("{stats}, {rows} rows"))
+                }
+            }
+            Err(error) => Err(error),
+        },
+    );
+
+    // The non-negotiable: an interrupt handler the runtime installs before the
+    // first evaluation, and a budget that is per record rather than per scan.
+    let looping_started = Instant::now();
+    let looping = get(
+        &client,
+        &format!(
+            "/api/clusters/strimzi/topics/{CANARY}/messages\
+             ?mode=newest&limit=10&predicate={}",
+            urlencode("v => { while (true) {} }")
+        ),
+    )
+    .await;
+    let looping_took = looping_started.elapsed();
+    acceptance.check(
+        "a looping predicate is killed and reported rather than hanging the scan",
+        match looping {
+            Ok(body) => {
+                let stats = body["predicate"].clone();
+                let timed_out = stats["timedOut"].as_u64().unwrap_or(0);
+                if timed_out > 0
+                    && body["items"].as_array().is_some_and(Vec::is_empty)
+                    && looping_took < Duration::from_secs(10)
+                {
+                    Ok(format!("{timed_out} killed in {looping_took:?}"))
+                } else {
+                    Err(format!("{stats} after {looping_took:?}"))
+                }
+            }
+            Err(error) => Err(error),
+        },
+    );
+
+    // The cheap filter runs first. Restricting to one partition is a *scan
+    // spec* decision, so the broker never sends the others — and the counter
+    // is what proves the expensive filter never saw them.
+    //
+    // Which partition is asked for is discovered rather than assumed: the
+    // canary keys its records, so a hardcoded partition is a fixture that
+    // silently becomes empty the first time the key distribution changes.
+    let busiest = get(
+        &client,
+        &format!("/api/clusters/strimzi/topics/{CANARY}/messages?mode=newest&limit=1"),
+    )
+    .await
+    .ok()
+    .and_then(|body| body["items"][0]["partition"].as_i64())
+    .unwrap_or(0);
+    let one_partition = get(
+        &client,
+        &format!(
+            "/api/clusters/strimzi/topics/{CANARY}/messages\
+             ?mode=newest&limit=50&partitions={busiest}&predicate={}",
+            urlencode("v => true")
+        ),
+    )
+    .await;
+    acceptance.check(
+        "a partition filter runs before the predicate, not after",
+        match one_partition {
+            Ok(body) => {
+                let stats = body["predicate"].clone();
+                let evaluated = stats["evaluated"].as_u64().unwrap_or(0);
+                let rows = body["items"].as_array().cloned().unwrap_or_default();
+                let all_one = rows
+                    .iter()
+                    .all(|row| row["partition"].as_i64() == Some(busiest));
+                // Evaluated exactly as many times as there were records in the
+                // one partition asked for: anything more means it ran on a
+                // record the spec had already excluded.
+                if all_one && evaluated == rows.len() as u64 && evaluated > 0 {
+                    Ok(format!("{evaluated} evaluations, all partition {busiest}"))
+                } else {
+                    Err(format!("{stats}, {} rows", rows.len()))
+                }
+            }
+            Err(error) => Err(error),
+        },
+    );
+
+    // A syntax error is a `400` naming it, once, rather than a filter that
+    // silently matches nothing for the length of a scan.
+    let broken = client
+        .get(url(&format!(
+            "/api/clusters/strimzi/topics/{CANARY}/messages?mode=newest&predicate={}",
+            urlencode("v => ((((")
+        )))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let broken_status = broken.status();
+    let broken_body: Value = broken.json().await.unwrap_or(Value::Null);
+    acceptance.check(
+        "a predicate that does not compile is a 400 naming the error",
+        if broken_status == reqwest::StatusCode::BAD_REQUEST
+            && broken_body["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("did not compile"))
+        {
+            Ok(String::new())
+        } else {
+            Err(format!("{broken_status}: {broken_body}"))
+        },
+    );
 
     // --- an unknown cluster is absent, not forbidden ------------------------
     let status = client
