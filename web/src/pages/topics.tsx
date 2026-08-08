@@ -92,7 +92,12 @@ export function Topics({ clusterId }: { clusterId: string }) {
       <PageTitle
         title="Topics"
         subtitle={`${count(total)} matching`}
-        actions={<SnapshotAge ageMs={topics.data?.snapshotAgeMs ?? null} />}
+        actions={
+          <SnapshotAge
+            ageMs={topics.data?.snapshotAgeMs ?? null}
+            asOfMs={topics.dataUpdatedAt}
+          />
+        }
       />
 
       <div className="mb-4 flex flex-wrap items-center gap-4">

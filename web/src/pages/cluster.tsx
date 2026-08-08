@@ -76,6 +76,7 @@ export function ClusterOverview({ clusterId }: { clusterId: string }) {
         actions={
           <SnapshotAge
             ageMs={card.snapshotAgeMs}
+            asOfMs={cluster.dataUpdatedAt}
             maxStalenessMs={card.maxStalenessMs}
           />
         }

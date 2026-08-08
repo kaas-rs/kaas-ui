@@ -210,6 +210,7 @@ function FleetCard({ card }: { card: ClusterCardData }) {
       <CardFooter className="border-t px-4 pt-3 [.border-t]:pt-3">
         <SnapshotAge
           ageMs={card.snapshotAgeMs}
+          asOfMs={fleet.dataUpdatedAt}
           maxStalenessMs={card.maxStalenessMs}
         />
         <Button variant="link" size="sm" asChild className="ml-auto h-auto p-0">

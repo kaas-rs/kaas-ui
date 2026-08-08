@@ -248,13 +248,19 @@ export function ClusterChip({
 /** "as of 4s ago", ticking, warm past the configured staleness ceiling. */
 export function SnapshotAge({
   ageMs,
+  asOfMs,
   maxStalenessMs,
 }: {
   ageMs: number | null | undefined
+  /**
+   * When `ageMs` was true — the owning query's `dataUpdatedAt`. The tick is
+   * anchored here, not at mount, so each refetch resets the display instead
+   * of compounding with how long the component has been on screen.
+   */
+  asOfMs: number
   maxStalenessMs?: number
 }) {
   const [now, setNow] = useState(() => Date.now())
-  const [base] = useState(() => Date.now())
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000)
@@ -262,7 +268,9 @@ export function SnapshotAge({
   }, [])
 
   if (ageMs === null || ageMs === undefined) return null
-  const age = ageMs + (now - base)
+  // `now` only advances once a second, so right after a refetch it can sit
+  // behind `asOfMs`; clamp rather than briefly understate the age.
+  const age = ageMs + Math.max(0, now - asOfMs)
   const stale = maxStalenessMs !== undefined && age > maxStalenessMs
 
   return (
