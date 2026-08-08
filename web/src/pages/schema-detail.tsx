@@ -227,28 +227,7 @@ export function SchemaDetail({
           "actual version" tab was that state of this control all along, and
           keeping both meant two places showing the same text. Move either end
           and it becomes a diff. */}
-      <Section
-        title={versions.length > 1 ? "Compare versions" : "Schema"}
-        actions={
-          // Only once you have moved away from it. A reset that is always
-          // there is a control that does nothing most of the time, and this
-          // one has a real job: getting back to "just show me the schema"
-          // without working out which version that was.
-          atDefault ? null : (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                setLeft(undefined)
-                setRight(undefined)
-              }}
-            >
-              <RotateCcw aria-hidden />
-              reset to v{newest.version}
-            </Button>
-          )
-        }
-      >
+      <Section title={versions.length > 1 ? "Compare versions" : "Schema"}>
         {versions.length > 1 ? (
           <div className="mb-2 flex flex-wrap items-center gap-4 text-xs">
             <VersionSelect
@@ -263,6 +242,35 @@ export function SchemaDetail({
               value={b.version}
               onChange={setRight}
             />
+            {/* Beside the selects it undoes, rather than off in the section
+                header: a control that acts on two other controls belongs with
+                them, and the negative margin closes the row gap so it reads as
+                theirs instead of as a third peer.
+
+                Icon only, because the two selects beside it already say which
+                versions are loaded and the button's whole meaning is "not
+                those". The word is not lost — it is the accessible name and
+                the tooltip, both of which name the version so the destination
+                is never a guess.
+
+                Absent at the default rather than disabled: reserving the space
+                would leave a hole in the row, and appearing is what makes it
+                noticeable at the moment it becomes useful. */}
+            {atDefault ? null : (
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="-ml-2 self-end"
+                onClick={() => {
+                  setLeft(undefined)
+                  setRight(undefined)
+                }}
+                aria-label={`Reset to v${newest.version}`}
+                title={`Reset to the newest version, v${newest.version}`}
+              >
+                <RotateCcw aria-hidden />
+              </Button>
+            )}
             {/* Nothing to collapse when nothing changed, and a checkbox that
                 would silently do nothing is worse than one that says it
                 cannot. */}
