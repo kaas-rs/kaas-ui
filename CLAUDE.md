@@ -15,6 +15,34 @@ multi-cluster from day one, OIDC via Dex.
 
 Read `docs/README.md` first. Phases 0–6 are done; 7 and 8 are not started.
 
+## The shape
+
+A **fleet** is environments. An **environment** holds Kafka clusters, the
+schema registries they decode against, and inventory kaas-ui does not dial —
+Connect, an MQTT broker, whatever comes next. Configuration says so
+structurally and the API mirrors it:
+
+```yaml
+environments:
+  - id: dev
+    schema_registries: [{ id: apicurio, url: … }]
+    kafka_clusters:
+      - id: kaas
+        schema_registry: apicurio   # reference, not membership
+    resources: [{ id: connect, kind: kafka_connect, … }]
+```
+
+```
+/api/environments
+/api/environments/{env}/clusters/{id}/topics/{topic}/…
+/api/environments/{env}/schema-registries/{registry}/subjects/…
+```
+
+There is no top level to declare a cluster at, so a cluster cannot be
+homeless; and an id is only unique *within* its environment, so `kafka` in
+`dev` and `kafka` in `prod` are two clusters and both are reachable. A
+pre-nesting config is refused at startup naming where each block went.
+
 ## Relationship to kaas-lib and kaas
 
 Three repositories, and confusing them is the fastest way to do the wrong work:
@@ -167,8 +195,14 @@ active nav, focus ring, selected edge. For accent text on light use
 
 - **`Error::Authentication` from a cluster is 502, never 401.** A cluster whose
   SASL credentials were rejected must not log the *user* out.
-- **Cluster visibility is a 404, not a 403**, enforced in the registry lookup so
-  cluster ids are not enumerable. One lookup function, one place to get it right.
+- **Everything is addressed `(environment, id)`.** A cluster id alone addresses
+  nothing — two environments may each hold a `kafka` — and the same goes for a
+  schema registry. `Registry::get` and `Registry::schema_registry` both take
+  both halves.
+- **Visibility is a 404, not a 403**, enforced in those lookups so ids are not
+  enumerable. One lookup per kind, one place to get it right. An environment is
+  visible when a caller can see a cluster in it, which is what makes every URL
+  beneath it unprobeable rather than each route deciding for itself.
 - **Connect lazily.** One unreachable cluster must not block startup, hang
   `/health`, or slow a page that does not touch it. `Cluster::connect` fetches a
   snapshot before returning, so it can never be on a request path.
@@ -192,10 +226,17 @@ active nav, focus ring, selected edge. For accent text on light use
   `kafka-protocol` bump in kaas-lib. Same for `brokerAhead` rows. See
   `docs/reference/environment.md`.
 - **A schema registry serves an *environment*, not a cluster.** It is declared
-  once under `schema_registries:` and clusters reference one by id, so two
-  clusters in `dev` hold the same `Arc<RegistryHandle>` — the same decoders and
-  the same id→schema cache. Building one per cluster is a second cache for one
-  registry's ids. Absence is a normal path, not a degraded one.
+  inside one under `schema_registries:` and clusters there reference it by id,
+  so two clusters in `dev` hold the same `Arc<RegistryHandle>` — the same
+  decoders and the same id→schema cache. Building one per cluster is a second
+  cache for one registry's ids. Absence is a normal path, not a degraded one.
+- **Nesting is membership; the reference is use.** A cluster is in `dev`
+  because it is declared there, and `env` as a *label* is rejected rather than
+  merged — a label disagreeing with its block is a hole in the
+  `cluster_labels: {env: prod}` selector everyone writes first. Sitting beside
+  a registry is still not the same claim as decoding against it, so
+  `schema_registry:` stays an explicit line and a cross-environment reference
+  is a startup error.
 - **ccompat only.** Apicurio's native `/apis/registry/v3` is not supported, and
   a `url` pointing at it is a **configuration** error reported on first use,
   naming `/apis/ccompat/v7`. The failure to design against is every record on

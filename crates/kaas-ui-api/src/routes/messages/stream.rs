@@ -99,8 +99,9 @@ enum Frame {
 /// two ranges, and flattening it into a message string discards it.
 #[utoipa::path(
     get,
-    path = "/api/clusters/{id}/topics/{topic}/messages/stream",
+    path = "/api/environments/{env}/clusters/{id}/topics/{topic}/messages/stream",
     params(
+        ("env" = String, Path, description = "Environment id"),
         ("id" = String, Path, description = "Cluster id"),
         ("topic" = String, Path, description = "Topic name"),
         ("mode" = Option<SeekMode>, Query, description = "Which window"),
@@ -120,12 +121,12 @@ enum Frame {
 pub async fn stream(
     State(state): State<AppState>,
     caller: Caller,
-    Path((id, topic)): Path<(String, String)>,
+    Path((env, id, topic)): Path<(String, String, String)>,
     Query(query): Query<SeekQuery>,
     principal: Principal,
     headers: HeaderMap,
 ) -> ApiResult<impl IntoResponse> {
-    let (handle, admin) = state.connected(&id, &caller)?;
+    let (handle, admin) = state.connected(&env, &id, &caller)?;
     // Payloads are the sensitive surface, so this is where the `messages`
     // grant is spent — after the lookup, which already decided the cluster is
     // visible at all, and against the topic name because a role may grant

@@ -111,48 +111,57 @@ carrying two ranges.
 
 ## Endpoints
 
-Phase in brackets.
+Phase in brackets. `…` is `/api/environments/{env}`, elided so the table fits.
+
+**Everything is addressed environment-first.** A cluster id alone addresses
+nothing: two environments may each hold a `kafka`, and the lookup that decides
+whether a caller may see either takes both halves. A schema registry is a
+*peer* of a cluster inside its environment rather than a feature of one, so it
+has its own subtree — its id is scoped, and an environment answers only to a
+caller who can already see something in it, which is what keeps registry ids
+off the enumerable surface without routing them through a cluster.
 
 ```
 GET  /health                                                    [0] liveness, never blocks on a cluster
 GET  /api/openapi.json                                          [0] the document describing everything below
-GET  /api/clusters                                              [0] one entry per configured cluster
-GET  /api/fleet                                                 [0] the same cards, by environment, plus what is not a cluster
-GET  /api/clusters/{id}                                         [1] cluster detail
-GET  /api/clusters/{id}/capabilities                            [1] the capability projection
-GET  /api/clusters/{id}/brokers                                 [1]
-GET  /api/clusters/{id}/brokers/{node}/log-dirs                 [1]
-GET  /api/clusters/{id}/configs?resource=broker:1               [1]
+GET  /api/environments                                          [0] the fleet: every environment, and everything in one
+GET  /api/environments/{env}                                    [0] one of them, same shape as an element above
+GET  /api/environments/{env}/clusters                           [0] one entry per cluster in it
+GET  /api/environments/{env}/clusters/{id}                      [1] cluster detail
+GET  …/clusters/{id}/capabilities                               [1] the capability projection
+GET  …/clusters/{id}/brokers                                    [1]
+GET  …/clusters/{id}/brokers/{node}/log-dirs                    [1]
+GET  …/clusters/{id}/configs?resource=broker:1                  [1]
 
-GET  /api/clusters/{id}/topics                                  [2] list
-GET  /api/clusters/{id}/topics/{topic}                          [2] detail + partitions
-GET  /api/clusters/{id}/topics/{topic}/configs                  [2]
-GET  /api/clusters/{id}/topics/{topic}/offsets?spec=latest      [2]
+GET  …/clusters/{id}/topics                                     [2] list
+GET  …/clusters/{id}/topics/{topic}                             [2] detail + partitions
+GET  …/clusters/{id}/topics/{topic}/configs                     [2]
+GET  …/clusters/{id}/topics/{topic}/offsets?spec=latest         [2]
 
-GET  /api/clusters/{id}/topics/{topic}/messages/tail?limit=500  [3] one shot, JSON
-GET  /api/clusters/{id}/topics/{topic}/messages?mode=…          [3] one bounded page
-GET  /api/clusters/{id}/topics/{topic}/messages/stream?mode=…   [3] text/event-stream
-GET  /api/clusters/{id}/topics/{topic}/messages/{part}/{offset} [3] one record, whole
+GET  …/clusters/{id}/topics/{topic}/messages/tail?limit=500     [3] one shot, JSON
+GET  …/clusters/{id}/topics/{topic}/messages?mode=…             [3] one bounded page
+GET  …/clusters/{id}/topics/{topic}/messages/stream?mode=…      [3] text/event-stream
+GET  …/clusters/{id}/topics/{topic}/messages/{part}/{offset}    [3] one record, whole
 
 GET  /auth/login?connector=…                                    [4] optional, skips the chooser
 GET  /auth/callback                                             [4]
 POST /auth/logout                                               [4]
 GET  /api/me                                                    [4]
 
-GET  /api/clusters/{id}/groups                                  [5]
-GET  /api/clusters/{id}/groups/{group}                          [5]
-GET  /api/clusters/{id}/groups/{group}/offsets                  [5] committed + lag
+GET  …/clusters/{id}/groups                                     [5]
+GET  …/clusters/{id}/groups/{group}                             [5]
+GET  …/clusters/{id}/groups/{group}/offsets                     [5] committed + lag
 
-GET  /api/clusters/{id}/schemas                                 [6] the registry answering, and its subjects
-GET  /api/clusters/{id}/schemas/{subject}/versions              [6] every version, with its text
+GET  /api/environments/{env}/schema-registries/{reg}/subjects    [6] the registry, and its subjects
+GET  …/schema-registries/{reg}/subjects/{subject}/versions       [6] every version, with its text
 
-GET  /api/clusters/{id}/acls                                    [7]
-GET  /api/clusters/{id}/quotas                                  [7]
-GET  /api/clusters/{id}/scram-users                             [7]
-GET  /api/clusters/{id}/reassignments                           [7]
-GET  /api/clusters/{id}/transactions                            [7]
-GET  /api/clusters/{id}/transactions/{txn}                      [7]
-GET  /api/clusters/{id}/producers?topic=…&partition=…           [7]
+GET  …/clusters/{id}/acls                                       [7]
+GET  …/clusters/{id}/quotas                                     [7]
+GET  …/clusters/{id}/scram-users                                [7]
+GET  …/clusters/{id}/reassignments                              [7]
+GET  …/clusters/{id}/transactions                               [7]
+GET  …/clusters/{id}/transactions/{txn}                         [7]
+GET  …/clusters/{id}/producers?topic=…&partition=…              [7]
 
 GET  /api/search/topics?q=orders-*                              [8] across the fleet
 GET  /api/compare?a={id}&b={id}                                 [8] capability + config diff
@@ -251,31 +260,37 @@ a filter's counters are exactly as interesting there. It carries `evaluated`,
 thousand records for exceeding its per-record budget does not look like a
 filter that matched nothing.
 
-## The schema browser is rooted at a cluster
+## The schema browser is rooted at a registry
 
-`/api/clusters/{id}/schemas`, and there is deliberately **no**
-`/api/schema-registries/{id}`. A registry is shared by every cluster in an
-environment, so "which clusters use this registry" is a list that can name a
-cluster the caller may not see — and registry ids would become a second
-enumerable namespace beside cluster ids. A caller reaches a registry only
-through a cluster they can already see, through the same registry lookup as
-everything else.
+`/api/environments/{env}/schema-registries/{registry}`, which it was not: it
+used to hang off `/api/clusters/{id}/schemas`, because a registry id on its own
+would have been a second enumerable namespace beside cluster ids, and "which
+clusters use this registry" is a list that can name a cluster the caller may
+not see.
 
-Neither route requires a **connected** cluster. A registry serves an
-environment and knows nothing about brokers, so subjects stay browsable while
-the cluster whose nav you arrived through is down.
+Nesting settles that without the indirection. A registry id is scoped to an
+environment; an environment answers only to a caller who can already see a
+cluster in it; and the registry lookup additionally requires that they can see
+a cluster *referencing this registry*. So the URL names the thing it returns
+instead of routing through a cluster that merely knows about it, and it still
+cannot be probed — the two properties that used to be in tension.
+
+Neither route requires a **connected** cluster, or any cluster at all on the
+request path. A registry serves an environment and knows nothing about brokers,
+so subjects stay browsable while every cluster beside it is down.
 
 Three things that are not errors here, because each is an ordinary state:
 
-- a cluster that references no registry → `200` with `registry: null`;
 - a registry that cannot be reached → `200`, the card carrying `unreachable`
   and its error, and an empty list;
 - a registry answering the wrong API → `200`, the card carrying
-  `misconfigured` and a message naming `/apis/ccompat/v7`.
+  `misconfigured` and a message naming `/apis/ccompat/v7`;
+- a subject the registry lists but will not hand over → `200`, the version
+  absent and named in `errors`.
 
-A subject named on a cluster with no registry at all is the one `404`, and it
-says so in words — the other `404` on that path is "no such cluster", and a
-reader has to be able to tell them apart.
+Every other absence is one `404` with one message: no such environment, no
+registry of that id in it, and "not yours" are deliberately indistinguishable.
+Telling them apart is precisely what a prober wants.
 
 ## Payloads say how they were read
 

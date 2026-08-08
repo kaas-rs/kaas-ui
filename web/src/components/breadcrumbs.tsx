@@ -1,10 +1,13 @@
 // Where you are, and what else you could have been looking at.
 //
-// The path already says where you are, so the crumbs are derived from it and
-// are always right. What the path cannot say is which *environment* a cluster
-// belongs to — that is a fact about the fleet, not about the URL — so the
-// second crumb is fetched rather than parsed, and appears only once the answer
-// has arrived rather than guessing and correcting itself.
+// The path is the hierarchy now — `/environments/{env}/clusters/{id}/…` and
+// `/environments/{env}/schema-registries/{id}/…` — so the crumbs are parsed
+// from it rather than reconstructed. That is the change worth knowing about:
+// the environment used to be *fetched*, because a flat `/clusters/{id}` could
+// not say which environment a cluster was in, and the crumb had to appear late
+// and could be wrong in the gap. It is a path segment now, so it is right
+// immediately. The fleet is still fetched, but only for **names** and for the
+// siblings in the two menus — never to decide what the chain is.
 //
 // Two crumbs carry a dropdown, and both list siblings rather than children: an
 // environment beside this one, a cluster beside this one. That is the move a
@@ -27,20 +30,68 @@ import { chooseEnvironment } from "@/lib/environment"
 /** The cluster sub-pages a sibling cluster also has a route for. */
 const SECTIONS = new Set(["topics", "groups", "configs", "capabilities"])
 
+/**
+ * What the path says, before any of it is looked up.
+ *
+ * Three shapes, and the third is everything else — `/settings` and `/account`
+ * hang off the fleet with nothing in between.
+ */
+interface Trail {
+  envId?: string
+  /** The cluster subtree. */
+  clusterId?: string
+  /** The registry subtree, which is a peer of the cluster one. */
+  registryId?: string
+  /** Whatever follows the addressed thing, in order. */
+  tail: string[]
+  /** The path prefix `tail[i]` hangs off, for building an href. */
+  prefix: string[]
+}
+
+function read(parts: string[]): Trail {
+  if (parts[0] !== "environments" || !parts[1]) {
+    return { tail: parts, prefix: [] }
+  }
+  const envId = parts[1]
+  if (parts[2] === "clusters" && parts[3]) {
+    return {
+      envId,
+      clusterId: parts[3],
+      tail: parts.slice(4),
+      prefix: parts.slice(0, 4),
+    }
+  }
+  // `subjects` is a collection segment with no page of its own, so it is
+  // dropped rather than rendered as a crumb nobody can click.
+  if (parts[2] === "schema-registries" && parts[3]) {
+    const rest = parts.slice(4)
+    const tail = rest[0] === "subjects" ? rest.slice(1) : rest
+    return {
+      envId,
+      registryId: parts[3],
+      tail,
+      prefix: parts.slice(0, rest[0] === "subjects" ? 5 : 4),
+    }
+  }
+  return { envId, tail: parts.slice(2), prefix: parts.slice(0, 2) }
+}
+
 export function Breadcrumbs({ pathname }: { pathname: string }) {
   const fleet = useFleet()
   const sections = fleet.data?.items ?? []
 
   const parts = pathname.split("/").filter(Boolean)
-  const clusterId = parts[0] === "clusters" ? parts[1] : undefined
-  // Everything after the cluster id, or the whole path when this is not a
-  // cluster page at all — `/settings` is `Fleet / settings`.
-  const tail = clusterId ? parts.slice(2) : parts
-  const environment = clusterId
-    ? sections.find((section) =>
-        section.clusters.some((card) => card.id === clusterId)
-      )
+  const trail = read(parts)
+  const environment = trail.envId
+    ? sections.find((section) => section.id === trail.envId)
     : undefined
+  // The registry's *name*, which only the fleet knows. The id is in the path,
+  // so the crumb renders either way rather than waiting for the answer.
+  const registry = environment?.schemaRegistries.find(
+    (entry) => entry.registry.id === trail.registryId
+  )
+
+  const leafIsHere = trail.tail.length === 0
 
   return (
     <nav
@@ -60,31 +111,54 @@ export function Breadcrumbs({ pathname }: { pathname: string }) {
         </Link>
       )}
 
-      {environment ? (
+      {trail.envId ? (
         <>
           <Separator />
-          <EnvironmentCrumb current={environment} sections={sections} />
-        </>
-      ) : null}
-
-      {clusterId ? (
-        <>
-          <Separator />
-          <ClusterCrumb
-            id={clusterId}
-            environment={environment}
-            // Only the section, never deeper: a topic name does not exist on
-            // the cluster next to this one, and sending someone to a "topic
-            // not found" page is a worse answer than sending them to the list.
-            section={tail[0] && SECTIONS.has(tail[0]) ? tail[0] : undefined}
-            last={tail.length === 0}
+          <EnvironmentCrumb
+            envId={trail.envId}
+            current={environment}
+            sections={sections}
+            last={leafIsHere && !trail.clusterId && !trail.registryId}
           />
         </>
       ) : null}
 
-      {tail.map((part, index) => {
-        const href = `/${parts.slice(0, parts.length - tail.length + index + 1).join("/")}`
-        const last = index === tail.length - 1
+      {trail.clusterId ? (
+        <>
+          <Separator />
+          <ClusterCrumb
+            envId={trail.envId ?? ""}
+            id={trail.clusterId}
+            environment={environment}
+            // Only the section, never deeper: a topic name does not exist on
+            // the cluster next to this one, and sending someone to a "topic
+            // not found" page is a worse answer than sending them to the list.
+            section={
+              trail.tail[0] && SECTIONS.has(trail.tail[0])
+                ? trail.tail[0]
+                : undefined
+            }
+            last={leafIsHere}
+          />
+        </>
+      ) : null}
+
+      {trail.registryId ? (
+        <>
+          <Separator />
+          <RegistryCrumb
+            envId={trail.envId ?? ""}
+            id={trail.registryId}
+            label={registry?.registry.name ?? trail.registryId}
+            environment={environment}
+            last={leafIsHere}
+          />
+        </>
+      ) : null}
+
+      {trail.tail.map((part, index) => {
+        const href = `/${[...trail.prefix, ...trail.tail.slice(0, index + 1)].join("/")}`
+        const last = index === trail.tail.length - 1
         return (
           <span key={href} className="flex min-w-0 items-center gap-1.5">
             <Separator />
@@ -148,27 +222,56 @@ function CrumbMenu({
 }
 
 /**
- * The environment this cluster is in, and the others.
+ * The environment, and the others.
  *
- * Choosing one goes to the fleet. There is no page for an environment on its
- * own — the fleet is where its clusters and its registries are — and no
- * cluster in it is the counterpart of the one being left, so anywhere else
- * would be a guess. It also switches the sidebar, because ending up on the
- * fleet with the nav still showing the environment you just left would be the
- * application disagreeing with itself.
+ * It goes somewhere now. It used to lead to the fleet, because an environment
+ * had no page of its own — the URL existed only to carry a parameter down to
+ * the clusters beneath it. `/environments/{env}` is a page, so the crumb is
+ * the link its position always implied, and choosing a sibling opens that
+ * environment rather than dropping you back at the top.
+ *
+ * It still switches the sidebar, because arriving in one environment with the
+ * nav showing another would be the application disagreeing with itself.
  */
 function EnvironmentCrumb({
+  envId,
   current,
   sections,
+  last,
 }: {
-  current: EnvironmentSection
+  envId: string
+  current: EnvironmentSection | undefined
   sections: EnvironmentSection[]
+  last: boolean
 }) {
+  // The id until the fleet answers with a name. Never blank, never late.
+  const label = current?.name ?? envId
+
+  if (sections.length < 2) {
+    return last ? (
+      <span aria-current="page" className="truncate text-ink">
+        {label}
+      </span>
+    ) : (
+      <Link
+        to="/environments/$envId"
+        params={{ envId }}
+        className="truncate text-ink-muted hover:text-ink hover:underline"
+      >
+        {label}
+      </Link>
+    )
+  }
+
   return (
-    <CrumbMenu label={current.name}>
+    <CrumbMenu label={label} current={last}>
       {sections.map((section) => (
         <DropdownMenuItem key={section.id} asChild>
-          <Link to="/" onClick={() => chooseEnvironment(section.id)}>
+          <Link
+            to="/environments/$envId"
+            params={{ envId: section.id }}
+            onClick={() => chooseEnvironment(section.id)}
+          >
             <span className="truncate">{section.name}</span>
           </Link>
         </DropdownMenuItem>
@@ -182,15 +285,18 @@ function EnvironmentCrumb({
  *
  * Switching keeps the section you were reading — topics stay topics — which is
  * the comparison this whole application is for: the same question asked of two
- * clusters, one click apart. Where the environment is not known yet the menu
- * is skipped rather than filled with every cluster in the fleet.
+ * clusters, one click apart. Siblings come from *this* environment only, which
+ * is now a fact the path establishes rather than one a lookup by cluster id had
+ * to guess at.
  */
 function ClusterCrumb({
+  envId,
   id,
   environment,
   section,
   last,
 }: {
+  envId: string
   id: string
   environment: EnvironmentSection | undefined
   section: string | undefined
@@ -205,8 +311,8 @@ function ClusterCrumb({
       </span>
     ) : (
       <Link
-        to="/clusters/$clusterId"
-        params={{ clusterId: id }}
+        to="/environments/$envId/clusters/$clusterId"
+        params={{ envId, clusterId: id }}
         className="truncate font-mono text-ink-muted hover:text-ink hover:underline"
       >
         {id}
@@ -220,12 +326,14 @@ function ClusterCrumb({
         <DropdownMenuItem key={card.id} asChild>
           {/* A plain `string`, not a template-literal type: the router's `to`
               accepts one, and spelling the typed form here would need a
-              separate branch per section for no extra safety. */}
+              separate branch per section for no extra safety. The environment
+              is in it — a sibling is a sibling *within* one, and the flat form
+              this used to build no longer routes anywhere. */}
           <Link
             to={
               (section
-                ? `/clusters/${card.id}/${section}`
-                : `/clusters/${card.id}`) as string
+                ? `/environments/${envId}/clusters/${card.id}/${section}`
+                : `/environments/${envId}/clusters/${card.id}`) as string
             }
             className="font-mono"
           >
@@ -242,6 +350,64 @@ function ClusterCrumb({
             >
               {card.id}
             </span>
+          </Link>
+        </DropdownMenuItem>
+      ))}
+    </CrumbMenu>
+  )
+}
+
+/**
+ * The schema registry, and the others in the same environment.
+ *
+ * A peer of the cluster crumb rather than a child of one, which is what the
+ * route says and what a registry is: it serves the environment, and the
+ * clusters that decode against it are its users rather than its parents.
+ *
+ * Labelled with the registry's name, falling back to the id until the fleet
+ * answers — the crumb must never be blank, because it is the row telling you
+ * where you are.
+ */
+function RegistryCrumb({
+  envId,
+  id,
+  label,
+  environment,
+  last,
+}: {
+  envId: string
+  id: string
+  label: string
+  environment: EnvironmentSection | undefined
+  last: boolean
+}) {
+  const siblings = environment?.schemaRegistries ?? []
+
+  if (siblings.length < 2) {
+    return last ? (
+      <span aria-current="page" className="truncate text-ink">
+        {label}
+      </span>
+    ) : (
+      <Link
+        to="/environments/$envId/schema-registries/$registryId"
+        params={{ envId, registryId: id }}
+        className="truncate text-ink-muted hover:text-ink hover:underline"
+      >
+        {label}
+      </Link>
+    )
+  }
+
+  return (
+    <CrumbMenu label={label} current={last}>
+      {siblings.map((entry) => (
+        <DropdownMenuItem key={entry.registry.id} asChild>
+          <Link
+            to="/environments/$envId/schema-registries/$registryId"
+            params={{ envId, registryId: entry.registry.id }}
+          >
+            <span className="truncate">{entry.registry.name}</span>
           </Link>
         </DropdownMenuItem>
       ))}

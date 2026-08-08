@@ -46,6 +46,7 @@ import { Toolbar } from "./toolbar"
 import { useMessageStream } from "./use-message-stream"
 
 export interface MessageBrowserProps {
+  envId: string
   clusterId: string
   topic: string
   /** The validated seek parameters, straight from the route. */
@@ -61,6 +62,7 @@ export interface MessageBrowserProps {
 }
 
 export function MessageBrowser({
+  envId,
   clusterId,
   topic,
   search,
@@ -73,6 +75,7 @@ export function MessageBrowser({
   const config = SEEK_MODES[mode]
 
   const stream = useMessageStream({
+    envId,
     clusterId,
     topic,
     mode,
@@ -87,7 +90,7 @@ export function MessageBrowser({
     predicate: search.predicate,
   })
 
-  const bounds = usePartitionBounds(clusterId, topic)
+  const bounds = usePartitionBounds(envId, clusterId, topic)
 
   // Panel sizes in localStorage, which the constraints allow explicitly.
   // Message data never goes there — a buffer of a live topic is not something
@@ -103,7 +106,7 @@ export function MessageBrowser({
   // deletion, not when it went, so a topic routinely holds data older than its
   // retention says and a calendar built on the setting disables days that have
   // perfectly good records behind them.
-  const oldest = useOldestTimestamp(clusterId, topic)
+  const oldest = useOldestTimestamp(envId, clusterId, topic)
   const retentionStart = oldest ? new Date(oldest) : undefined
 
   // The row as it was when it was picked. A live buffer is a moving window, so
@@ -227,6 +230,7 @@ export function MessageBrowser({
             terminal={
               stream.phase === "done" ? (
                 <Terminal
+                  envId={envId}
                   clusterId={clusterId}
                   topic={topic}
                   rows={stream.rows}
@@ -251,6 +255,7 @@ export function MessageBrowser({
               style={{ overflow: "hidden" }}
             >
               <MessageDetailPanel
+                envId={envId}
                 clusterId={clusterId}
                 topic={topic}
                 selectedId={selectedId}
@@ -272,6 +277,7 @@ export function MessageBrowser({
           <SheetContent side="bottom" className="h-[70vh] p-0">
             <SheetTitle className="sr-only">Message detail</SheetTitle>
             <MessageDetailPanel
+              envId={envId}
               clusterId={clusterId}
               topic={topic}
               selectedId={selectedId}
@@ -467,6 +473,7 @@ function Notices({
  * one that is still loading, and that is acceptance criterion 12.
  */
 function Terminal({
+  envId,
   clusterId,
   topic,
   rows,
@@ -474,6 +481,7 @@ function Terminal({
   search,
   onAppend,
 }: {
+  envId: string
   clusterId: string
   topic: string
   rows: StreamRow[]
@@ -527,7 +535,7 @@ function Terminal({
       if (search.valueCodec) params.set("valueCodec", search.valueCodec)
       if (search.predicate) params.set("predicate", search.predicate)
 
-      const page = await fetchMessagePage(clusterId, topic, params)
+      const page = await fetchMessagePage(envId, clusterId, topic, params)
       if (!page.items.length) {
         setExhausted(true)
         return

@@ -1,6 +1,6 @@
 //! Topic list and detail.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use axum::Json;
 use axum::extract::{Path, Query, State};
@@ -8,6 +8,7 @@ use kaas_ui_core::dto::{Partition, TopicDetail, TopicSummary};
 use kaas_ui_core::envelope::Envelope;
 use kafka_admin::OffsetSpec;
 use kafka_admin::types::oks;
+use kafka_meta::MetadataSnapshot;
 use serde::Deserialize;
 
 use crate::routes::split_list;
@@ -28,7 +29,7 @@ pub struct TopicQuery {
     /// friends are never parsed by kaas-ui, only listed.
     #[serde(default)]
     pub internal: bool,
-    /// `name`, `partitions`, `size`, `underReplicated`.
+    /// `name`, `partitions`, `messages`, `size`, `underReplicated`.
     pub sort: Option<String>,
     /// `asc` or `desc`.
     pub order: Option<String>,
@@ -36,10 +37,15 @@ pub struct TopicQuery {
     pub limit: Option<usize>,
     /// Page offset.
     pub offset: Option<usize>,
-    /// Fetch per-topic sizes. A `DescribeLogDirs` fan-out, so it is opt-in
-    /// rather than on the critical path for rendering a list.
+    /// Fetch message counts and on-disk sizes.
+    ///
+    /// Opt-in because it is the only thing on this route that touches a
+    /// broker: everything else is served from the metadata snapshot. The
+    /// client asks twice — once without, to paint the table, once with, to
+    /// fill the two columns — so a slow cluster delays two numbers rather
+    /// than the page.
     #[serde(default)]
-    pub sizes: bool,
+    pub metrics: bool,
     /// Describe exactly these topics, comma-separated, instead of listing.
     ///
     /// This is the path where the envelope earns its keep: naming fifty topics
@@ -51,16 +57,17 @@ pub struct TopicQuery {
 /// `GET /api/clusters/{id}/topics`
 #[utoipa::path(
     get,
-    path = "/api/clusters/{id}/topics",
+    path = "/api/environments/{env}/clusters/{id}/topics",
     params(
+        ("env" = String, Path, description = "Environment id"),
         ("id" = String, Path, description = "Cluster id"),
         ("search" = Option<String>, Query, description = "Substring match"),
         ("internal" = Option<bool>, Query, description = "Include internal topics"),
-        ("sort" = Option<String>, Query, description = "name | partitions | size | underReplicated"),
+        ("sort" = Option<String>, Query, description = "name | partitions | messages | size | underReplicated"),
         ("order" = Option<String>, Query, description = "asc | desc"),
         ("limit" = Option<usize>, Query, description = "Page size"),
         ("offset" = Option<usize>, Query, description = "Page offset"),
-        ("sizes" = Option<bool>, Query, description = "Fetch per-topic sizes"),
+        ("metrics" = Option<bool>, Query, description = "Fetch message counts and sizes"),
         ("name" = Option<String>, Query, description = "Describe these topics instead of listing"),
     ),
     responses((status = 200, description = "Topics", body = Envelope<TopicSummary>)),
@@ -69,10 +76,10 @@ pub struct TopicQuery {
 pub async fn list(
     State(state): State<AppState>,
     caller: Caller,
-    Path(id): Path<String>,
+    Path((env, id)): Path<(String, String)>,
     Query(query): Query<TopicQuery>,
 ) -> ApiResult<Json<Envelope<TopicSummary>>> {
-    let (handle, admin) = state.connected(&id, &caller)?;
+    let (handle, admin) = state.connected(&env, &id, &caller)?;
     caller.require(&id, &handle.labels, Resource::Topic, Action::View, None)?;
 
     if let Some(names) = query.name.as_deref() {
@@ -104,33 +111,28 @@ pub async fn list(
     let sort = query.sort.as_deref().unwrap_or("name");
     let mut errors = Vec::new();
 
-    // Sorting by size needs the sizes, whether or not they were asked for.
-    if query.sizes || sort == "size" {
-        match call("topic_sizes", admin.topic_sizes()).await {
-            Ok(sizes) => {
-                for topic in &mut topics {
-                    if let Some((_, size)) = oks(&sizes).find(|(name, _)| *name == &topic.name) {
-                        *topic = topic.clone().with_size(size);
-                    }
-                }
-                for (name, error) in kafka_admin::types::errs(&sizes) {
-                    errors.push(kaas_ui_core::ResourceError::new(name, error));
-                }
-            }
-            Err(error) => errors.push(error.into_resource_error("DescribeLogDirs")),
-        }
+    // Ordering by a metric needs that metric for every topic, because the page
+    // is what the ordering *produces* — enriching afterwards would sort five
+    // thousand rows by a column that is null on all of them. Every other sort
+    // comes out of the snapshot, so the fan-out can wait until after paging
+    // and pay for fifty rows instead.
+    let sort_needs_metrics = matches!(sort, "size" | "messages");
+    if sort_needs_metrics {
+        errors.extend(enrich(&admin, &snapshot, &mut topics).await);
     }
 
     match sort {
         "partitions" => topics.sort_by_key(|topic| topic.partition_count),
         "size" => topics.sort_by_key(|topic| topic.replicated_bytes.unwrap_or(0)),
+        "messages" => topics.sort_by_key(|topic| topic.message_count.unwrap_or(0)),
         "underReplicated" => {
             topics.sort_by_key(|topic| topic.under_replicated_partition_count);
         }
         "name" => topics.sort_by(|a, b| a.name.cmp(&b.name)),
         other => {
             return Err(ApiError::bad_request(format!(
-                "unknown sort {other:?}: expected name, partitions, size or underReplicated"
+                "unknown sort {other:?}: expected name, partitions, messages, size or \
+                 underReplicated"
             )));
         }
     }
@@ -141,7 +143,11 @@ pub async fn list(
     let total = topics.len();
     let offset = query.offset.unwrap_or(0).min(total);
     let limit = query.limit.unwrap_or(total);
-    let page: Vec<TopicSummary> = topics.into_iter().skip(offset).take(limit).collect();
+    let mut page: Vec<TopicSummary> = topics.into_iter().skip(offset).take(limit).collect();
+
+    if query.metrics && !sort_needs_metrics {
+        errors.extend(enrich(&admin, &snapshot, &mut page).await);
+    }
 
     Ok(Json(
         Envelope::new(page)
@@ -149,6 +155,96 @@ pub async fn list(
             .with_total(total)
             .with_snapshot_age(snapshot.age()),
     ))
+}
+
+/// Attach message counts and on-disk sizes to `topics`, in place.
+///
+/// Both fan-outs are bounded by the **broker** count, not by how many topics
+/// are handed in: a log directory is a property of one broker's disks, so
+/// `DescribeLogDirs` goes to each of them, and `list_offsets` groups its
+/// partitions by leader and sends one request per leader. What the topic count
+/// changes is the *payload* — which is the whole reason the caller hands this
+/// a page of fifty rather than a cluster of five thousand.
+///
+/// Errors are scoped to the rows asked about. `DescribeLogDirs` answers for
+/// every topic on the broker, and a failure on a topic forty pages away is
+/// noise on a chip under the table someone is reading.
+async fn enrich(
+    admin: &kafka_admin::Admin,
+    snapshot: &MetadataSnapshot,
+    topics: &mut [TopicSummary],
+) -> Vec<kaas_ui_core::ResourceError> {
+    let mut errors = Vec::new();
+    if topics.is_empty() {
+        return errors;
+    }
+    let wanted: HashSet<&str> = topics.iter().map(|topic| topic.name.as_str()).collect();
+
+    // Sizes, joined through a map. The scan this replaces ran once per row,
+    // which is quadratic in the topic count and did its worst work on exactly
+    // the cluster that the paging above exists for.
+    match call("topic_sizes", admin.topic_sizes()).await {
+        Ok(sizes) => {
+            let by_name: HashMap<_, _> = oks(&sizes)
+                .map(|(name, size)| (name.as_str(), size))
+                .filter(|(name, _)| wanted.contains(name))
+                .collect();
+            for (name, error) in kafka_admin::types::errs(&sizes) {
+                if wanted.contains(name.as_str()) {
+                    errors.push(kaas_ui_core::ResourceError::new(name, error));
+                }
+            }
+            for topic in topics.iter_mut() {
+                if let Some(size) = by_name.get(topic.name.as_str()) {
+                    topic.set_size(size);
+                }
+            }
+        }
+        Err(error) => errors.push(error.into_resource_error("DescribeLogDirs")),
+    }
+
+    // Message counts. The partition list comes from the snapshot rather than
+    // from `partition_count`, because the count is a length and `list_offsets`
+    // needs the indices — which are not required to be `0..count`.
+    let keys: Vec<(String, i32)> = topics
+        .iter()
+        .filter_map(|topic| snapshot.topic(&topic.name))
+        .flat_map(|info| {
+            info.partitions
+                .iter()
+                .map(|partition| (info.name.clone(), partition.partition))
+        })
+        .collect();
+
+    let (latest, earliest, offset_errors) = offset_ends(admin, &keys).await;
+    errors.extend(offset_errors);
+
+    // One pass, accumulating per topic. A partition that answered neither end
+    // marks its topic incomplete rather than contributing nothing: a sum with
+    // a partition missing is a smaller number, not a marked one, and the
+    // column has no way to say "this is short by one partition".
+    let mut summed: HashMap<&str, (i64, bool)> = HashMap::new();
+    for key in &keys {
+        let entry = summed.entry(key.0.as_str()).or_insert((0, true));
+        match (
+            earliest.get(key).copied().flatten(),
+            latest.get(key).copied().flatten(),
+        ) {
+            (Some(low), Some(high)) => {
+                entry.0 = entry.0.saturating_add(high.saturating_sub(low));
+            }
+            _ => entry.1 = false,
+        }
+    }
+    for topic in topics.iter_mut() {
+        if let Some((records, complete)) = summed.get(topic.name.as_str())
+            && *complete
+        {
+            topic.set_message_count(*records);
+        }
+    }
+
+    errors
 }
 
 /// `GET /api/clusters/{id}/topics/{topic}`
@@ -160,8 +256,9 @@ pub async fn list(
 /// from an old one, made good.
 #[utoipa::path(
     get,
-    path = "/api/clusters/{id}/topics/{topic}",
+    path = "/api/environments/{env}/clusters/{id}/topics/{topic}",
     params(
+        ("env" = String, Path, description = "Environment id"),
         ("id" = String, Path, description = "Cluster id"),
         ("topic" = String, Path, description = "Topic name"),
         ("offsets" = Option<bool>, Query, description = "Also fetch the offset range"),
@@ -172,10 +269,10 @@ pub async fn list(
 pub async fn detail(
     State(state): State<AppState>,
     caller: Caller,
-    Path((id, topic)): Path<(String, String)>,
+    Path((env, id, topic)): Path<(String, String, String)>,
     Query(query): Query<DetailQuery>,
 ) -> ApiResult<Json<Envelope<TopicDetail>>> {
-    let (handle, admin) = state.connected(&id, &caller)?;
+    let (handle, admin) = state.connected(&env, &id, &caller)?;
     caller.require(&id, &handle.labels, Resource::Topic, Action::View, None)?;
 
     let described = call("describe_topics", admin.describe_topics([topic.clone()])).await?;
@@ -222,8 +319,9 @@ pub struct DetailQuery {
 /// `GET /api/clusters/{id}/topics/{topic}/offsets`
 #[utoipa::path(
     get,
-    path = "/api/clusters/{id}/topics/{topic}/offsets",
+    path = "/api/environments/{env}/clusters/{id}/topics/{topic}/offsets",
     params(
+        ("env" = String, Path, description = "Environment id"),
         ("id" = String, Path, description = "Cluster id"),
         ("topic" = String, Path, description = "Topic name"),
     ),
@@ -233,9 +331,9 @@ pub struct DetailQuery {
 pub async fn offsets(
     State(state): State<AppState>,
     caller: Caller,
-    Path((id, topic)): Path<(String, String)>,
+    Path((env, id, topic)): Path<(String, String, String)>,
 ) -> ApiResult<Json<Envelope<PartitionOffsets>>> {
-    let (handle, admin) = state.connected(&id, &caller)?;
+    let (handle, admin) = state.connected(&env, &id, &caller)?;
     caller.require(&id, &handle.labels, Resource::Topic, Action::View, None)?;
 
     let snapshot = admin.cluster().snapshot();

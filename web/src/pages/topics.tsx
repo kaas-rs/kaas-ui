@@ -1,9 +1,15 @@
 import { Link, useNavigate, useSearch } from "@tanstack/react-router"
-import { useCallback, useState } from "react"
+import { useCallback, useMemo, useState } from "react"
 import { ArrowLeft } from "lucide-react"
 
-import { useClusters, useTopic, useTopicConfigs, useTopics } from "@/api/client"
-import type { Partition } from "@/api/types"
+import {
+  useClusters,
+  useTopic,
+  useTopicConfigs,
+  useTopicMetrics,
+  useTopics,
+} from "@/api/client"
+import type { Partition, TopicSummary } from "@/api/types"
 import { MessageBrowser } from "@/features/messages/browser"
 import type { TopicSearch, TopicTab } from "@/features/messages/search"
 import {
@@ -42,27 +48,68 @@ import { ConfigTable } from "./cluster"
 
 const PAGE = 50
 
-export function Topics({ clusterId }: { clusterId: string }) {
+/**
+ * A metric cell in one of its three states.
+ *
+ * `—` and blank are different answers and must not look alike: blank means the
+ * fan-out is still out, `—` means it came back and this topic has no number —
+ * a partition that would not answer, or a broker with no `DescribeLogDirs`.
+ * A dash that silently means "still loading" is how a cluster looks broken for
+ * as long as it is slow.
+ */
+function Metric({
+  value,
+  render,
+  pending,
+}: {
+  value: number | null
+  render: (value: number) => string
+  pending: boolean
+}) {
+  if (value !== null) return <>{render(value)}</>
+  return (
+    <span
+      className="text-ink-faint"
+      title={pending ? "still asking" : undefined}
+    >
+      {pending ? "·" : "—"}
+    </span>
+  )
+}
+
+export function Topics({
+  envId,
+  clusterId,
+}: {
+  envId: string
+  clusterId: string
+}) {
   const [search, setSearch] = useState("")
   const [internal, setInternal] = useState(false)
-  const [sizes, setSizes] = useState(false)
+  const [replication, setReplication] = useState(false)
   const [sort, setSort] = useState("name")
   const [order, setOrder] = useState<"asc" | "desc">("asc")
   const [offset, setOffset] = useState(0)
 
-  const topics = useTopics(clusterId, {
-    search,
-    internal,
-    sizes,
-    sort,
-    order,
-    limit: PAGE,
-    offset,
-  })
+  const query = { search, internal, sort, order, limit: PAGE, offset }
+
+  // Two requests for one table. The first is snapshot-only and lands at once;
+  // the second costs a `DescribeLogDirs` per broker and a `ListOffsets` per
+  // leader, and fills the last two columns when it arrives.
+  const topics = useTopics(envId, clusterId, query)
+  const metrics = useTopicMetrics(envId, clusterId, query)
 
   const total = topics.data?.total ?? 0
   const items = topics.data?.items ?? []
-  const showIds = items.some((topic) => topic.topicId !== null)
+
+  // Keyed by name rather than by index: the two responses are separate reads
+  // of a moving cluster, and a topic created between them would shift every
+  // row below it onto the wrong numbers.
+  const enriched = useMemo(() => {
+    const map = new Map<string, TopicSummary>()
+    for (const topic of metrics.data?.items ?? []) map.set(topic.name, topic)
+    return map
+  }, [metrics.data])
 
   const sortBy = (column: string) => {
     if (sort === column) {
@@ -124,20 +171,28 @@ export function Topics({ clusterId }: { clusterId: string }) {
         <Label className="text-[12px] font-normal text-ink-muted">
           <input
             type="checkbox"
-            checked={sizes}
-            onChange={(event) => setSizes(event.target.checked)}
+            checked={replication}
+            onChange={(event) => {
+              setReplication(event.target.checked)
+              // Leaving a sort pointed at a column that is no longer on screen
+              // reorders the table for a reason the reader cannot see.
+              if (!event.target.checked && sort === "underReplicated") {
+                setSort("name")
+                setOrder("asc")
+                setOffset(0)
+              }
+            }}
           />
-          sizes
-          <span
-            className="text-ink-faint"
-            title="a DescribeLogDirs fan-out across every broker"
-          >
-            (extra call)
-          </span>
+          replication
         </Label>
       </div>
 
-      <ErrorChips errors={topics.data?.errors ?? []} />
+      <ErrorChips
+        errors={[
+          ...(topics.data?.errors ?? []),
+          ...(metrics.data?.errors ?? []),
+        ]}
+      />
 
       {topics.isLoading ? (
         <Spinner />
@@ -150,68 +205,88 @@ export function Topics({ clusterId }: { clusterId: string }) {
               <TableHeader>
                 <TableRow>
                   {heading("name", "name")}
-                  {showIds ? <TableHead>id</TableHead> : null}
                   {heading("partitions", "partitions", true)}
-                  <TableHead className="text-right">rf</TableHead>
-                  {heading("under-replicated", "underReplicated", true)}
-                  <TableHead className="text-right">offline</TableHead>
-                  {sizes ? heading("size", "size", true) : null}
+                  {replication
+                    ? heading("out of sync", "underReplicated", true)
+                    : null}
+                  {replication ? (
+                    <TableHead className="text-right">rf</TableHead>
+                  ) : null}
+                  {heading("messages", "messages", true)}
+                  {heading("size", "size", true)}
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {items.map((topic) => (
-                  <TableRow key={topic.name}>
-                    <TableCell>
-                      <Link
-                        to="/clusters/$clusterId/topics/$topic"
-                        params={{ clusterId, topic: topic.name }}
-                        className="font-mono hover:underline"
-                        style={{ color: "var(--rust-ink)" }}
-                      >
-                        {topic.name}
-                      </Link>
-                      {topic.internal ? (
-                        <span className="ml-2 text-[11px] text-ink-faint">
-                          internal
-                        </span>
+                {items.map((topic) => {
+                  // The base row already carries the numbers when the sort is
+                  // a metric, because the server had to compute them to order
+                  // by them. Otherwise they arrive on the second request.
+                  const row = enriched.get(topic.name) ?? topic
+                  return (
+                    <TableRow key={topic.name}>
+                      <TableCell>
+                        <Link
+                          to="/environments/$envId/clusters/$clusterId/topics/$topic"
+                          params={{ envId, clusterId, topic: topic.name }}
+                          className="font-mono hover:underline"
+                          style={{ color: "var(--rust-ink)" }}
+                        >
+                          {topic.name}
+                        </Link>
+                        {topic.internal ? (
+                          <span className="ml-2 text-[11px] text-ink-faint">
+                            internal
+                          </span>
+                        ) : null}
+                      </TableCell>
+                      {/* Offline partitions ride in this cell rather than in a
+                          column of their own: on a healthy cluster that column
+                          is a stripe of zeroes, and the one row that matters is
+                          easier to see against plain numbers than against them. */}
+                      <TableCell className="text-right font-mono whitespace-nowrap">
+                        {topic.partitionCount}
+                        {topic.offlinePartitionCount > 0 ? (
+                          <span
+                            className="text-danger ml-1.5 font-medium"
+                            title={`${topic.offlinePartitionCount} partition(s) with no leader or an offline replica`}
+                          >
+                            ✕{topic.offlinePartitionCount}
+                          </span>
+                        ) : null}
+                      </TableCell>
+                      {replication ? (
+                        <TableCell className="text-right">
+                          {topic.underReplicatedPartitionCount > 0 ? (
+                            <span className="font-mono font-medium text-warn-ink">
+                              △ {topic.underReplicatedPartitionCount}
+                            </span>
+                          ) : (
+                            <span className="text-ink-faint">0</span>
+                          )}
+                        </TableCell>
                       ) : null}
-                    </TableCell>
-                    {showIds ? (
-                      <TableCell className="font-mono text-[11px] text-ink-faint">
-                        {topic.topicId ?? "—"}
-                      </TableCell>
-                    ) : null}
-                    <TableCell className="text-right font-mono">
-                      {topic.partitionCount}
-                    </TableCell>
-                    <TableCell className="text-right font-mono">
-                      {topic.replicationFactor}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      {topic.underReplicatedPartitionCount > 0 ? (
-                        <span className="font-mono font-medium text-warn-ink">
-                          △ {topic.underReplicatedPartitionCount}
-                        </span>
-                      ) : (
-                        <span className="text-ink-faint">0</span>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      {topic.offlinePartitionCount > 0 ? (
-                        <span className="font-mono font-medium text-danger">
-                          ✕ {topic.offlinePartitionCount}
-                        </span>
-                      ) : (
-                        <span className="text-ink-faint">0</span>
-                      )}
-                    </TableCell>
-                    {sizes ? (
+                      {replication ? (
+                        <TableCell className="text-right font-mono">
+                          {topic.replicationFactor}
+                        </TableCell>
+                      ) : null}
                       <TableCell className="text-right font-mono">
-                        {bytes(topic.replicatedBytes)}
+                        <Metric
+                          value={row.messageCount}
+                          render={count}
+                          pending={metrics.isFetching}
+                        />
                       </TableCell>
-                    ) : null}
-                  </TableRow>
-                ))}
+                      <TableCell className="text-right font-mono">
+                        <Metric
+                          value={row.replicatedBytes}
+                          render={bytes}
+                          pending={metrics.isFetching}
+                        />
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
               </TableBody>
             </Table>
           </div>
@@ -246,20 +321,24 @@ export function Topics({ clusterId }: { clusterId: string }) {
 }
 
 export function TopicDetail({
+  envId,
   clusterId,
   topic,
 }: {
+  envId: string
   clusterId: string
   topic: string
 }) {
-  const detail = useTopic(clusterId, topic)
-  const search = useSearch({ from: "/clusters/$clusterId/topics/$topic" })
+  const detail = useTopic(envId, clusterId, topic)
+  const search = useSearch({
+    from: "/environments/$envId/clusters/$clusterId/topics/$topic",
+  })
   // What this caller may do here, from the cluster's own card. A messages tab
   // that 403s on click is worse than no messages tab — the same reasoning the
   // sidebar applies to a capability the *broker* does not have. Until the
   // answer arrives, show it: a tab that appears under the cursor is worse than
   // one that errors once, and an open deployment always grants both.
-  const clusters = useClusters()
+  const clusters = useClusters(envId)
   const grants = clusters.data?.items.find(
     (card) => card.id === clusterId
   )?.grants
@@ -278,8 +357,8 @@ export function TopicDetail({
   const setSearch = useCallback(
     (next: Partial<TopicSearch>, replace = true) => {
       void navigate({
-        to: "/clusters/$clusterId/topics/$topic",
-        params: { clusterId, topic },
+        to: "/environments/$envId/clusters/$clusterId/topics/$topic",
+        params: { envId, clusterId, topic },
         search: (previous) => ({ ...previous, ...next }),
         replace,
       })
@@ -319,7 +398,10 @@ export function TopicDetail({
         }
         actions={
           <Button variant="ghost" size="sm" asChild>
-            <Link to="/clusters/$clusterId/topics" params={{ clusterId }}>
+            <Link
+              to="/environments/$envId/clusters/$clusterId/topics"
+              params={{ envId, clusterId }}
+            >
               <ArrowLeft aria-hidden />
               all topics
             </Link>
@@ -348,7 +430,7 @@ export function TopicDetail({
           <Partitions partitions={info.partitions} brokerIds={info.brokerIds} />
         </TabsContent>
         <TabsContent value="configs" className="mt-4">
-          <TopicConfigs clusterId={clusterId} topic={topic} />
+          <TopicConfigs envId={envId} clusterId={clusterId} topic={topic} />
         </TabsContent>
         {/* The panel is given a height rather than left to grow: the list is
             virtualized and the split pane is a flex box, and neither can work
@@ -358,6 +440,7 @@ export function TopicDetail({
             a live scan nobody is looking at is a scan that should not be open. */}
         <TabsContent value="messages" className="mt-4">
           <MessageBrowser
+            envId={envId}
             clusterId={clusterId}
             topic={topic}
             search={search}
@@ -540,13 +623,15 @@ function Partitions({
 }
 
 function TopicConfigs({
+  envId,
   clusterId,
   topic,
 }: {
+  envId: string
   clusterId: string
   topic: string
 }) {
-  const configs = useTopicConfigs(clusterId, topic)
+  const configs = useTopicConfigs(envId, clusterId, topic)
   const [onlyExplicit, setOnlyExplicit] = useState(true)
 
   const entries = configs.data?.items[0]?.entries ?? []

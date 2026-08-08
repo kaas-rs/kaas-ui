@@ -1,8 +1,8 @@
-# The development registry.
+# The development fleet.
 #
-# Three clusters, and the third one is not padding: `dead` points at a name
-# that does not resolve, and the acceptance run asserts that it renders as an
-# unreachable card without costing the other two a millisecond. It is the
+# Three clusters in `dev`, and the third one is not padding: `dead` points at a
+# name that does not resolve, and the acceptance run asserts that it renders as
+# an unreachable card without costing the other two a millisecond. It is the
 # cheapest possible regression test for lazy connection.
 #
 # Both live clusters are reachable on their plaintext listener from inside the
@@ -23,64 +23,68 @@ server:
   # looks like a broken build rather than a missing setting.
   base_path: "/proxy/8099"
 
-# The fleet is sectioned by environment, and declaring one buys a name and a
-# position — "dev, staging, prod" is an order no sort recovers from the ids.
-# A section can exist without an entry here (any `env` label makes one), but it
-# then sorts after the declared ones with its id for a heading.
+# The fleet is environments, and everything else sits inside one.
+#
+# Nesting is membership: a cluster is in `dev` because it is declared there,
+# not because it carries a label that has to agree with a list somewhere else.
+# Declaration order is display order — "dev, staging, prod" is an order no sort
+# recovers from the ids — and the id leads every URL beneath it, which is why
+# it may only hold characters that survive a path segment unescaped.
 environments:
+  # --- dev: the two real ones, a fixture, and a live registry --------------
   - id: dev
     name: Development
     description: The two live clusters this repo is developed against, plus one that is not there on purpose.
-  - id: staging
-    name: Staging
-    description: Placeholders. Nothing here resolves — they exist so the fleet layout can be seen with more than one section in it.
-  - id: prod
-    name: Production
-    description: "Placeholders, and the tone the `env: prod` label forces on a cluster chip."
 
-# A registry serves an environment, and every cluster in it references the same
-# one by id. Declared once, so the two `dev` clusters below share one client,
-# one set of decoders and one id→schema cache — the canary produces the same
-# Avro to `kaas-canary-v1` on both, against this registry, so schema id 1 is
-# genuinely the same schema on both sides.
-#
-# ccompat only. `/apis/registry/v3` is Apicurio's native API and is not
-# supported; pointing this at it is reported on first use as a configuration
-# error rather than rediscovered once per record.
-schema_registries:
-  - id: dev
-    name: Apicurio (ccompat)
-    url: http://apicurio-registry.apicurio.svc.cluster.local:8080/apis/ccompat/v7
+    # A registry serves this environment, and the clusters below reference it
+    # by id. Declared once, so the two `dev` clusters share one client, one set
+    # of decoders and one id→schema cache — the canary produces the same Avro
+    # to `kaas-canary-v1` on both, against this registry, so schema id 1 is
+    # genuinely the same schema on both sides.
+    #
+    # The id is scoped to this environment: `prod` below may declare its own
+    # `apicurio` and neither can reach the other's.
+    #
+    # ccompat only. `/apis/registry/v3` is Apicurio's native API and is not
+    # supported; pointing this at it is reported on first use as a
+    # configuration error rather than rediscovered once per record.
+    schema_registries:
+      - id: apicurio
+        name: Apicurio
+        url: http://apicurio-registry.apicurio.svc.cluster.local:8080/apis/ccompat/v7
+      - id: apicurio2
+        name: Apicurio2
+        url: http://apicurio-registry.apicurio.svc.cluster.local:8080/apis/ccompat/v7
 
-clusters:
-  # --- dev: the two real ones, and the fixture ----------------------------
-  - id: kaas
-    name: kaas (dev)
-    bootstrap: ["kaas.kaas.svc.cluster.local:9092"]
-    labels:
-      env: dev
-      kind: kaas
-    refresh_interval: 30s
-    schema_registry: dev
+    kafka_clusters:
+      - id: kaas
+        name: kaas (dev)
+        bootstrap: ["kaas.kaas.svc.cluster.local:9092"]
+        labels:
+          kind: kaas
+        refresh_interval: 30s
+        # Reference, not membership. Sitting beside the registry is not the
+        # same claim as decoding against it, and a cluster that should render
+        # hex has to be able to say so by leaving this out.
+        schema_registry: apicurio
 
-  - id: strimzi
-    name: kafka-cluster (strimzi)
-    bootstrap: ["kafka-cluster-kafka-bootstrap.strimzi.svc.cluster.local:9092"]
-    labels:
-      env: dev
-      kind: strimzi
-    refresh_interval: 30s
-    schema_registry: dev
+      - id: strimzi
+        name: kafka-cluster (strimzi)
+        bootstrap:
+          ["kafka-cluster-kafka-bootstrap.strimzi.svc.cluster.local:9092"]
+        labels:
+          kind: strimzi
+        refresh_interval: 30s
+        schema_registry: apicurio
 
-  - id: dead
-    name: nonexistent
-    bootstrap: ["nowhere.invalid:9092"]
-    labels:
-      env: dev
-      kind: none
-    connect_timeout: 3s
+      - id: dead
+        name: nonexistent
+        bootstrap: ["nowhere.invalid:9092"]
+        labels:
+          kind: none
+        connect_timeout: 3s
 
-  # --- staging and prod: fixtures for the fleet layout --------------------
+  # --- staging and prod: fixtures for the fleet layout ---------------------
   #
   # Every one of these dials a `.invalid` name (RFC 2606), so DNS fails
   # immediately and no real host is ever contacted. They render as unreachable
@@ -90,101 +94,90 @@ clusters:
   #
   # A long `refresh_interval` because a fixture that will never connect has no
   # reason to be the busiest thing in the process.
-  - id: staging-eu
-    name: staging (eu-west)
-    bootstrap: ["kafka.staging-eu.invalid:9092"]
-    labels:
-      env: staging
-      kind: strimzi
-      region: eu-west
-    connect_timeout: 3s
-    refresh_interval: 5m
+  - id: staging
+    name: Staging
+    description: Placeholders. Nothing here resolves — they exist so the fleet layout can be seen with more than one section in it.
 
-  - id: staging-us
-    name: staging (us-east)
-    bootstrap: ["kafka.staging-us.invalid:9092"]
-    labels:
-      env: staging
-      kind: strimzi
-      region: us-east
-    connect_timeout: 3s
-    refresh_interval: 5m
+    kafka_clusters:
+      - id: staging-eu
+        name: staging (eu-west)
+        bootstrap: ["kafka.staging-eu.invalid:9092"]
+        labels:
+          kind: strimzi
+          region: eu-west
+        connect_timeout: 3s
+        refresh_interval: 5m
 
-  - id: prod-eu
-    name: production (eu-west)
-    bootstrap: ["kafka.prod-eu.invalid:9092"]
-    labels:
-      env: prod
-      kind: strimzi
-      region: eu-west
-    connect_timeout: 3s
-    refresh_interval: 5m
+      - id: staging-us
+        name: staging (us-east)
+        bootstrap: ["kafka.staging-us.invalid:9092"]
+        labels:
+          kind: strimzi
+          region: us-east
+        connect_timeout: 3s
+        refresh_interval: 5m
 
-  - id: prod-us
-    name: production (us-east)
-    bootstrap: ["kafka.prod-us.invalid:9092"]
-    labels:
-      env: prod
-      kind: strimzi
-      region: us-east
-    connect_timeout: 3s
-    refresh_interval: 5m
+    # Inventory: things in this environment that kaas-ui does not dial. The
+    # card says what is configured and where, and says "not probed" rather than
+    # inventing a health it never asked about. A schema registry declared here
+    # rather than above is exactly that — an entry in a list, with nothing
+    # behind it.
+    resources:
+      - id: connect-staging
+        name: Kafka Connect
+        kind: kafka_connect
+        endpoint: http://connect.staging.invalid:8083
 
-  - id: prod-analytics
-    name: production (analytics)
-    bootstrap: ["kafka.prod-analytics.invalid:9092"]
-    labels:
-      env: prod
-      kind: kaas
-    connect_timeout: 3s
-    refresh_interval: 5m
+      - id: apicurio-staging
+        name: Apicurio (ccompat)
+        kind: schema_registry
+        endpoint: http://registry.staging.invalid:8080/apis/ccompat/v7
 
-# Everything in an environment that is not a Kafka cluster.
-#
-# kaas-ui dials none of these: the card says what is configured and where, and
-# says "not probed" rather than inventing a health it never asked about.
-#
-# The schema registry is the one that is no longer only inventory. It is
-# declared above under `schema_registries:` as well, which is what actually
-# decodes payloads and what the schema browser reads; this entry is the card
-# beside the brokers, and the two are deliberately separate — a registry
-# somebody wants listed and a registry kaas-ui talks to are different claims.
-resources:
-  - id: apicurio-dev
-    name: Apicurio (ccompat)
-    kind: schema_registry
-    environment: dev
-    endpoint: http://apicurio-registry.apicurio.svc.cluster.local:8080/apis/ccompat/v7
-    note: Declared above as `schema_registries[dev]`, which is what actually decodes payloads. This card is the inventory entry beside it.
+  - id: prod
+    name: Production
+    description: "Placeholders, and the tone the `env: prod` label forces on a cluster chip."
 
-  - id: connect-staging
-    name: Kafka Connect
-    kind: kafka_connect
-    environment: staging
-    endpoint: http://connect.staging.invalid:8083
+    kafka_clusters:
+      - id: prod-eu
+        name: production (eu-west)
+        bootstrap: ["kafka.prod-eu.invalid:9092"]
+        labels:
+          kind: strimzi
+          region: eu-west
+        connect_timeout: 3s
+        refresh_interval: 5m
 
-  - id: apicurio-staging
-    name: Apicurio (ccompat)
-    kind: schema_registry
-    environment: staging
-    endpoint: http://registry.staging.invalid:8080/apis/ccompat/v7
+      - id: prod-us
+        name: production (us-east)
+        bootstrap: ["kafka.prod-us.invalid:9092"]
+        labels:
+          kind: strimzi
+          region: us-east
+        connect_timeout: 3s
+        refresh_interval: 5m
 
-  - id: apicurio-prod
-    name: Apicurio (ccompat)
-    kind: schema_registry
-    environment: prod
-    endpoint: http://registry.prod.invalid:8080/apis/ccompat/v7
-    note: One registry for the environment, shared by every cluster in it.
+      - id: prod-analytics
+        name: production (analytics)
+        bootstrap: ["kafka.prod-analytics.invalid:9092"]
+        labels:
+          kind: kaas
+        connect_timeout: 3s
+        refresh_interval: 5m
 
-  - id: mosquitto-prod
-    name: Mosquitto
-    kind: mqtt_broker
-    environment: prod
-    endpoint: mqtts://mqtt.prod.invalid:8883
-    note: Bridged into Kafka by the ingest service.
+    resources:
+      - id: apicurio-prod
+        name: Apicurio (ccompat)
+        kind: schema_registry
+        endpoint: http://registry.prod.invalid:8080/apis/ccompat/v7
+        note: One registry for the environment, shared by every cluster in it.
 
-  - id: rest-proxy-prod
-    name: REST proxy
-    kind: rest_proxy
-    environment: prod
-    endpoint: https://kafka-rest.prod.invalid
+      - id: mosquitto-prod
+        name: Mosquitto
+        kind: mqtt_broker
+        endpoint: mqtts://mqtt.prod.invalid:8883
+        note: Bridged into Kafka by the ingest service.
+
+      - id: rest-proxy-prod
+        name: REST proxy
+        kind: rest_proxy
+        endpoint: https://kafka-rest.prod.invalid

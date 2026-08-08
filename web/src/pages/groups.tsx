@@ -36,9 +36,15 @@ import {
 } from "@/components/ui/tooltip"
 import { PageTitle } from "@/components/page-title"
 
-export function Groups({ clusterId }: { clusterId: string }) {
-  const capabilities = useCapabilities(clusterId)
-  const groups = useGroups(clusterId)
+export function Groups({
+  envId,
+  clusterId,
+}: {
+  envId: string
+  clusterId: string
+}) {
+  const capabilities = useCapabilities(envId, clusterId)
+  const groups = useGroups(envId, clusterId)
 
   // The route exists even where the api does not, so a URL shared from one
   // cluster and opened against another degrades into an explanation rather
@@ -90,8 +96,8 @@ export function Groups({ clusterId }: { clusterId: string }) {
                   <TableCell>
                     {group.describable ? (
                       <Link
-                        to="/clusters/$clusterId/groups/$groupId"
-                        params={{ clusterId, groupId: group.groupId }}
+                        to="/environments/$envId/clusters/$clusterId/groups/$groupId"
+                        params={{ envId, clusterId, groupId: group.groupId }}
                         className="font-mono hover:underline"
                         style={{ color: "var(--rust-ink)" }}
                       >
@@ -150,14 +156,16 @@ function GroupState({ state }: { state: string }) {
 }
 
 export function GroupDetail({
+  envId,
   clusterId,
   groupId,
 }: {
+  envId: string
   clusterId: string
   groupId: string
 }) {
-  const group = useGroup(clusterId, groupId)
-  const offsets = useGroupOffsets(clusterId, groupId)
+  const group = useGroup(envId, clusterId, groupId)
+  const offsets = useGroupOffsets(envId, clusterId, groupId)
 
   const detail = group.data?.items[0]
 
@@ -168,7 +176,10 @@ export function GroupDetail({
         subtitle={detail ? <GroupSubtitle detail={detail} /> : undefined}
         actions={
           <Button variant="ghost" size="sm" asChild>
-            <Link to="/clusters/$clusterId/groups" params={{ clusterId }}>
+            <Link
+              to="/environments/$envId/clusters/$clusterId/groups"
+              params={{ envId, clusterId }}
+            >
               <ArrowLeft aria-hidden />
               all groups
             </Link>
@@ -226,8 +237,8 @@ export function GroupDetail({
                   <TableRow key={`${row.topic}-${row.partition}`}>
                     <TableCell>
                       <Link
-                        to="/clusters/$clusterId/topics/$topic"
-                        params={{ clusterId, topic: row.topic }}
+                        to="/environments/$envId/clusters/$clusterId/topics/$topic"
+                        params={{ envId, clusterId, topic: row.topic }}
                         className="font-mono hover:underline"
                         style={{ color: "var(--rust-ink)" }}
                       >

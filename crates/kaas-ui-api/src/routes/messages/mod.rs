@@ -81,8 +81,9 @@ impl TailQuery {
 /// `total` reports how many were fetched before truncation.
 #[utoipa::path(
     get,
-    path = "/api/clusters/{id}/topics/{topic}/messages/tail",
+    path = "/api/environments/{env}/clusters/{id}/topics/{topic}/messages/tail",
     params(
+        ("env" = String, Path, description = "Environment id"),
         ("id" = String, Path, description = "Cluster id"),
         ("topic" = String, Path, description = "Topic name"),
         ("limit" = Option<usize>, Query, description = "Records to return after merging"),
@@ -96,10 +97,10 @@ impl TailQuery {
 pub async fn tail(
     State(state): State<AppState>,
     caller: Caller,
-    Path((id, topic)): Path<(String, String)>,
+    Path((env, id, topic)): Path<(String, String, String)>,
     Query(query): Query<TailQuery>,
 ) -> ApiResult<Json<Envelope<Message>>> {
-    let (handle, admin) = state.connected(&id, &caller)?;
+    let (handle, admin) = state.connected(&env, &id, &caller)?;
     // Payloads are the sensitive surface, so this is where the `messages`
     // grant is spent — after the lookup, which already decided the cluster is
     // visible at all, and against the topic name because a role may grant
@@ -219,8 +220,9 @@ pub struct MessagePage {
 /// differ in shape from the ones already on screen.
 #[utoipa::path(
     get,
-    path = "/api/clusters/{id}/topics/{topic}/messages",
+    path = "/api/environments/{env}/clusters/{id}/topics/{topic}/messages",
     params(
+        ("env" = String, Path, description = "Environment id"),
         ("id" = String, Path, description = "Cluster id"),
         ("topic" = String, Path, description = "Topic name"),
         ("mode" = Option<SeekMode>, Query, description = "Which window"),
@@ -240,10 +242,10 @@ pub struct MessagePage {
 pub async fn page(
     State(state): State<AppState>,
     caller: Caller,
-    Path((id, topic)): Path<(String, String)>,
+    Path((env, id, topic)): Path<(String, String, String)>,
     Query(query): Query<SeekQuery>,
 ) -> ApiResult<Json<MessagePage>> {
-    let (handle, admin) = state.connected(&id, &caller)?;
+    let (handle, admin) = state.connected(&env, &id, &caller)?;
     // Payloads are the sensitive surface, so this is where the `messages`
     // grant is spent — after the lookup, which already decided the cluster is
     // visible at all, and against the topic name because a role may grant
@@ -411,8 +413,9 @@ fn next_anchor(mode: SeekMode, rows: &[StreamRow]) -> Option<i64> {
 /// explaining.
 #[utoipa::path(
     get,
-    path = "/api/clusters/{id}/topics/{topic}/messages/{partition}/{offset}",
+    path = "/api/environments/{env}/clusters/{id}/topics/{topic}/messages/{partition}/{offset}",
     params(
+        ("env" = String, Path, description = "Environment id"),
         ("id" = String, Path, description = "Cluster id"),
         ("topic" = String, Path, description = "Topic name"),
         ("partition" = i32, Path, description = "Partition"),
@@ -429,10 +432,10 @@ fn next_anchor(mode: SeekMode, rows: &[StreamRow]) -> Option<i64> {
 pub async fn one(
     State(state): State<AppState>,
     caller: Caller,
-    Path((id, topic, partition, offset)): Path<(String, String, i32, i64)>,
+    Path((env, id, topic, partition, offset)): Path<(String, String, String, i32, i64)>,
     Query(query): Query<TailQuery>,
 ) -> ApiResult<Json<MessageDetail>> {
-    let (handle, admin) = state.connected(&id, &caller)?;
+    let (handle, admin) = state.connected(&env, &id, &caller)?;
     // Payloads are the sensitive surface, so this is where the `messages`
     // grant is spent — after the lookup, which already decided the cluster is
     // visible at all, and against the topic name because a role may grant

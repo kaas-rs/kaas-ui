@@ -232,18 +232,20 @@ mod tests {
     }
 
     const NO_REGISTRY: &str = r#"
-clusters:
-  - id: kaas
-    bootstrap: ["a:9092"]
-    codecs:
-      - topic: "raw-*"
-        value: hex
+environments:
+  - id: dev
+    kafka_clusters:
+      - id: kaas
+        bootstrap: ["a:9092"]
+        codecs:
+          - topic: "raw-*"
+            value: hex
 "#;
 
     #[test]
     fn the_request_overrides_the_configuration_and_the_configuration_overrides_auto() {
         let registry = cluster(NO_REGISTRY);
-        let handle = registry.get("kaas", &Access::admin()).unwrap();
+        let handle = registry.get("dev", "kaas", &Access::admin()).unwrap();
 
         let configured = PayloadDecoder::new(handle, "raw-bytes", CodecOverride::default());
         assert_eq!(configured.value, Codec::Hex);

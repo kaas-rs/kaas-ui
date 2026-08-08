@@ -38,10 +38,16 @@ import {
 } from "@/components/ui/tooltip"
 import { PageTitle } from "@/components/page-title"
 
-export function ClusterOverview({ clusterId }: { clusterId: string }) {
-  const cluster = useCluster(clusterId)
+export function ClusterOverview({
+  envId,
+  clusterId,
+}: {
+  envId: string
+  clusterId: string
+}) {
+  const cluster = useCluster(envId, clusterId)
   const [logDirBroker, setLogDirBroker] = useState<number | null>(null)
-  const logDirs = useLogDirs(clusterId, logDirBroker)
+  const logDirs = useLogDirs(envId, clusterId, logDirBroker)
 
   if (cluster.isLoading) return <Spinner label={`connecting to ${clusterId}`} />
   if (cluster.error) {
@@ -246,8 +252,14 @@ export function ClusterOverview({ clusterId }: { clusterId: string }) {
   )
 }
 
-export function CapabilitiesPage({ clusterId }: { clusterId: string }) {
-  const capabilities = useCapabilities(clusterId)
+export function CapabilitiesPage({
+  envId,
+  clusterId,
+}: {
+  envId: string
+  clusterId: string
+}) {
+  const capabilities = useCapabilities(envId, clusterId)
   const [showAll, setShowAll] = useState(false)
 
   if (capabilities.isLoading) return <Spinner label="asking a broker" />
@@ -363,13 +375,19 @@ export function CapabilitiesPage({ clusterId }: { clusterId: string }) {
   )
 }
 
-export function ClusterConfigs({ clusterId }: { clusterId: string }) {
-  const cluster = useCluster(clusterId)
+export function ClusterConfigs({
+  envId,
+  clusterId,
+}: {
+  envId: string
+  clusterId: string
+}) {
+  const cluster = useCluster(envId, clusterId)
   const brokers = cluster.data?.items[0]?.brokers ?? []
   const [selected, setSelected] = useState<string | null>(null)
   const resource =
     selected ?? (brokers[0] ? `broker:${brokers[0].nodeId}` : null)
-  const configs = useClusterConfigs(clusterId, resource)
+  const configs = useClusterConfigs(envId, clusterId, resource)
   const [onlyExplicit, setOnlyExplicit] = useState(false)
 
   const entries = configs.data?.items[0]?.entries ?? []

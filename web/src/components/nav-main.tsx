@@ -29,6 +29,7 @@ import { ChevronRight } from "lucide-react"
 import { useCapabilities, useFleet } from "@/api/client"
 import type {
   ClusterCard,
+  EnvironmentRegistry,
   EnvironmentSection,
   Feature,
   Resource,
@@ -87,38 +88,33 @@ const CLUSTER_NAV: {
    * its subjects stay browsable while the cluster you arrived through is down.
    */
   needsConnection?: boolean
-  /** Only rendered when the cluster references a registry. */
-  needsRegistry?: boolean
 }[] = [
   {
     label: "topics",
-    to: "/clusters/$clusterId/topics",
+    to: "/environments/$envId/clusters/$clusterId/topics",
     resource: "topic",
   },
   {
     label: "groups",
-    to: "/clusters/$clusterId/groups",
+    to: "/environments/$envId/clusters/$clusterId/groups",
     feature: "consumerGroups",
     resource: "consumer",
   },
   {
     label: "configs",
-    to: "/clusters/$clusterId/configs",
+    to: "/environments/$envId/clusters/$clusterId/configs",
     feature: "configs",
     resource: "cluster_config",
   },
   {
     label: "capabilities",
-    to: "/clusters/$clusterId/capabilities",
+    to: "/environments/$envId/clusters/$clusterId/capabilities",
     resource: "cluster_config",
   },
-  {
-    label: "schemas",
-    to: "/clusters/$clusterId/schemas",
-    resource: "topic",
-    needsConnection: false,
-    needsRegistry: true,
-  },
+  // No schemas item. A registry serves the *environment*, so two clusters
+  // referencing `dev` gave two rows opening the same subject list — the nav
+  // said "these are kaas's schemas" twice, and neither time was it true. The
+  // registry is one row beside the clusters now; see `RegistryItem`.
 ]
 
 /**
@@ -130,7 +126,7 @@ const CLUSTER_NAV: {
  * against another degrades into an explanation rather than a dead end.
  */
 function ClusterItem({ card, active }: { card: ClusterCard; active: boolean }) {
-  const capabilities = useCapabilities(card.id)
+  const capabilities = useCapabilities(card.environment, card.id)
   const [open, setOpen] = useState(active)
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
@@ -147,10 +143,6 @@ function ClusterItem({ card, active }: { card: ClusterCard; active: boolean }) {
 
   const items = CLUSTER_NAV.filter((item) => {
     if (unreachable && item.needsConnection !== false) return false
-    // A registry is referenced by name, and most clusters reference none. An
-    // item whose only content would be an explanation of its own absence is
-    // one row of noise per cluster.
-    if (item.needsRegistry && !card.schemaRegistry) return false
     // Two reasons an item can be absent, and they are different claims: the
     // broker cannot answer it, or this caller may not ask. Both end as "no
     // item" rather than an item that errors on click.
@@ -179,7 +171,9 @@ function ClusterItem({ card, active }: { card: ClusterCard; active: boolean }) {
       <SidebarMenuItem>
         <SidebarMenuButton
           asChild
-          isActive={pathname === `/clusters/${card.id}`}
+          isActive={
+            pathname === `/environments/${card.environment}/clusters/${card.id}`
+          }
           tooltip={`${card.id} — ${card.status}`}
           // Dimmed to the same weight as the resources below, because it now
           // holds the same amount: a name and nothing to open. It stays a link
@@ -189,8 +183,8 @@ function ClusterItem({ card, active }: { card: ClusterCard; active: boolean }) {
         >
           {/* Following the name is also asking to see what is under it. */}
           <Link
-            to="/clusters/$clusterId"
-            params={{ clusterId: card.id }}
+            to="/environments/$envId/clusters/$clusterId"
+            params={{ envId: card.environment, clusterId: card.id }}
             onClick={() => setOpen(true)}
           >
             <ClusterIcon aria-hidden />
@@ -211,14 +205,22 @@ function ClusterItem({ card, active }: { card: ClusterCard; active: boolean }) {
             <CollapsibleContent>
               <SidebarMenuSub>
                 {items.map((item) => {
-                  const href = item.to.replace("$clusterId", card.id)
+                  const href = item.to
+                    .replace("$envId", card.environment)
+                    .replace("$clusterId", card.id)
                   return (
                     <SidebarMenuSubItem key={item.label}>
                       <SidebarMenuSubButton
                         asChild
                         isActive={pathname.startsWith(href)}
                       >
-                        <Link to={item.to} params={{ clusterId: card.id }}>
+                        <Link
+                          to={item.to}
+                          params={{
+                            envId: card.environment,
+                            clusterId: card.id,
+                          }}
+                        >
                           <span>{item.label}</span>
                         </Link>
                       </SidebarMenuSubButton>
@@ -231,6 +233,69 @@ function ClusterItem({ card, active }: { card: ClusterCard; active: boolean }) {
         ) : null}
       </SidebarMenuItem>
     </Collapsible>
+  )
+}
+
+/**
+ * The environment's schema registry: one row, and it goes somewhere.
+ *
+ * The only resource kind kaas-ui has a page for, which is why it is the only
+ * one that is a link. It sits beside the clusters rather than inside them
+ * because that is what it is — every cluster in this environment that names it
+ * reads these same subjects, from the same handle, through the same cache.
+ *
+ * It has its own URL now. The registry id is scoped to the environment and the
+ * environment is only reachable when something in it is visible, so the id can
+ * lead a route without becoming a namespace anyone can probe — which is what
+ * routing through a cluster used to buy at the cost of a URL that named the
+ * wrong thing.
+ */
+function RegistryItem({
+  envId,
+  entry,
+}: {
+  envId: string
+  entry: EnvironmentRegistry
+}) {
+  const Icon = RESOURCE_KINDS.schema_registry.icon
+  const pathname = useRouterState({
+    select: (state) => state.location.pathname,
+  })
+  const { registry } = entry
+  const broken =
+    registry.status === "unreachable" || registry.status === "misconfigured"
+
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton
+        asChild
+        // Any cluster's schema route is this registry: arriving on
+        // `/clusters/strimzi/schemas` from a link someone sent must light the
+        // same row as arriving through `kaas`, because it is the same page.
+        isActive={pathname.startsWith(
+          `/environments/${envId}/schema-registries/${registry.id}`
+        )}
+        tooltip={`${registry.name} — ${registry.url}`}
+      >
+        <Link
+          to="/environments/$envId/schema-registries/$registryId"
+          params={{ envId, registryId: registry.id }}
+        >
+          <Icon aria-hidden />
+          <span className="truncate">{registry.name}</span>
+          {/* A registry that is down still lists what it last knew, so the row
+              stays a link and says so quietly rather than disappearing. */}
+          {broken ? (
+            <span
+              className="text-warn-ink ml-auto text-[10px]"
+              title={registry.error ?? registry.status}
+            >
+              {registry.status === "misconfigured" ? "!" : "?"}
+            </span>
+          ) : null}
+        </Link>
+      </SidebarMenuButton>
+    </SidebarMenuItem>
   )
 }
 
@@ -321,6 +386,17 @@ export function NavMain() {
   }, [routed?.id])
 
   const active = pickEnvironment(sections, chosen)
+
+  // An inventory card and a live registry usually describe one service — the
+  // operator typed the endpoint under `environments:` beside the registry that
+  // decodes. Showing both is the same registry twice, once as a link and once
+  // as dead text, which reads as two registries of which one is broken.
+  const registries = active?.schemaRegistries ?? []
+  const urls = new Set(registries.map((entry) => entry.registry.url))
+  const inventory = (active?.resources ?? []).filter(
+    (resource) => !(resource.endpoint && urls.has(resource.endpoint))
+  )
+
   if (!active) return null
 
   return (
@@ -340,7 +416,14 @@ export function NavMain() {
             active={card.id === activeCluster}
           />
         ))}
-        {byResourceKind(active.resources).map((resource) => (
+        {registries.map((entry) => (
+          <RegistryItem
+            key={entry.registry.id}
+            envId={active.id}
+            entry={entry}
+          />
+        ))}
+        {byResourceKind(inventory).map((resource) => (
           <ResourceItem key={resource.id} resource={resource} />
         ))}
       </SidebarMenu>

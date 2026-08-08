@@ -11,7 +11,7 @@ use kaas_ui_core::registry::Registry;
 
 use kaas_ui_auth::{Access, Action, Resource};
 
-use crate::{ApiResult, AppState, Caller, call};
+use crate::{ApiError, ApiResult, AppState, Caller, call};
 
 /// `GET /api/clusters`
 ///
@@ -54,23 +54,22 @@ fn cards(registry: &Registry, who: &Access) -> Vec<ClusterCard> {
         .collect()
 }
 
-/// `GET /api/fleet`
+/// `GET /api/environments`
 ///
-/// The same cards, arranged into the sections the landing page renders: one
-/// per environment, each holding its clusters and whatever else was configured
-/// beside them — a schema registry, an MQTT broker.
+/// The fleet: one section per environment, each holding its clusters, the
+/// schema registries beside them and whatever inventory was configured there.
 ///
 /// Sectioned here rather than in the browser because the order is
-/// configuration. Declared environments come in declared order, and no client
-/// can recover "dev, staging, prod" from three strings that sort the other
-/// way. An environment nothing visible lives in is absent from the response,
-/// so a heading never reports the existence of a cluster the caller may not
-/// see.
+/// configuration. Environments come in declared order, and no client can
+/// recover "dev, staging, prod" from three strings that sort the other way. An
+/// environment nothing visible lives in is absent from the response, so a
+/// heading never reports the existence of a cluster the caller may not see —
+/// which is also what makes every URL beneath it unprobeable.
 #[utoipa::path(
     get,
-    path = "/api/fleet",
+    path = "/api/environments",
     responses((status = 200, description = "The fleet, by environment", body = Envelope<EnvironmentSection>)),
-    tag = "clusters",
+    tag = "environments",
 )]
 pub async fn fleet(
     State(state): State<AppState>,
@@ -85,6 +84,41 @@ pub async fn fleet(
     Json(Envelope::new(sections))
 }
 
+/// `GET /api/environments/{env}`
+///
+/// One section, for a page that landed on an environment directly rather than
+/// through the fleet. Same shape as one element of the list above, so a client
+/// that has either can render the same thing.
+#[utoipa::path(
+    get,
+    path = "/api/environments/{env}",
+    params(("env" = String, Path, description = "Environment id")),
+    responses(
+        (status = 200, description = "One environment", body = Envelope<EnvironmentSection>),
+        (status = 404, description = "No such environment, or nothing in it is visible"),
+    ),
+    tag = "environments",
+)]
+pub async fn environment(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(env): Path<String>,
+) -> ApiResult<Json<Envelope<EnvironmentSection>>> {
+    let entry = state.environment(&env, &caller)?;
+    let registry = state.registry();
+    let members: Vec<ClusterCard> = cards(&registry, caller.access())
+        .into_iter()
+        .filter(|card| card.environment == env)
+        .collect();
+    // `environment` above already refused an environment holding nothing this
+    // caller can see, so the `None` arm here is unreachable rather than a
+    // second policy decision — and it is written as a 404 anyway, because two
+    // places that can disagree about visibility is one too many.
+    let section = EnvironmentSection::of(&entry, members, &registry, caller.access())
+        .ok_or_else(|| ApiError::not_found(format!("no environment {env:?}")))?;
+    Ok(Json(Envelope::new(vec![section])))
+}
+
 /// `GET /api/clusters/{id}`
 ///
 /// The card, the broker list, and `DescribeCluster` where the cluster answers
@@ -93,7 +127,7 @@ pub async fn fleet(
 /// renders, with a note.
 #[utoipa::path(
     get,
-    path = "/api/clusters/{id}",
+    path = "/api/environments/{env}/clusters/{id}",
     params(("id" = String, Path, description = "Cluster id")),
     responses(
         (status = 200, description = "Cluster detail", body = Envelope<ClusterDetail>),
@@ -105,9 +139,9 @@ pub async fn fleet(
 pub async fn detail(
     State(state): State<AppState>,
     caller: Caller,
-    Path(id): Path<String>,
+    Path((env, id)): Path<(String, String)>,
 ) -> ApiResult<Json<Envelope<ClusterDetail>>> {
-    let (handle, admin) = state.connected(&id, &caller)?;
+    let (handle, admin) = state.connected(&env, &id, &caller)?;
     caller.require(
         &id,
         &handle.labels,
@@ -145,7 +179,7 @@ pub async fn detail(
 /// `GET /api/clusters/{id}/brokers`
 #[utoipa::path(
     get,
-    path = "/api/clusters/{id}/brokers",
+    path = "/api/environments/{env}/clusters/{id}/brokers",
     params(("id" = String, Path, description = "Cluster id")),
     responses((status = 200, description = "Brokers", body = Envelope<Broker>)),
     tag = "clusters",
@@ -153,9 +187,9 @@ pub async fn detail(
 pub async fn brokers(
     State(state): State<AppState>,
     caller: Caller,
-    Path(id): Path<String>,
+    Path((env, id)): Path<(String, String)>,
 ) -> ApiResult<Json<Envelope<Broker>>> {
-    let (handle, admin) = state.connected(&id, &caller)?;
+    let (handle, admin) = state.connected(&env, &id, &caller)?;
     caller.require(
         &id,
         &handle.labels,
@@ -186,8 +220,9 @@ pub async fn brokers(
 /// per-node rather than a fan-out that one dead broker can blank.
 #[utoipa::path(
     get,
-    path = "/api/clusters/{id}/brokers/{node}/log-dirs",
+    path = "/api/environments/{env}/clusters/{id}/brokers/{node}/log-dirs",
     params(
+        ("env" = String, Path, description = "Environment id"),
         ("id" = String, Path, description = "Cluster id"),
         ("node" = i32, Path, description = "Broker node id"),
     ),
@@ -197,9 +232,9 @@ pub async fn brokers(
 pub async fn log_dirs(
     State(state): State<AppState>,
     caller: Caller,
-    Path((id, node)): Path<(String, i32)>,
+    Path((env, id, node)): Path<(String, String, i32)>,
 ) -> ApiResult<Json<Envelope<LogDirDto>>> {
-    let (handle, admin) = state.connected(&id, &caller)?;
+    let (handle, admin) = state.connected(&env, &id, &caller)?;
     caller.require(
         &id,
         &handle.labels,

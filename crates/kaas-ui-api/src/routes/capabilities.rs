@@ -30,8 +30,9 @@ pub struct CapabilityQuery {
 /// renders that as "as reported by broker 1".
 #[utoipa::path(
     get,
-    path = "/api/clusters/{id}/capabilities",
+    path = "/api/environments/{env}/clusters/{id}/capabilities",
     params(
+        ("env" = String, Path, description = "Environment id"),
         ("id" = String, Path, description = "Cluster id"),
         ("broker" = Option<i32>, Query, description = "Read the table from this broker"),
     ),
@@ -45,10 +46,10 @@ pub struct CapabilityQuery {
 pub async fn capabilities(
     State(state): State<AppState>,
     caller: Caller,
-    Path(id): Path<String>,
+    Path((env, id)): Path<(String, String)>,
     Query(query): Query<CapabilityQuery>,
 ) -> ApiResult<Json<Capabilities>> {
-    let (handle, admin) = state.connected(&id, &caller)?;
+    let (handle, admin) = state.connected(&env, &id, &caller)?;
     caller.require(
         &id,
         &handle.labels,

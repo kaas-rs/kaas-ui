@@ -87,19 +87,25 @@ roles:
       - resource: consumer
         actions: [view]
 
-clusters:
-  - id: kaas
-    name: kaas
-    bootstrap: ["kaas.kaas.svc.cluster.local:9092"]
-    labels:
-      env: dev
-      kind: kaas
-    refresh_interval: 30s
+# The fleet: environments, and everything else nested inside one. A cluster is
+# in `dev` because it is declared there — the `env` label it used to carry is
+# derived from the nesting now, so a role's `cluster_labels: {env: dev}`
+# selector still matches and can no longer disagree with where the block sits.
+environments:
+  - id: dev
+    name: Development
+    kafka_clusters:
+      - id: kaas
+        name: kaas
+        bootstrap: ["kaas.kaas.svc.cluster.local:9092"]
+        labels:
+          kind: kaas
+        refresh_interval: 30s
 
-  - id: strimzi
-    name: kafka-cluster
-    bootstrap: ["kafka-cluster-kafka-bootstrap.strimzi.svc.cluster.local:9092"]
-    labels:
-      env: dev
-      kind: strimzi
-    refresh_interval: 30s
+      - id: strimzi
+        name: kafka-cluster
+        bootstrap:
+          ["kafka-cluster-kafka-bootstrap.strimzi.svc.cluster.local:9092"]
+        labels:
+          kind: strimzi
+        refresh_interval: 30s

@@ -177,10 +177,11 @@ mod tests {
     fn state(policy: Policy) -> AppState {
         let config = Config::from_yaml(
             r"
-clusters:
+environments:
   - id: dev
-    bootstrap: ['localhost:9092']
-    labels: { env: dev }
+    kafka_clusters:
+      - id: kaas
+        bootstrap: ['localhost:9092']
 ",
         )
         .expect("the fixture config parses");

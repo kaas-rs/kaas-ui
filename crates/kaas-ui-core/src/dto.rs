@@ -21,7 +21,7 @@ use utoipa::ToSchema;
 use kaas_ui_auth::{Access, Action, Principal, Resource};
 use kaas_ui_serde::{DETAIL_PAYLOAD_CHARS, MAX_PAYLOAD_CHARS, PREVIEW_CHARS};
 
-use crate::config::{ResourceEntry, ResourceKind};
+use crate::config::{EnvironmentEntry, ResourceEntry, ResourceKind};
 use crate::decode::{DecodedRecord, PayloadDecoder};
 use crate::health::{ClusterHealth, ClusterStatus};
 use crate::registry::{ClusterHandle, Registry};
@@ -182,7 +182,10 @@ impl Identity {
 #[derive(Debug, Clone, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ClusterCard {
-    /// The configured id.
+    /// The environment holding it — the first segment of every URL that
+    /// reaches it, and half of what identifies it.
+    pub environment: String,
+    /// The configured id, unique within that environment.
     pub id: String,
     /// The configured name.
     pub name: String,
@@ -255,6 +258,7 @@ impl ClusterCard {
         };
 
         let mut card = Self {
+            environment: handle.environment.clone(),
             id: handle.id.clone(),
             name: handle.name.clone(),
             labels: handle.labels.clone(),
@@ -282,11 +286,6 @@ impl ClusterCard {
             card.absorb(&snapshot);
         }
         card
-    }
-
-    /// The environment this card belongs in, `None` when it is in none.
-    fn environment(&self) -> Option<&str> {
-        self.labels.get("env").map(String::as_str)
     }
 
     fn absorb(&mut self, snapshot: &MetadataSnapshot) {
@@ -340,15 +339,21 @@ pub struct ResourceCard {
     pub labels: BTreeMap<String, String>,
 }
 
-impl From<&ResourceEntry> for ResourceCard {
-    fn from(entry: &ResourceEntry) -> Self {
+impl ResourceCard {
+    /// Project an inventory entry, given the environment it sits in.
+    ///
+    /// The environment is a parameter rather than a field on the entry now:
+    /// nesting says where it is, so the only way for the card's `env` label to
+    /// disagree with its section would be for this call to be passed the wrong
+    /// one, and there is one caller.
+    pub fn of(environment: &str, entry: &ResourceEntry) -> Self {
         Self {
             id: entry.id.clone(),
             name: entry.display_name().to_owned(),
             kind: entry.kind,
             endpoint: entry.endpoint.clone(),
             note: entry.note.clone(),
-            labels: entry.effective_labels(),
+            labels: entry.effective_labels(environment),
         }
     }
 }
@@ -362,90 +367,146 @@ impl From<&ResourceEntry> for ResourceCard {
 #[derive(Debug, Clone, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct EnvironmentSection {
-    /// The `env` label this section collects, empty for the clusters that
-    /// carry none.
+    /// The configured id, and the first segment of every URL beneath it.
+    ///
+    /// There is no longer an unnamed section: an environment is a declared
+    /// block, so a cluster cannot arrive in one nobody wrote down.
     pub id: String,
     /// The name to render.
     pub name: String,
     /// The declared description, where there is one.
     pub description: Option<String>,
-    /// Whether the environment was declared, or discovered from a label.
-    pub declared: bool,
-    /// The Kafka clusters, in the order the registry lists them.
+    /// The Kafka clusters in it, in configured order.
     pub clusters: Vec<ClusterCard>,
+    /// The schema registries in it that this caller may read.
+    pub schema_registries: Vec<EnvironmentRegistry>,
     /// Everything else, in configured order.
     pub resources: Vec<ResourceCard>,
 }
 
+/// A schema registry inside an environment.
+///
+/// Distinct from the [`ResourceCard`] beside it: that is an inventory line an
+/// operator typed, with its own id and no connection to anything. This one is
+/// the registry that decodes payloads, and it is addressable —
+/// `/api/environments/{env}/schema-registries/{id}`.
+///
+/// It gained that URL when environments did. A registry id is not a global
+/// namespace even so: it is reachable only under an environment the caller can
+/// already see, and only when they can see a cluster there that references it,
+/// which is the same rule `Registry::schema_registry` enforces on the way in.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentRegistry {
+    /// Id, name, url and health.
+    pub registry: RegistryCard,
+    /// The clusters in this environment that resolve payloads against it.
+    ///
+    /// Rendered as "who uses this", and it is only ever the visible ones —
+    /// the list is built from cards this caller already received.
+    pub used_by: Vec<String>,
+}
+
 impl EnvironmentSection {
-    /// Arrange already-built cards into sections.
+    /// Project one environment for one caller, or `None` if they see nothing
+    /// in it.
     ///
     /// Takes the cards rather than the handles because building one nudges an
     /// unreachable cluster to retry, and a function that decides page layout
     /// should not also be poking connectors.
     ///
-    /// **An empty section is dropped**, which is a visibility property and not
+    /// **An empty section is `None`**, which is a visibility property and not
     /// tidiness: rendering "Production" with nothing under it tells a caller
     /// who may not see prod that prod exists, and the 404-not-403 rule that
     /// keeps cluster ids unenumerable would have been undone one heading up.
+    pub fn of(
+        entry: &EnvironmentEntry,
+        cards: Vec<ClusterCard>,
+        registry: &Registry,
+        who: &Access,
+    ) -> Option<Self> {
+        let resources: Vec<ResourceCard> = registry
+            .resources_visible(who)
+            .filter(|(environment, _)| *environment == entry.id)
+            .map(|(environment, resource)| ResourceCard::of(environment, resource))
+            .collect();
+
+        if cards.is_empty() && resources.is_empty() {
+            return None;
+        }
+
+        Some(Self {
+            id: entry.id.clone(),
+            name: entry.display_name().to_owned(),
+            description: entry.description.clone(),
+            schema_registries: EnvironmentRegistry::of(entry, &cards, registry, who),
+            clusters: cards,
+            resources,
+        })
+    }
+
+    /// Every environment this caller can see, in declaration order.
+    ///
+    /// Declaration order is the whole reason this is assembled on the server:
+    /// "dev before staging before prod" is configuration, and nothing in the
+    /// browser can recover it from three strings.
     pub fn arrange(cards: Vec<ClusterCard>, registry: &Registry, who: &Access) -> Vec<Self> {
-        let mut clusters: BTreeMap<String, Vec<ClusterCard>> = BTreeMap::new();
+        let mut by_environment: BTreeMap<String, Vec<ClusterCard>> = BTreeMap::new();
         for card in cards {
-            let key = card.environment().unwrap_or_default().to_owned();
-            clusters.entry(key).or_default().push(card);
-        }
-
-        let mut resources: BTreeMap<String, Vec<ResourceCard>> = BTreeMap::new();
-        for entry in registry.resources_visible(who) {
-            resources
-                .entry(entry.environment.clone())
+            by_environment
+                .entry(card.environment.clone())
                 .or_default()
-                .push(ResourceCard::from(entry));
+                .push(card);
         }
 
-        // Declared first, in declaration order; then whatever `env` labels
-        // turned up, alphabetically; then the unlabelled, last, because a
-        // section with no name is a loose end rather than an environment.
-        let declared: Vec<String> = registry
+        registry
             .environments()
             .iter()
-            .map(|environment| environment.id.clone())
-            .collect();
-        let mut order: Vec<String> = declared.clone();
-        let mut discovered: Vec<String> = clusters
-            .keys()
-            .chain(resources.keys())
-            .filter(|id| !id.is_empty() && !declared.contains(id))
-            .cloned()
-            .collect();
-        discovered.sort();
-        discovered.dedup();
-        order.append(&mut discovered);
-        order.push(String::new());
+            .filter_map(|entry| {
+                let members = by_environment.remove(&entry.id).unwrap_or_default();
+                Self::of(entry, members, registry, who)
+            })
+            .collect()
+    }
+}
 
-        order
-            .into_iter()
-            .filter_map(|id| {
-                let members = clusters.remove(&id).unwrap_or_default();
-                let inventory = resources.remove(&id).unwrap_or_default();
-                if members.is_empty() && inventory.is_empty() {
-                    return None;
-                }
-                let entry = registry
-                    .environments()
+impl EnvironmentRegistry {
+    /// The registries of one environment that this caller may read.
+    ///
+    /// Listed from the *configuration* rather than from what the clusters
+    /// happen to reference, so a registry declared beside them is visible as
+    /// itself. Whether this caller may see it is
+    /// [`Registry::schema_registry`]'s decision and only its — the two used to
+    /// each hold half of the rule and disagreed about a registry nobody
+    /// references, which is exactly the case a reader most needs to see.
+    ///
+    /// `used_by` stays a *display* field: the visible clusters that decode
+    /// against it, empty when none do. An empty list is a real answer here —
+    /// "declared, and nothing uses it" — not a reason to drop the row.
+    fn of(
+        entry: &EnvironmentEntry,
+        members: &[ClusterCard],
+        registry: &Registry,
+        who: &Access,
+    ) -> Vec<Self> {
+        entry
+            .schema_registries
+            .iter()
+            .filter_map(|declared| {
+                let handle = registry.schema_registry(&entry.id, &declared.id, who)?;
+                let used_by: Vec<String> = members
                     .iter()
-                    .find(|environment| environment.id == id);
+                    .filter(|card| card.schema_registry.as_deref() == Some(declared.id.as_str()))
+                    .filter(|card| {
+                        card.grants
+                            .get(&Resource::Topic)
+                            .is_some_and(|actions| actions.contains(&Action::View))
+                    })
+                    .map(|card| card.id.clone())
+                    .collect();
                 Some(Self {
-                    name: match entry {
-                        Some(environment) => environment.display_name().to_owned(),
-                        None if id.is_empty() => "no environment".to_owned(),
-                        None => id.clone(),
-                    },
-                    description: entry.and_then(|environment| environment.description.clone()),
-                    declared: entry.is_some(),
-                    id,
-                    clusters: members,
-                    resources: inventory,
+                    registry: RegistryCard::of(handle),
+                    used_by,
                 })
             })
             .collect()
@@ -608,7 +669,15 @@ pub struct TopicSummary {
     pub offline_partition_count: usize,
     /// Partitions whose ISR is short.
     pub under_replicated_partition_count: usize,
-    /// Bytes on disk for one copy, when log dirs were asked for.
+    /// Records retained across every partition, when metrics were asked for.
+    ///
+    /// `latest - earliest` summed, which is what is *retained* rather than
+    /// what was ever written — the same distinction the partition table draws.
+    /// `None` when the metric was not requested, and also when any one
+    /// partition failed to answer: a sum missing a partition is a smaller
+    /// number, not a marked one, and nothing in the column would say so.
+    pub message_count: Option<i64>,
+    /// Bytes on disk for one copy, when metrics were asked for.
     pub logical_bytes: Option<i64>,
     /// Bytes on disk across replicas.
     pub replicated_bytes: Option<i64>,
@@ -638,17 +707,26 @@ impl TopicSummary {
                 .iter()
                 .filter(|p| p.under_replicated())
                 .count(),
+            message_count: None,
             logical_bytes: None,
             replicated_bytes: None,
         }
     }
 
     /// Attach sizes from `topic_sizes()`.
-    #[must_use]
-    pub fn with_size(mut self, size: &TopicSize) -> Self {
+    ///
+    /// A setter rather than a consuming `with_size`: enrichment walks a page of
+    /// rows it already owns, and a consuming builder there costs a full clone
+    /// of the row — two `String`s and six counters — to write two `i64`s.
+    /// `Partition::set_offsets` is the same shape for the same reason.
+    pub fn set_size(&mut self, size: &TopicSize) {
         self.logical_bytes = Some(size.logical_bytes);
         self.replicated_bytes = Some(size.replicated_bytes);
-        self
+    }
+
+    /// Attach the retained record count.
+    pub fn set_message_count(&mut self, records: i64) {
+        self.message_count = Some(records);
     }
 }
 
@@ -1521,35 +1599,30 @@ mod tests {
 
     use crate::config::Config;
 
-    /// A fleet with one declared-but-empty environment, one declared and
-    /// populated, one that exists only as a label, and one loose cluster.
+    /// A fleet with one empty environment, one holding clusters and
+    /// inventory, and one holding inventory alone.
     fn fleet() -> (Registry, Access) {
         let config = Config::from_yaml(
             r#"
 environments:
   - id: dev
     name: Development
+    schema_registries:
+      - id: apicurio
+        url: http://apicurio:8080/apis/ccompat/v7
+    kafka_clusters:
+      - id: kaas
+        bootstrap: ["a:9092"]
+        schema_registry: apicurio
+    resources:
+      - id: apicurio-dev
+        kind: schema_registry
   - id: staging
   - id: prod
     name: Production
-
-clusters:
-  - id: kaas
-    bootstrap: ["a:9092"]
-    labels: { env: dev }
-  - id: edge-one
-    bootstrap: ["b:9092"]
-    labels: { env: edge }
-  - id: loose
-    bootstrap: ["c:9092"]
-
-resources:
-  - id: apicurio-dev
-    kind: schema_registry
-    environment: dev
-  - id: mosquitto
-    kind: mqtt_broker
-    environment: prod
+    resources:
+      - id: mosquitto
+        kind: mqtt_broker
 "#,
         )
         .unwrap();
@@ -1565,28 +1638,30 @@ resources:
     }
 
     #[test]
-    fn sections_run_in_declared_order_then_discovered_then_loose() {
+    fn sections_run_in_declared_order() {
         let (registry, who) = fleet();
         let sections = arrange(&registry, &who);
         let ids: Vec<&str> = sections.iter().map(|section| section.id.as_str()).collect();
-        // `staging` is declared and empty, so it is absent; `edge` was never
-        // declared and sorts after everything that was; the unlabelled cluster
-        // lands in the nameless section, last.
-        assert_eq!(ids, ["dev", "prod", "edge", ""]);
+        // `staging` holds nothing at all, so it is absent. There is no
+        // discovered section and no nameless one any more: a cluster cannot
+        // arrive in an environment nobody wrote down, because there is nowhere
+        // to declare one outside an environment.
+        assert_eq!(ids, ["dev", "prod"]);
     }
 
     #[test]
     fn an_environment_holding_nothing_visible_is_absent_entirely() {
         // Not cosmetic. A heading over an empty grid tells a caller who cannot
         // see prod that prod exists, which is the 404-not-403 rule undone one
-        // level up.
+        // level up — and now also the rule that makes every URL beneath the
+        // environment unprobeable.
         let (registry, who) = fleet();
         let sections = arrange(&registry, &who);
         assert!(sections.iter().all(|section| section.id != "staging"));
     }
 
     #[test]
-    fn a_section_carries_both_its_clusters_and_its_other_resources() {
+    fn a_section_carries_its_clusters_its_registries_and_its_other_resources() {
         let (registry, who) = fleet();
         let sections = arrange(&registry, &who);
 
@@ -1594,47 +1669,184 @@ resources:
         assert_eq!(dev.name, "Development");
         assert_eq!(dev.clusters.len(), 1);
         assert_eq!(dev.resources.len(), 1);
-        assert!(dev.declared);
+        // The registry is a peer of the cluster now, not something reached
+        // through it, and it names the clusters that decode against it.
+        assert_eq!(dev.schema_registries.len(), 1);
+        assert_eq!(dev.schema_registries[0].registry.id, "apicurio");
+        assert_eq!(dev.schema_registries[0].used_by, vec!["kaas".to_owned()]);
 
         // An environment can hold no cluster at all and still be a section:
-        // prod here is a registry and a broker kaas-ui does not speak.
+        // prod here is a broker kaas-ui does not speak.
         let prod = sections.iter().find(|s| s.id == "prod").unwrap();
         assert!(prod.clusters.is_empty());
+        assert!(prod.schema_registries.is_empty());
         assert_eq!(prod.resources[0].kind, ResourceKind::MqttBroker);
-
-        // Discovered from a label: it renders, it just has no chosen name.
-        let edge = sections.iter().find(|s| s.id == "edge").unwrap();
-        assert_eq!(edge.name, "edge");
-        assert!(!edge.declared);
     }
 
     #[test]
-    fn a_caller_who_cannot_see_prod_is_not_told_that_prod_exists() {
-        // The leak this ordering exists to prevent: the clusters are hidden by
-        // the label selector, and a schema registry sitting in the same
-        // environment would announce it right back if resources were not
-        // filtered by the same test.
+    fn a_cluster_card_carries_the_environment_that_addresses_it() {
+        let (registry, who) = fleet();
+        let sections = arrange(&registry, &who);
+        let card = &sections.iter().find(|s| s.id == "dev").unwrap().clusters[0];
+        // Half of its identity, and the first segment of every URL that
+        // reaches it. A client cannot build one without this.
+        assert_eq!(card.environment, "dev");
+        assert_eq!(card.id, "kaas");
+    }
+
+    #[test]
+    fn a_registry_nobody_references_is_still_listed() {
+        // The bug this pins. "No *visible* cluster uses it" and "no cluster
+        // uses it at all" were one branch, so declaring a second registry made
+        // it silently vanish — which is the opposite of what a reader needs
+        // from a registry nothing decodes against. It names no cluster, so
+        // there is nothing to leak by showing it.
         let config = Config::from_yaml(
             r#"
 environments:
   - id: dev
+    schema_registries:
+      - id: apicurio
+        url: http://apicurio:8080/apis/ccompat/v7
+      - id: apicurio2
+        url: http://apicurio:8080/apis/ccompat/v7
+    kafka_clusters:
+      - id: kaas
+        bootstrap: ["a:9092"]
+        schema_registry: apicurio
+"#,
+        )
+        .unwrap();
+        let registry = Registry::from_config(&config).unwrap();
+        let who = Access::admin();
+
+        let dev = &arrange(&registry, &who)[0];
+        let listed: Vec<(&str, usize)> = dev
+            .schema_registries
+            .iter()
+            .map(|entry| (entry.registry.id.as_str(), entry.used_by.len()))
+            .collect();
+        assert_eq!(listed, vec![("apicurio", 1), ("apicurio2", 0)]);
+        // And it is reachable, not merely rendered.
+        assert!(registry.schema_registry("dev", "apicurio2", &who).is_some());
+    }
+
+    #[test]
+    fn a_registry_only_hidden_clusters_use_stays_hidden() {
+        // The other half, and the reason the branch existed at all: this one
+        // *is* referenced, and every cluster referencing it is invisible to
+        // this caller. Naming it would say a cluster is there.
+        let config = Config::from_yaml(
+            r#"
+environments:
+  - id: dev
+    schema_registries:
+      - id: open
+        url: http://open:8080/apis/ccompat/v7
+      - id: secret
+        url: http://secret:8080/apis/ccompat/v7
+    kafka_clusters:
+      - id: kaas
+        bootstrap: ["a:9092"]
+        labels: { tier: public }
+        schema_registry: open
+      - id: hidden
+        bootstrap: ["b:9092"]
+        labels: { tier: private }
+        schema_registry: secret
+
+roles:
+  - name: public-only
+    subjects: ["everyone"]
+    cluster_labels: { tier: public }
+    permissions:
+      - resource: topic
+        actions: [view]
+"#,
+        )
+        .unwrap();
+        let registry = Registry::from_config(&config).unwrap();
+        let policy = kaas_ui_auth::Policy::enforcing(config.roles.clone());
+        let who = policy.access(&Principal::new("u").with_groups(["everyone".to_owned()]));
+
+        let dev = &arrange(&registry, &who)[0];
+        let listed: Vec<&str> = dev
+            .schema_registries
+            .iter()
+            .map(|entry| entry.registry.id.as_str())
+            .collect();
+        assert_eq!(listed, vec!["open"]);
+        assert!(registry.schema_registry("dev", "secret", &who).is_none());
+    }
+
+    #[test]
+    fn seeing_a_cluster_is_not_permission_to_read_its_subjects() {
+        // `Resource::Topic` + `view` guards a topic name, and a subject name
+        // is metadata of the same kind. The lookup carries the whole decision
+        // for the subject list, so it has to carry this half too — visibility
+        // alone would have been a weaker gate than the one it replaced.
+        let config = Config::from_yaml(
+            r#"
+environments:
+  - id: dev
+    schema_registries:
+      - id: apicurio
+        url: http://apicurio:8080/apis/ccompat/v7
+    kafka_clusters:
+      - id: kaas
+        bootstrap: ["a:9092"]
+        schema_registry: apicurio
+
+roles:
+  - name: configs-only
+    subjects: ["ops"]
+    cluster_labels: { env: dev }
+    permissions:
+      - resource: cluster_config
+        actions: [view]
+"#,
+        )
+        .unwrap();
+        let registry = Registry::from_config(&config).unwrap();
+        let policy = kaas_ui_auth::Policy::enforcing(config.roles.clone());
+        let who = policy.access(&Principal::new("u").with_groups(["ops".to_owned()]));
+
+        // The cluster is visible to them; the registry is not.
+        assert!(registry.get("dev", "kaas", &who).is_some());
+        assert!(registry.schema_registry("dev", "apicurio", &who).is_none());
+    }
+
+    #[test]
+    fn a_caller_who_cannot_see_prod_is_not_told_that_prod_exists() {
+        // The leak this filtering exists to prevent: the clusters are hidden by
+        // the label selector, and a schema registry sitting in the same
+        // environment would announce it right back if resources and registries
+        // were not filtered by the same test.
+        let config = Config::from_yaml(
+            r#"
+environments:
+  - id: dev
+    schema_registries:
+      - id: apicurio
+        url: http://dev:8080/apis/ccompat/v7
+    kafka_clusters:
+      - id: kaas
+        bootstrap: ["a:9092"]
+        schema_registry: apicurio
+    resources:
+      - id: apicurio-dev
+        kind: schema_registry
   - id: prod
-
-clusters:
-  - id: kaas
-    bootstrap: ["a:9092"]
-    labels: { env: dev }
-  - id: prod-eu
-    bootstrap: ["b:9092"]
-    labels: { env: prod }
-
-resources:
-  - id: apicurio-dev
-    kind: schema_registry
-    environment: dev
-  - id: apicurio-prod
-    kind: schema_registry
-    environment: prod
+    schema_registries:
+      - id: apicurio
+        url: http://prod:8080/apis/ccompat/v7
+    kafka_clusters:
+      - id: prod-eu
+        bootstrap: ["b:9092"]
+        schema_registry: apicurio
+    resources:
+      - id: apicurio-prod
+        kind: schema_registry
 
 roles:
   - name: dev-only
@@ -1656,6 +1868,12 @@ roles:
         assert_eq!(ids, ["dev"]);
         assert_eq!(sections[0].resources.len(), 1);
         assert_eq!(sections[0].resources[0].id, "apicurio-dev");
+        // Both environments declare an `apicurio`. The id is scoped, so seeing
+        // dev's says nothing about prod's — and the lookup refuses prod's to
+        // this caller even though the id is one they know.
+        assert_eq!(sections[0].schema_registries.len(), 1);
+        assert!(registry.schema_registry("prod", "apicurio", &who).is_none());
+        assert!(registry.schema_registry("dev", "apicurio", &who).is_some());
     }
 
     #[test]

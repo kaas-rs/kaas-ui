@@ -171,11 +171,45 @@ impl AppState {
     /// A cluster that is not configured — or, from the auth phase onward, one
     /// the caller may not see — is `404`. Not `403`: a 403 confirms the id
     /// exists, and confirming ids is how a registry becomes enumerable.
-    pub fn cluster(&self, id: &str, who: &Caller) -> ApiResult<Arc<ClusterHandle>> {
+    pub fn cluster(&self, env: &str, id: &str, who: &Caller) -> ApiResult<Arc<ClusterHandle>> {
         self.registry()
-            .get(id, who.access())
+            .get(env, id, who.access())
             .map(Arc::clone)
-            .ok_or_else(|| ApiError::not_found(format!("no cluster {id:?}")))
+            // One message for "no such environment", "no such cluster in it"
+            // and "not yours", because telling them apart is exactly what a
+            // prober wants and the 404-not-403 rule exists to refuse.
+            .ok_or_else(|| ApiError::not_found(format!("no cluster {id:?} in environment {env:?}")))
+    }
+
+    /// An environment, or `404` if this caller sees nothing in it.
+    pub fn environment(
+        &self,
+        env: &str,
+        who: &Caller,
+    ) -> ApiResult<kaas_ui_core::config::EnvironmentEntry> {
+        self.registry()
+            .environment(env, who.access())
+            .cloned()
+            .ok_or_else(|| ApiError::not_found(format!("no environment {env:?}")))
+    }
+
+    /// A schema registry, or `404`.
+    ///
+    /// Guarded by the same lookup rule as a cluster and for the same reason —
+    /// a registry is addressable now, so it needs to be unenumerable on its
+    /// own rather than by being unreachable.
+    pub fn schema_registry(
+        &self,
+        env: &str,
+        id: &str,
+        who: &Caller,
+    ) -> ApiResult<Arc<kaas_ui_serde::RegistryHandle>> {
+        self.registry()
+            .schema_registry(env, id, who.access())
+            .map(Arc::clone)
+            .ok_or_else(|| {
+                ApiError::not_found(format!("no schema registry {id:?} in environment {env:?}"))
+            })
     }
 
     /// A connected cluster, or `503` with what the connector last saw.
@@ -184,8 +218,13 @@ impl AppState {
     /// that failed, answers immediately — and gets nudged to retry now rather
     /// than at the end of its backoff, which is what the card's retry button
     /// is wired to.
-    pub fn connected(&self, id: &str, who: &Caller) -> ApiResult<(Arc<ClusterHandle>, Arc<Admin>)> {
-        let handle = self.cluster(id, who)?;
+    pub fn connected(
+        &self,
+        env: &str,
+        id: &str,
+        who: &Caller,
+    ) -> ApiResult<(Arc<ClusterHandle>, Arc<Admin>)> {
+        let handle = self.cluster(env, id, who)?;
         match handle.admin() {
             Some(admin) => Ok((handle, admin)),
             None => {
@@ -250,59 +289,89 @@ fn api_router() -> Router<AppState> {
         // Who is asking. Above the clusters because it is the answer that
         // decides which of them exist for this caller.
         .route("/me", get(me::me))
-        // The landing page: the same clusters, sectioned by environment and
-        // holding whatever else was configured beside them.
-        .route("/fleet", get(clusters::fleet))
-        .route("/clusters", get(clusters::list))
-        .route("/clusters/{id}", get(clusters::detail))
+        // The fleet: every environment this caller can see, and everything in
+        // one. The entry point, and the only route that does not name an
+        // environment — because it is what tells you which ones there are.
+        .route("/environments", get(clusters::fleet))
+        .route("/environments/{env}", get(clusters::environment))
+        // Everything below is addressed environment-first. A cluster id alone
+        // addresses nothing: two environments may each hold a `kafka`, and the
+        // lookup that decides whether you may see either takes both halves.
+        .route("/environments/{env}/clusters", get(clusters::list))
+        .route("/environments/{env}/clusters/{id}", get(clusters::detail))
         .route(
-            "/clusters/{id}/capabilities",
+            "/environments/{env}/clusters/{id}/capabilities",
             get(capabilities::capabilities),
         )
-        .route("/clusters/{id}/brokers", get(clusters::brokers))
         .route(
-            "/clusters/{id}/brokers/{node}/log-dirs",
+            "/environments/{env}/clusters/{id}/brokers",
+            get(clusters::brokers),
+        )
+        .route(
+            "/environments/{env}/clusters/{id}/brokers/{node}/log-dirs",
             get(clusters::log_dirs),
         )
-        .route("/clusters/{id}/configs", get(configs::cluster_configs))
-        .route("/clusters/{id}/topics", get(topics::list))
-        .route("/clusters/{id}/topics/{topic}", get(topics::detail))
         .route(
-            "/clusters/{id}/topics/{topic}/configs",
+            "/environments/{env}/clusters/{id}/configs",
+            get(configs::cluster_configs),
+        )
+        .route(
+            "/environments/{env}/clusters/{id}/topics",
+            get(topics::list),
+        )
+        .route(
+            "/environments/{env}/clusters/{id}/topics/{topic}",
+            get(topics::detail),
+        )
+        .route(
+            "/environments/{env}/clusters/{id}/topics/{topic}/configs",
             get(configs::topic_configs),
         )
         .route(
-            "/clusters/{id}/topics/{topic}/offsets",
+            "/environments/{env}/clusters/{id}/topics/{topic}/offsets",
             get(topics::offsets),
         )
         .route(
-            "/clusters/{id}/topics/{topic}/messages",
+            "/environments/{env}/clusters/{id}/topics/{topic}/messages",
             get(messages::page),
         )
         .route(
-            "/clusters/{id}/topics/{topic}/messages/tail",
+            "/environments/{env}/clusters/{id}/topics/{topic}/messages/tail",
             get(messages::tail),
         )
         .route(
-            "/clusters/{id}/topics/{topic}/messages/stream",
+            "/environments/{env}/clusters/{id}/topics/{topic}/messages/stream",
             get(messages::stream),
         )
         // Two path parameters rather than a query, because a record's identity
         // *is* `{partition}-{offset}` — the same string the list keys on, the
         // SSE `id:` carries and the query cache is keyed by.
         .route(
-            "/clusters/{id}/topics/{topic}/messages/{partition}/{offset}",
+            "/environments/{env}/clusters/{id}/topics/{topic}/messages/{partition}/{offset}",
             get(messages::one),
         )
-        .route("/clusters/{id}/groups", get(groups::list))
-        .route("/clusters/{id}/groups/{group}", get(groups::detail))
         .route(
-            "/clusters/{id}/groups/{group}/offsets",
+            "/environments/{env}/clusters/{id}/groups",
+            get(groups::list),
+        )
+        .route(
+            "/environments/{env}/clusters/{id}/groups/{group}",
+            get(groups::detail),
+        )
+        .route(
+            "/environments/{env}/clusters/{id}/groups/{group}/offsets",
             get(groups::offsets),
         )
-        .route("/clusters/{id}/schemas", get(schemas::list))
+        // A registry is a peer of a cluster inside an environment, not a
+        // feature of one. It got this URL when environments did: the id is
+        // scoped, and the lookup still refuses a caller who cannot see a
+        // cluster here that references it.
         .route(
-            "/clusters/{id}/schemas/{subject}/versions",
+            "/environments/{env}/schema-registries/{registry}/subjects",
+            get(schemas::list),
+        )
+        .route(
+            "/environments/{env}/schema-registries/{registry}/subjects/{subject}/versions",
             get(schemas::versions),
         )
 }
@@ -316,10 +385,11 @@ mod tests {
     fn state(policy: Policy) -> AppState {
         let config = Config::from_yaml(
             r#"
-clusters:
-  - id: kaas
-    bootstrap: ["kaas.kaas.svc.cluster.local:9092"]
-    labels: { env: dev }
+environments:
+  - id: dev
+    kafka_clusters:
+      - id: kaas
+        bootstrap: ["kaas.kaas.svc.cluster.local:9092"]
 "#,
         )
         .unwrap();
@@ -339,7 +409,7 @@ clusters:
     #[test]
     fn a_cluster_that_is_not_configured_is_not_found() {
         let error = state(Policy::open())
-            .cluster("secret", &anyone())
+            .cluster("dev", "secret", &anyone())
             .unwrap_err();
         assert_eq!(error.status(), axum::http::StatusCode::NOT_FOUND);
     }
@@ -356,10 +426,10 @@ clusters:
         let state = state(policy);
         let nobody = Caller::new(Principal::new("stranger"), Access::none());
 
-        let error = state.cluster("kaas", &nobody).unwrap_err();
+        let error = state.cluster("dev", "kaas", &nobody).unwrap_err();
         assert_eq!(error.status(), axum::http::StatusCode::NOT_FOUND);
         // And it is there for someone who can see it.
-        assert!(state.cluster("kaas", &anyone()).is_ok());
+        assert!(state.cluster("dev", "kaas", &anyone()).is_ok());
     }
 
     #[test]
@@ -367,7 +437,7 @@ clusters:
         // Nothing was asked of a broker, so this is not 502: the process
         // simply has not finished connecting, and the card says so.
         let error = state(Policy::open())
-            .connected("kaas", &anyone())
+            .connected("dev", "kaas", &anyone())
             .unwrap_err();
         assert_eq!(error.status(), axum::http::StatusCode::SERVICE_UNAVAILABLE);
     }

@@ -31,7 +31,29 @@
         }
       }
     },
-    "/api/clusters/{id}": {
+    "/api/environments": {
+      "get": {
+        "tags": [
+          "environments"
+        ],
+        "summary": "`GET /api/environments`",
+        "description": "The fleet: one section per environment, each holding its clusters, the\nschema registries beside them and whatever inventory was configured there.\n\nSectioned here rather than in the browser because the order is\nconfiguration. Environments come in declared order, and no client can\nrecover \"dev, staging, prod\" from three strings that sort the other way. An\nenvironment nothing visible lives in is absent from the response, so a\nheading never reports the existence of a cluster the caller may not see —\nwhich is also what makes every URL beneath it unprobeable.",
+        "operationId": "fleet",
+        "responses": {
+          "200": {
+            "description": "The fleet, by environment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope_EnvironmentSection"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/environments/{env}/clusters/{id}": {
       "get": {
         "tags": [
           "clusters"
@@ -44,6 +66,14 @@
             "name": "id",
             "in": "path",
             "description": "Cluster id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "env",
+            "in": "path",
             "required": true,
             "schema": {
               "type": "string"
@@ -70,7 +100,7 @@
         }
       }
     },
-    "/api/clusters/{id}/brokers": {
+    "/api/environments/{env}/clusters/{id}/brokers": {
       "get": {
         "tags": [
           "clusters"
@@ -82,6 +112,14 @@
             "name": "id",
             "in": "path",
             "description": "Cluster id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "env",
+            "in": "path",
             "required": true,
             "schema": {
               "type": "string"
@@ -102,7 +140,7 @@
         }
       }
     },
-    "/api/clusters/{id}/brokers/{node}/log-dirs": {
+    "/api/environments/{env}/clusters/{id}/brokers/{node}/log-dirs": {
       "get": {
         "tags": [
           "clusters"
@@ -111,6 +149,15 @@
         "description": "One of the four RPCs that go to a *specific* broker. A broker that is down\nyields an error for that node, not for the call — which is why this is\nper-node rather than a fan-out that one dead broker can blank.",
         "operationId": "log_dirs",
         "parameters": [
+          {
+            "name": "env",
+            "in": "path",
+            "description": "Environment id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
           {
             "name": "id",
             "in": "path",
@@ -145,7 +192,7 @@
         }
       }
     },
-    "/api/clusters/{id}/capabilities": {
+    "/api/environments/{env}/clusters/{id}/capabilities": {
       "get": {
         "tags": [
           "capabilities"
@@ -154,6 +201,15 @@
         "description": "kaas-lib's version table is **per connection**, deliberately: brokers\nmid-rolling-upgrade genuinely disagree, and a cluster-wide table would be\nwrong during exactly the window when being right matters. There is no\n`cluster.capabilities()` to project from, and fabricating one by using\nwhichever connection answered gives a UI whose tabs flicker.\n\nSo the table is read from an **explicitly named** broker — the lowest node\nid unless `?broker=` says otherwise — and `source` says which. The UI\nrenders that as \"as reported by broker 1\".",
         "operationId": "capabilities",
         "parameters": [
+          {
+            "name": "env",
+            "in": "path",
+            "description": "Environment id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
           {
             "name": "id",
             "in": "path",
@@ -194,7 +250,7 @@
         }
       }
     },
-    "/api/clusters/{id}/configs": {
+    "/api/environments/{env}/clusters/{id}/configs": {
       "get": {
         "tags": [
           "configs"
@@ -202,6 +258,15 @@
         "summary": "`GET /api/clusters/{id}/configs?resource=broker:1`",
         "operationId": "cluster_configs",
         "parameters": [
+          {
+            "name": "env",
+            "in": "path",
+            "description": "Environment id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
           {
             "name": "id",
             "in": "path",
@@ -235,7 +300,7 @@
         }
       }
     },
-    "/api/clusters/{id}/groups": {
+    "/api/environments/{env}/clusters/{id}/groups": {
       "get": {
         "tags": [
           "groups"
@@ -247,6 +312,14 @@
             "name": "id",
             "in": "path",
             "description": "Cluster id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "env",
+            "in": "path",
             "required": true,
             "schema": {
               "type": "string"
@@ -267,7 +340,7 @@
         }
       }
     },
-    "/api/clusters/{id}/groups/{group}": {
+    "/api/environments/{env}/clusters/{id}/groups/{group}": {
       "get": {
         "tags": [
           "groups"
@@ -276,6 +349,15 @@
         "description": "Four kinds, not one struct with optional fields. `Unrecognized` is a\n*successful* description of an undescribable group — it exists, it is\nlisted, and the UI can say what it is rather than showing a spinner that\nnever resolves.",
         "operationId": "detail",
         "parameters": [
+          {
+            "name": "env",
+            "in": "path",
+            "description": "Environment id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
           {
             "name": "id",
             "in": "path",
@@ -309,7 +391,7 @@
         }
       }
     },
-    "/api/clusters/{id}/groups/{group}/offsets": {
+    "/api/environments/{env}/clusters/{id}/groups/{group}/offsets": {
       "get": {
         "tags": [
           "groups"
@@ -318,6 +400,15 @@
         "description": "Committed offsets joined to the log ends, so lag can be classified rather\nthan subtracted. \"No commit yet\", \"empty partition\", \"caught up\" and\n\"behind by n\" are four different answers and rendering them all as `0` is\nhow a lag column becomes something nobody trusts.",
         "operationId": "offsets",
         "parameters": [
+          {
+            "name": "env",
+            "in": "path",
+            "description": "Environment id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
           {
             "name": "id",
             "in": "path",
@@ -351,80 +442,7 @@
         }
       }
     },
-    "/api/clusters/{id}/schemas": {
-      "get": {
-        "tags": [
-          "schemas"
-        ],
-        "summary": "`GET /api/clusters/{id}/schemas`",
-        "operationId": "list",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "description": "Cluster id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "The subjects of the registry this cluster uses",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SubjectList"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/clusters/{id}/schemas/{subject}/versions": {
-      "get": {
-        "tags": [
-          "schemas"
-        ],
-        "summary": "`GET /api/clusters/{id}/schemas/{subject}/versions`",
-        "operationId": "versions",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "description": "Cluster id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "subject",
-            "in": "path",
-            "description": "Subject name",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Every registered version of a subject",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SubjectDetail"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/clusters/{id}/topics": {
+    "/api/environments/{env}/clusters/{id}/topics": {
       "get": {
         "tags": [
           "topics"
@@ -432,6 +450,15 @@
         "summary": "`GET /api/clusters/{id}/topics`",
         "operationId": "list",
         "parameters": [
+          {
+            "name": "env",
+            "in": "path",
+            "description": "Environment id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
           {
             "name": "id",
             "in": "path",
@@ -462,7 +489,7 @@
           {
             "name": "sort",
             "in": "query",
-            "description": "name | partitions | size | underReplicated",
+            "description": "name | partitions | messages | size | underReplicated",
             "required": false,
             "schema": {
               "type": "string"
@@ -498,9 +525,9 @@
             }
           },
           {
-            "name": "sizes",
+            "name": "metrics",
             "in": "query",
-            "description": "Fetch per-topic sizes",
+            "description": "Fetch message counts and sizes",
             "required": false,
             "schema": {
               "type": "boolean"
@@ -530,7 +557,7 @@
         }
       }
     },
-    "/api/clusters/{id}/topics/{topic}": {
+    "/api/environments/{env}/clusters/{id}/topics/{topic}": {
       "get": {
         "tags": [
           "topics"
@@ -539,6 +566,15 @@
         "description": "`describe_topics` prefers `DescribeTopicPartitions` and falls back to\n`Metadata` where the newer call is unreachable. Both branches are live\nagainst the two development clusters, and **there is no branch here** —\nwhich is the claim that a partially-implemented broker is indistinguishable\nfrom an old one, made good.",
         "operationId": "detail",
         "parameters": [
+          {
+            "name": "env",
+            "in": "path",
+            "description": "Environment id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
           {
             "name": "id",
             "in": "path",
@@ -581,7 +617,7 @@
         }
       }
     },
-    "/api/clusters/{id}/topics/{topic}/configs": {
+    "/api/environments/{env}/clusters/{id}/topics/{topic}/configs": {
       "get": {
         "tags": [
           "configs"
@@ -589,6 +625,15 @@
         "summary": "`GET /api/clusters/{id}/topics/{topic}/configs`",
         "operationId": "topic_configs",
         "parameters": [
+          {
+            "name": "env",
+            "in": "path",
+            "description": "Environment id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
           {
             "name": "id",
             "in": "path",
@@ -622,7 +667,7 @@
         }
       }
     },
-    "/api/clusters/{id}/topics/{topic}/messages": {
+    "/api/environments/{env}/clusters/{id}/topics/{topic}/messages": {
       "get": {
         "tags": [
           "messages"
@@ -631,6 +676,15 @@
         "description": "One bounded page, as a plain JSON resource. The same seven modes as the\nstream and the same rows — a \"load more\" button must not produce rows that\ndiffer in shape from the ones already on screen.",
         "operationId": "page",
         "parameters": [
+          {
+            "name": "env",
+            "in": "path",
+            "description": "Environment id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
           {
             "name": "id",
             "in": "path",
@@ -757,7 +811,7 @@
         }
       }
     },
-    "/api/clusters/{id}/topics/{topic}/messages/stream": {
+    "/api/environments/{env}/clusters/{id}/topics/{topic}/messages/stream": {
       "get": {
         "tags": [
           "messages"
@@ -766,6 +820,15 @@
         "description": "The seven seek modes, over `text/event-stream`. Events are `messages`,\n`progress`, `phase`, `dropped` and `error`; the `id:` on a `messages` event\nis `{partition}-{offset}` of its last row.\n\nAn `error` event carries the same `ResourceError` shape the rest of the API\nuses, so an `UnsupportedApi` arrives with **both** version ranges intact and\nthe reader can tell \"this cluster does not implement it\" from \"this build\ncannot speak it\". That distinction is the entire reason the variant carries\ntwo ranges, and flattening it into a message string discards it.",
         "operationId": "stream",
         "parameters": [
+          {
+            "name": "env",
+            "in": "path",
+            "description": "Environment id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
           {
             "name": "id",
             "in": "path",
@@ -864,7 +927,7 @@
         }
       }
     },
-    "/api/clusters/{id}/topics/{topic}/messages/tail": {
+    "/api/environments/{env}/clusters/{id}/topics/{topic}/messages/tail": {
       "get": {
         "tags": [
           "messages"
@@ -873,6 +936,15 @@
         "description": "`TailSpec::limit` is a per-topic target that kaas-lib spreads across\npartitions with `div_ceil`, so asking for 20 on a 16-partition topic\ngenuinely fetches 32. \"The last n of a topic\" has no single answer across\npartitions, so this layer picks one and says so: **the n most recent by\ntimestamp**, merged across partitions and truncated after the fact.\n`total` reports how many were fetched before truncation.",
         "operationId": "tail",
         "parameters": [
+          {
+            "name": "env",
+            "in": "path",
+            "description": "Environment id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
           {
             "name": "id",
             "in": "path",
@@ -943,7 +1015,7 @@
         }
       }
     },
-    "/api/clusters/{id}/topics/{topic}/messages/{partition}/{offset}": {
+    "/api/environments/{env}/clusters/{id}/topics/{topic}/messages/{partition}/{offset}": {
       "get": {
         "tags": [
           "messages"
@@ -952,6 +1024,15 @@
         "description": "The full payload of one record, fetched when a row is selected and never\nbefore. A record at a given offset never changes, so the frontend caches it\nwith `staleTime: Infinity` and re-selecting a row costs no request at all.\n\nImplemented with a one-record `scan` rather than the anchored tail the\nobvious reading suggests: both land on the right record, but only the scan\ncarries the **raw bytes of a batch that would not decode**, and a detail\npanel that cannot show those is useless for exactly the row that most needs\nexplaining.",
         "operationId": "one",
         "parameters": [
+          {
+            "name": "env",
+            "in": "path",
+            "description": "Environment id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
           {
             "name": "id",
             "in": "path",
@@ -1026,7 +1107,7 @@
         }
       }
     },
-    "/api/clusters/{id}/topics/{topic}/offsets": {
+    "/api/environments/{env}/clusters/{id}/topics/{topic}/offsets": {
       "get": {
         "tags": [
           "topics"
@@ -1034,6 +1115,15 @@
         "summary": "`GET /api/clusters/{id}/topics/{topic}/offsets`",
         "operationId": "offsets",
         "parameters": [
+          {
+            "name": "env",
+            "in": "path",
+            "description": "Environment id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
           {
             "name": "id",
             "in": "path",
@@ -1067,21 +1157,137 @@
         }
       }
     },
-    "/api/fleet": {
+    "/api/environments/{env}/schema-registries/{registry}/subjects": {
       "get": {
         "tags": [
-          "clusters"
+          "schemas"
         ],
-        "summary": "`GET /api/fleet`",
-        "description": "The same cards, arranged into the sections the landing page renders: one\nper environment, each holding its clusters and whatever else was configured\nbeside them — a schema registry, an MQTT broker.\n\nSectioned here rather than in the browser because the order is\nconfiguration. Declared environments come in declared order, and no client\ncan recover \"dev, staging, prod\" from three strings that sort the other\nway. An environment nothing visible lives in is absent from the response,\nso a heading never reports the existence of a cluster the caller may not\nsee.",
-        "operationId": "fleet",
+        "summary": "`GET /api/environments/{env}/schema-registries/{registry}/subjects`",
+        "operationId": "list",
+        "parameters": [
+          {
+            "name": "env",
+            "in": "path",
+            "description": "Environment id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Schema registry id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "description": "Substring match on the subject",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "description": "asc | desc, by name",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Page offset",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "details",
+            "in": "query",
+            "description": "Fetch id, format, version and compatibility",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
         "responses": {
           "200": {
-            "description": "The fleet, by environment",
+            "description": "The subjects of the registry this cluster uses",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Envelope_EnvironmentSection"
+                  "$ref": "#/components/schemas/SubjectList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/environments/{env}/schema-registries/{registry}/subjects/{subject}/versions": {
+      "get": {
+        "tags": [
+          "schemas"
+        ],
+        "summary": "`GET /api/environments/{env}/schema-registries/{registry}/subjects/{subject}/versions`",
+        "operationId": "versions",
+        "parameters": [
+          {
+            "name": "env",
+            "in": "path",
+            "description": "Environment id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "registry",
+            "in": "path",
+            "description": "Schema registry id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "subject",
+            "in": "path",
+            "description": "Subject name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every registered version of a subject",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubjectDetail"
                 }
               }
             }
@@ -1400,6 +1606,7 @@
         "type": "object",
         "description": "One cluster on the fleet dashboard.\n\nBuilt from `Cluster::snapshot()` and nothing else. The snapshot carries\nbrokers, controller id, cluster id and every partition's replicas, ISR and\noffline set — everything a card renders — and it works on clusters that do\nnot implement `DescribeCluster`. Enrichment that only some clusters can\nanswer belongs on the detail page, not on the landing page.",
         "required": [
+          "environment",
           "id",
           "name",
           "labels",
@@ -1441,6 +1648,10 @@
             "format": "int32",
             "description": "The controller, as the snapshot reports it."
           },
+          "environment": {
+            "type": "string",
+            "description": "The environment holding it — the first segment of every URL that\nreaches it, and half of what identifies it."
+          },
           "error": {
             "type": [
               "string",
@@ -1469,7 +1680,7 @@
           },
           "id": {
             "type": "string",
-            "description": "The configured id."
+            "description": "The configured id, unique within that environment."
           },
           "internalTopicCount": {
             "type": "integer",
@@ -1821,6 +2032,7 @@
               "type": "object",
               "description": "One cluster on the fleet dashboard.\n\nBuilt from `Cluster::snapshot()` and nothing else. The snapshot carries\nbrokers, controller id, cluster id and every partition's replicas, ISR and\noffline set — everything a card renders — and it works on clusters that do\nnot implement `DescribeCluster`. Enrichment that only some clusters can\nanswer belongs on the detail page, not on the landing page.",
               "required": [
+                "environment",
                 "id",
                 "name",
                 "labels",
@@ -1862,6 +2074,10 @@
                   "format": "int32",
                   "description": "The controller, as the snapshot reports it."
                 },
+                "environment": {
+                  "type": "string",
+                  "description": "The environment holding it — the first segment of every URL that\nreaches it, and half of what identifies it."
+                },
                 "error": {
                   "type": [
                     "string",
@@ -1890,7 +2106,7 @@
                 },
                 "id": {
                   "type": "string",
-                  "description": "The configured id."
+                  "description": "The configured id, unique within that environment."
                 },
                 "internalTopicCount": {
                   "type": "integer",
@@ -2142,8 +2358,8 @@
               "required": [
                 "id",
                 "name",
-                "declared",
                 "clusters",
+                "schemaRegistries",
                 "resources"
               ],
               "properties": {
@@ -2152,11 +2368,7 @@
                   "items": {
                     "$ref": "#/components/schemas/ClusterCard"
                   },
-                  "description": "The Kafka clusters, in the order the registry lists them."
-                },
-                "declared": {
-                  "type": "boolean",
-                  "description": "Whether the environment was declared, or discovered from a label."
+                  "description": "The Kafka clusters in it, in configured order."
                 },
                 "description": {
                   "type": [
@@ -2167,7 +2379,7 @@
                 },
                 "id": {
                   "type": "string",
-                  "description": "The `env` label this section collects, empty for the clusters that\ncarry none."
+                  "description": "The configured id, and the first segment of every URL beneath it.\n\nThere is no longer an unnamed section: an environment is a declared\nblock, so a cluster cannot arrive in one nobody wrote down."
                 },
                 "name": {
                   "type": "string",
@@ -2179,6 +2391,13 @@
                     "$ref": "#/components/schemas/ResourceCard"
                   },
                   "description": "Everything else, in configured order."
+                },
+                "schemaRegistries": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EnvironmentRegistry"
+                  },
+                  "description": "The schema registries in it that this caller may read."
                 }
               }
             },
@@ -3007,7 +3226,15 @@
                     "null"
                   ],
                   "format": "int64",
-                  "description": "Bytes on disk for one copy, when log dirs were asked for."
+                  "description": "Bytes on disk for one copy, when metrics were asked for."
+                },
+                "messageCount": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int64",
+                  "description": "Records retained across every partition, when metrics were asked for.\n\n`latest - earliest` summed, which is what is *retained* rather than\nwhat was ever written — the same distinction the partition table draws.\n`None` when the metric was not requested, and also when any one\npartition failed to answer: a sum missing a partition is a smaller\nnumber, not a marked one, and nothing in the column would say so."
                 },
                 "name": {
                   "type": "string",
@@ -3071,14 +3298,35 @@
           }
         }
       },
+      "EnvironmentRegistry": {
+        "type": "object",
+        "description": "A schema registry inside an environment.\n\nDistinct from the [`ResourceCard`] beside it: that is an inventory line an\noperator typed, with its own id and no connection to anything. This one is\nthe registry that decodes payloads, and it is addressable —\n`/api/environments/{env}/schema-registries/{id}`.\n\nIt gained that URL when environments did. A registry id is not a global\nnamespace even so: it is reachable only under an environment the caller can\nalready see, and only when they can see a cluster there that references it,\nwhich is the same rule `Registry::schema_registry` enforces on the way in.",
+        "required": [
+          "registry",
+          "usedBy"
+        ],
+        "properties": {
+          "registry": {
+            "$ref": "#/components/schemas/RegistryCard",
+            "description": "Id, name, url and health."
+          },
+          "usedBy": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The clusters in this environment that resolve payloads against it.\n\nRendered as \"who uses this\", and it is only ever the visible ones —\nthe list is built from cards this caller already received."
+          }
+        }
+      },
       "EnvironmentSection": {
         "type": "object",
         "description": "One section of the fleet: an environment and everything in it.\n\nAssembled on the server rather than grouped in the browser, because the\norder is configuration — declared environments run in declared order, and\nnothing else can recover \"dev before staging before prod\" from three\nstrings.",
         "required": [
           "id",
           "name",
-          "declared",
           "clusters",
+          "schemaRegistries",
           "resources"
         ],
         "properties": {
@@ -3087,11 +3335,7 @@
             "items": {
               "$ref": "#/components/schemas/ClusterCard"
             },
-            "description": "The Kafka clusters, in the order the registry lists them."
-          },
-          "declared": {
-            "type": "boolean",
-            "description": "Whether the environment was declared, or discovered from a label."
+            "description": "The Kafka clusters in it, in configured order."
           },
           "description": {
             "type": [
@@ -3102,7 +3346,7 @@
           },
           "id": {
             "type": "string",
-            "description": "The `env` label this section collects, empty for the clusters that\ncarry none."
+            "description": "The configured id, and the first segment of every URL beneath it.\n\nThere is no longer an unnamed section: an environment is a declared\nblock, so a cluster cannot arrive in one nobody wrote down."
           },
           "name": {
             "type": "string",
@@ -3114,6 +3358,13 @@
               "$ref": "#/components/schemas/ResourceCard"
             },
             "description": "Everything else, in configured order."
+          },
+          "schemaRegistries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EnvironmentRegistry"
+            },
+            "description": "The schema registries in it that this caller may read."
           }
         }
       },
@@ -4920,9 +5171,17 @@
         "type": "object",
         "description": "The subjects one registry holds, and which registry that is.",
         "required": [
-          "subjects"
+          "subjects",
+          "total"
         ],
         "properties": {
+          "compatibility": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The registry-wide compatibility mode, when `details` was asked for.\n\nWhat every row without an override of its own is governed by, so the\ntable can say `BACKWARD` on a registry where nobody has set a\nper-subject rule instead of a column of blanks."
+          },
           "registry": {
             "oneOf": [
               {
@@ -4937,9 +5196,68 @@
           "subjects": {
             "type": "array",
             "items": {
-              "type": "string"
+              "$ref": "#/components/schemas/SubjectRow"
             },
-            "description": "Every subject, in the order the registry listed them."
+            "description": "The page of subjects, filtered and ordered as asked."
+          },
+          "total": {
+            "type": "integer",
+            "description": "How many subjects matched before paging.",
+            "minimum": 0
+          }
+        }
+      },
+      "SubjectRow": {
+        "type": "object",
+        "description": "One row of the subject table.\n\nEverything but the name is `Option`, and for one reason: the name is in the\nlisting the registry already gave us, and the rest is a call per subject.\nThe client asks for the page first and the columns second.",
+        "required": [
+          "subject",
+          "compatibilityInherited"
+        ],
+        "properties": {
+          "compatibility": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The compatibility mode governing this subject."
+          },
+          "compatibilityInherited": {
+            "type": "boolean",
+            "description": "Whether that mode is the registry's rather than this subject's own.\n\nTwo subjects reading `BACKWARD` are not the same fact if one of them\nset it and the other is inheriting it — the second changes when the\nregistry default does."
+          },
+          "format": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SchemaFormat",
+                "description": "Which of the three formats the newest version is."
+              }
+            ]
+          },
+          "id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The global schema id of the newest version — the number the wire\nformat carries.",
+            "minimum": 0
+          },
+          "subject": {
+            "type": "string",
+            "description": "The subject name."
+          },
+          "version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The newest version number.",
+            "minimum": 0
           }
         }
       },
@@ -5074,7 +5392,15 @@
               "null"
             ],
             "format": "int64",
-            "description": "Bytes on disk for one copy, when log dirs were asked for."
+            "description": "Bytes on disk for one copy, when metrics were asked for."
+          },
+          "messageCount": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Records retained across every partition, when metrics were asked for.\n\n`latest - earliest` summed, which is what is *retained* rather than\nwhat was ever written — the same distinction the partition table draws.\n`None` when the metric was not requested, and also when any one\npartition failed to answer: a sum missing a partition is a smaller\nnumber, not a marked one, and nothing in the column would say so."
           },
           "name": {
             "type": "string",

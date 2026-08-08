@@ -611,6 +611,61 @@ otherwise assume was covered:
   fast Protobuf topic that could matter. Avro and JSON parse from a cached
   schema and do not have the problem.
 
+## The fleet became a hierarchy
+
+Post-phase, and it touched every layer: configuration, the registry, every
+route, the router and every page.
+
+**A fleet is environments; an environment holds Kafka clusters, schema
+registries and inventory.** That was always the mental model — a registry
+serves an environment, and the fleet page had sectioned by one since Phase 0 —
+but nothing in the shape said so. Membership was a *label*: `env: dev` on a
+cluster, `environment: dev` on a resource, and a `schema_registries:` block at
+the top level that clusters referenced by a global id. Three places to write
+the same word, and each one a place to typo it.
+
+Nesting is the membership now, and several rules retired rather than moving:
+
+- **`ResourceEntry.environment` is gone**, and with it the validation that a
+  resource may not name an environment nobody declared. There is nowhere to
+  write that typo — the field does not exist. A rule you can delete is better
+  than a rule you enforce.
+- **A cluster's `env` label is rejected, not merged.** It is derived from the
+  block, so it cannot disagree with it. That mattered: it is the one input that
+  could have put a cluster in `prod` outside a `cluster_labels: {env: prod}`
+  selector, silently.
+- **Discovered and unnamed sections are gone.** Every environment is declared,
+  because there is no top level to declare a cluster at.
+- **Ids are scoped.** `kafka` in `dev` and `kafka` in `prod` are two clusters.
+  The registry is keyed `(environment, id)` and so is every lookup.
+
+**The schema registry got its own URL, and the reason it did not have one
+dissolved.** `/api/clusters/{id}/schemas` existed because a registry id as a
+top-level namespace would have been enumerable, and "which clusters use this
+registry" can name a cluster the caller may not see. Scoping the id to an
+environment settles both: `/api/environments/{env}/schema-registries/{id}`
+answers only to a caller who can already see a cluster there that references
+it. The URL names what it returns, and it still cannot be probed. The nav's
+`viaCluster` hack — a registry row linking through an arbitrary cluster — went
+with it.
+
+**The config break is hard, and it says so.** `deny_unknown_fields` would have
+called a top-level `clusters:` a misspelling; a pre-nesting config is now
+refused with the destination of each block named. `config.dev.yaml`,
+`config.live-auth.yaml` and the deployed ConfigMap in `k3s-cluster` were
+converted together.
+
+### Measured
+
+- 218 unit tests pass; `cargo xtask ci` green.
+- Every route the frontend calls answers `200` against the live fleet, and
+  Avro on `kaas-canary-v1` still decodes through the environment-scoped
+  registry handle — `registry: "apicurio"` on the payload.
+- Cross-environment probes are `404`: `prod/clusters/kaas`,
+  `dev/clusters/prod-eu`, `prod/schema-registries/apicurio`. The last one
+  matters most — `prod` declares no registry of that id, and the reply is
+  indistinguishable from "not yours".
+
 ## Upstream asks these phases raised
 
 Filed in [reference/upstream-asks.md](reference/upstream-asks.md), open against

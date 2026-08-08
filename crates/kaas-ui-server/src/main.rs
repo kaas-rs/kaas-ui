@@ -85,9 +85,14 @@ fn main() -> ExitCode {
     };
 
     if args.check {
-        for cluster in &config.clusters {
+        // Environment first, because it is now half of what identifies a
+        // cluster: two lines with the same id in different environments are
+        // two clusters, and a report that dropped the first column would make
+        // that look like a duplicate.
+        for (environment, cluster) in config.clusters() {
             println!(
-                "{}\t{}\t{}",
+                "{}\t{}\t{}\t{}",
+                environment,
                 cluster.id,
                 cluster.display_name(),
                 cluster.bootstrap.join(",")
@@ -314,9 +319,11 @@ mod tests {
     fn state() -> AppState {
         let config = Config::from_yaml(
             r#"
-clusters:
-  - id: kaas
-    bootstrap: ["kaas.kaas.svc.cluster.local:9092"]
+environments:
+  - id: dev
+    kafka_clusters:
+      - id: kaas
+        bootstrap: ["kaas.kaas.svc.cluster.local:9092"]
 "#,
         )
         .expect("the fixture config parses");

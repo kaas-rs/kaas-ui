@@ -57,6 +57,22 @@ async function get<T>(path: string): Promise<T> {
 
 const encode = encodeURIComponent
 
+/**
+ * The base of every per-cluster route.
+ *
+ * A cluster is addressed as `(environment, id)` — an id alone addresses
+ * nothing, because two environments may each hold a `kafka`. One builder so
+ * that no call site can assemble half of that.
+ */
+function cluster(env: string, id: string): string {
+  return `/api/environments/${encode(env)}/clusters/${encode(id)}`
+}
+
+/** The base of every schema-registry route. A registry is a peer of a cluster. */
+function schemaRegistry(env: string, id: string): string {
+  return `/api/environments/${encode(env)}/schema-registries/${encode(id)}`
+}
+
 /** How often a view that is backed by a metadata snapshot re-asks. */
 const SNAPSHOT_REFRESH = 10_000
 
@@ -79,11 +95,19 @@ export function useHealth() {
   })
 }
 
-export function useClusters() {
+/**
+ * Every cluster in one environment.
+ *
+ * Environment-scoped because a cluster id is: `kafka` in `dev` and `kafka` in
+ * `prod` are two clusters, and a flat list could not name either.
+ */
+export function useClusters(env: string) {
   return useQuery({
-    queryKey: ["clusters"],
-    queryFn: () => get<Envelope<ClusterCard>>("/api/clusters"),
+    queryKey: ["clusters", env],
+    queryFn: () =>
+      get<Envelope<ClusterCard>>(`/api/environments/${encode(env)}/clusters`),
     refetchInterval: 5_000,
+    enabled: !!env,
   })
 }
 
@@ -98,8 +122,26 @@ export function useClusters() {
 export function useFleet() {
   return useQuery({
     queryKey: ["fleet"],
-    queryFn: () => get<Envelope<EnvironmentSection>>("/api/fleet"),
+    queryFn: () => get<Envelope<EnvironmentSection>>("/api/environments"),
     refetchInterval: 5_000,
+  })
+}
+
+/**
+ * One environment, for the page that landed on it directly.
+ *
+ * Its own request rather than a filter over `useFleet`: the URL names an
+ * environment, so "no such environment" and "an environment holding nothing
+ * you can see" have to be answerable as a 404 rather than as an empty spot in
+ * a list the client happened to fetch for another reason.
+ */
+export function useEnvironment(env: string) {
+  return useQuery({
+    queryKey: ["environment", env],
+    queryFn: () =>
+      get<Envelope<EnvironmentSection>>(`/api/environments/${encode(env)}`),
+    refetchInterval: 5_000,
+    enabled: !!env,
   })
 }
 
@@ -119,19 +161,18 @@ export function useIdentity() {
   })
 }
 
-export function useCluster(id: string) {
+export function useCluster(env: string, id: string) {
   return useQuery({
-    queryKey: ["cluster", id],
-    queryFn: () => get<Envelope<ClusterDetail>>(`/api/clusters/${encode(id)}`),
+    queryKey: ["cluster", env, id],
+    queryFn: () => get<Envelope<ClusterDetail>>(cluster(env, id)),
     refetchInterval: SNAPSHOT_REFRESH,
   })
 }
 
-export function useCapabilities(id: string) {
+export function useCapabilities(env: string, id: string) {
   return useQuery({
-    queryKey: ["capabilities", id],
-    queryFn: () =>
-      get<Capabilities>(`/api/clusters/${encode(id)}/capabilities`),
+    queryKey: ["capabilities", env, id],
+    queryFn: () => get<Capabilities>(`${cluster(env, id)}/capabilities`),
     // Not cached forever: a rolling upgrade changes the answer, and the whole
     // point of the endpoint is that it is allowed to.
     staleTime: 30_000,
@@ -139,13 +180,11 @@ export function useCapabilities(id: string) {
   })
 }
 
-export function useLogDirs(id: string, node: number | null) {
+export function useLogDirs(env: string, id: string, node: number | null) {
   return useQuery({
-    queryKey: ["log-dirs", id, node],
+    queryKey: ["log-dirs", env, id, node],
     queryFn: () =>
-      get<Envelope<LogDir>>(
-        `/api/clusters/${encode(id)}/brokers/${node}/log-dirs`
-      ),
+      get<Envelope<LogDir>>(`${cluster(env, id)}/brokers/${node}/log-dirs`),
     enabled: node !== null,
   })
 }
@@ -157,10 +196,21 @@ export interface TopicListQuery {
   order?: "asc" | "desc"
   limit?: number
   offset?: number
-  sizes?: boolean
+  metrics?: boolean
 }
 
-export function useTopics(id: string, query: TopicListQuery) {
+/**
+ * How often the metric columns refetch.
+ *
+ * Slower than the snapshot, because it is the only part of this page that
+ * costs broker round trips — a `DescribeLogDirs` to every broker and a
+ * `ListOffsets` to every leader. Ten seconds of that against a large cluster
+ * is a load-bearing background job nobody asked for; a minute is a number that
+ * still moves while you watch it.
+ */
+const METRICS_REFRESH = 60_000
+
+function topicParams(query: TopicListQuery): URLSearchParams {
   const params = new URLSearchParams()
   // Filtering and sorting are server-side: a five-thousand-topic cluster is a
   // real number, and shipping all of it so the browser can hide most of it is
@@ -171,75 +221,111 @@ export function useTopics(id: string, query: TopicListQuery) {
   if (query.order) params.set("order", query.order)
   if (query.limit !== undefined) params.set("limit", String(query.limit))
   if (query.offset) params.set("offset", String(query.offset))
-  if (query.sizes) params.set("sizes", "true")
+  if (query.metrics) params.set("metrics", "true")
+  return params
+}
+
+export function useTopics(env: string, id: string, query: TopicListQuery) {
+  const params = topicParams(query)
 
   return useQuery({
-    queryKey: ["topics", id, params.toString()],
+    queryKey: ["topics", env, id, params.toString()],
     queryFn: () =>
-      get<Envelope<TopicSummary>>(
-        `/api/clusters/${encode(id)}/topics?${params}`
-      ),
+      get<Envelope<TopicSummary>>(`${cluster(env, id)}/topics?${params}`),
     refetchInterval: SNAPSHOT_REFRESH,
   })
 }
 
-export function useTopic(id: string, topic: string) {
+/**
+ * The same page again, with the two columns the brokers have to be asked for.
+ *
+ * A second request rather than a flag on the first, so the table paints from
+ * the metadata snapshot at once and the counts arrive into it. The server
+ * enriches only the rows this page asked for, so the payload is fifty topics'
+ * partitions rather than the cluster's.
+ *
+ * Disabled when the sort *is* a metric: the server then has to compute the
+ * column for every topic before it can order by it, so the first request
+ * already carries the numbers and asking again would repeat the fan-out.
+ */
+export function useTopicMetrics(
+  env: string,
+  id: string,
+  query: TopicListQuery
+) {
+  const isMetricSort = query.sort === "size" || query.sort === "messages"
+  const params = topicParams({ ...query, metrics: true })
+
   return useQuery({
-    queryKey: ["topic", id, topic],
+    queryKey: ["topic-metrics", env, id, params.toString()],
     queryFn: () =>
-      get<Envelope<TopicDetail>>(
-        `/api/clusters/${encode(id)}/topics/${encode(topic)}`
-      ),
+      get<Envelope<TopicSummary>>(`${cluster(env, id)}/topics?${params}`),
+    enabled: !isMetricSort,
+    refetchInterval: METRICS_REFRESH,
+    // The previous page's numbers stay on screen while the next page's are in
+    // flight, instead of every row blinking back to a placeholder on a sort.
+    //
+    // Except when disabled, where a placeholder is worse than nothing: the
+    // first request already carries fresher numbers for these very rows, and
+    // handing back the last page's would shadow them with older ones.
+    placeholderData: isMetricSort ? undefined : (previous) => previous,
+  })
+}
+
+export function useTopic(env: string, id: string, topic: string) {
+  return useQuery({
+    queryKey: ["topic", env, id, topic],
+    queryFn: () =>
+      get<Envelope<TopicDetail>>(`${cluster(env, id)}/topics/${encode(topic)}`),
     refetchInterval: SNAPSHOT_REFRESH,
   })
 }
 
-export function useTopicConfigs(id: string, topic: string) {
+export function useTopicConfigs(env: string, id: string, topic: string) {
   return useQuery({
-    queryKey: ["topic-configs", id, topic],
+    queryKey: ["topic-configs", env, id, topic],
     queryFn: () =>
       get<Envelope<ConfigResourceEntry>>(
-        `/api/clusters/${encode(id)}/topics/${encode(topic)}/configs`
+        `${cluster(env, id)}/topics/${encode(topic)}/configs`
       ),
   })
 }
 
-export function useClusterConfigs(id: string, resource: string | null) {
+export function useClusterConfigs(
+  env: string,
+  id: string,
+  resource: string | null
+) {
   const query = resource ? `?resource=${encode(resource)}` : ""
   return useQuery({
-    queryKey: ["cluster-configs", id, resource],
+    queryKey: ["cluster-configs", env, id, resource],
     queryFn: () =>
-      get<Envelope<ConfigResourceEntry>>(
-        `/api/clusters/${encode(id)}/configs${query}`
-      ),
+      get<Envelope<ConfigResourceEntry>>(`${cluster(env, id)}/configs${query}`),
   })
 }
 
-export function useGroups(id: string) {
+export function useGroups(env: string, id: string) {
   return useQuery({
-    queryKey: ["groups", id],
-    queryFn: () =>
-      get<Envelope<GroupSummary>>(`/api/clusters/${encode(id)}/groups`),
+    queryKey: ["groups", env, id],
+    queryFn: () => get<Envelope<GroupSummary>>(`${cluster(env, id)}/groups`),
     refetchInterval: SNAPSHOT_REFRESH,
   })
 }
 
-export function useGroup(id: string, group: string) {
+export function useGroup(env: string, id: string, group: string) {
   return useQuery({
-    queryKey: ["group", id, group],
+    queryKey: ["group", env, id, group],
     queryFn: () =>
-      get<Envelope<GroupDetail>>(
-        `/api/clusters/${encode(id)}/groups/${encode(group)}`
-      ),
+      get<Envelope<GroupDetail>>(`${cluster(env, id)}/groups/${encode(group)}`),
   })
 }
 
-export function useGroupOffsets(id: string, group: string) {
+export function useGroupOffsets(env: string, id: string, group: string) {
   return useQuery({
-    queryKey: ["group-offsets", id, group],
+    queryKey: ["group-offsets", env, id, group],
     queryFn: () =>
       get<Envelope<GroupOffset>>(
-        `/api/clusters/${encode(id)}/groups/${encode(group)}/offsets`
+        `${cluster(env, id)}/groups/${encode(group)}/offsets`
       ),
     refetchInterval: SNAPSHOT_REFRESH,
   })
@@ -256,6 +342,7 @@ export function useGroupOffsets(id: string, group: string) {
  * the other's key would show the wrong one forever.
  */
 export function useMessageDetail(
+  env: string,
   id: string,
   topic: string,
   rowId: string | undefined,
@@ -277,7 +364,7 @@ export function useMessageDetail(
     ],
     queryFn: () =>
       get<MessageDetail>(
-        `/api/clusters/${encode(id)}/topics/${encode(topic)}/messages/${parsed?.partition}/${parsed?.offset}${query ? `?${query}` : ""}`
+        `${cluster(env, id)}/topics/${encode(topic)}/messages/${parsed?.partition}/${parsed?.offset}${query ? `?${query}` : ""}`
       ),
     enabled: !!parsed,
     staleTime: Infinity,
@@ -293,32 +380,80 @@ export function useMessageDetail(
  * be heavier and no more correct.
  */
 export async function fetchMessagePage(
+  env: string,
   id: string,
   topic: string,
   params: URLSearchParams
 ): Promise<MessagePage> {
   return get<MessagePage>(
-    `/api/clusters/${encode(id)}/topics/${encode(topic)}/messages?${params}`
+    `${cluster(env, id)}/topics/${encode(topic)}/messages?${params}`
   )
 }
 
 /**
- * The subjects the registry this cluster references holds.
+ * The subjects one schema registry holds.
  *
- * Reached through a cluster and never through a registry id: registry ids are
- * deliberately not a second enumerable namespace, and "which clusters use this
- * registry" is a list that can name a cluster the caller may not see.
- *
- * A cluster with no registry answers `registry: null` rather than failing —
- * that is `kaas`, and it is the common case.
+ * Addressed as a peer of a cluster inside its environment, which it was not:
+ * it used to hang off a cluster route, because a registry id on its own would
+ * have been a second enumerable namespace beside cluster ids. Nesting settles
+ * that — the id is scoped to an environment, and the server still refuses a
+ * caller who cannot see a cluster there that references it.
  */
-export function useSubjects(id: string) {
+export interface SubjectListQuery {
+  search?: string
+  order?: "asc" | "desc"
+  limit?: number
+  offset?: number
+  details?: boolean
+}
+
+function subjectParams(query: SubjectListQuery): URLSearchParams {
+  const params = new URLSearchParams()
+  if (query.search) params.set("search", query.search)
+  if (query.order) params.set("order", query.order)
+  if (query.limit !== undefined) params.set("limit", String(query.limit))
+  if (query.offset) params.set("offset", String(query.offset))
+  if (query.details) params.set("details", "true")
+  return params
+}
+
+export function useSubjects(
+  env: string,
+  id: string,
+  query: SubjectListQuery = {}
+) {
+  const params = subjectParams(query)
   return useQuery({
-    queryKey: ["schemas", id],
-    queryFn: () => get<SubjectList>(`/api/clusters/${encode(id)}/schemas`),
+    queryKey: ["schemas", env, id, params.toString()],
+    queryFn: () =>
+      get<SubjectList>(`${schemaRegistry(env, id)}/subjects?${params}`),
     // A subject registered a moment ago has to appear without a reload; the
     // server caches the listing briefly for the same reason.
     staleTime: 30_000,
+  })
+}
+
+/**
+ * The same page again, with the columns that cost a registry call per row.
+ *
+ * Split from the listing for the reason the topic table splits its metrics: a
+ * name list is one cached call and the other four columns are two calls per
+ * subject, so the table paints from the first and fills from the second.
+ * Unlike the topic fan-out this cost scales with *rows*, which is why the
+ * server describes only the page.
+ */
+export function useSubjectDetails(
+  env: string,
+  id: string,
+  query: SubjectListQuery
+) {
+  const params = subjectParams({ ...query, details: true })
+  return useQuery({
+    queryKey: ["schema-details", env, id, params.toString()],
+    queryFn: () =>
+      get<SubjectList>(`${schemaRegistry(env, id)}/subjects?${params}`),
+    staleTime: 30_000,
+    placeholderData: (previous) => previous,
   })
 }
 
@@ -329,12 +464,16 @@ export function useSubjects(id: string) {
  * *list* is not, and a subject gains versions. The server caches the text by
  * `(subject, version)` forever, so re-asking costs one listing call.
  */
-export function useSubjectVersions(id: string, subject: string | undefined) {
+export function useSubjectVersions(
+  env: string,
+  id: string,
+  subject: string | undefined
+) {
   return useQuery({
-    queryKey: ["schema", id, subject],
+    queryKey: ["schema", env, id, subject],
     queryFn: () =>
       get<SubjectDetail>(
-        `/api/clusters/${encode(id)}/schemas/${encode(subject ?? "")}/versions`
+        `${schemaRegistry(env, id)}/subjects/${encode(subject ?? "")}/versions`
       ),
     enabled: !!subject,
     staleTime: 30_000,
@@ -348,12 +487,12 @@ export function useSubjectVersions(id: string, subject: string | undefined) {
  * that failed ride in `errors` rather than failing the request, so a partition
  * mid-election leaves the control usable and unclamped instead of blocking it.
  */
-export function usePartitionBounds(id: string, topic: string) {
+export function usePartitionBounds(env: string, id: string, topic: string) {
   return useQuery({
     queryKey: ["offsets", id, topic],
     queryFn: () =>
       get<Envelope<PartitionOffsets>>(
-        `/api/clusters/${encode(id)}/topics/${encode(topic)}/offsets`
+        `${cluster(env, id)}/topics/${encode(topic)}/offsets`
       ),
     staleTime: SNAPSHOT_REFRESH,
   })
@@ -368,12 +507,12 @@ export function usePartitionBounds(id: string, topic: string) {
  * retention claims and a calendar built on the setting greys out days with
  * perfectly good records behind them.
  */
-export function useOldestTimestamp(id: string, topic: string) {
+export function useOldestTimestamp(env: string, id: string, topic: string) {
   const query = useQuery({
-    queryKey: ["oldest", id, topic],
+    queryKey: ["oldest", env, id, topic],
     queryFn: () =>
       get<MessagePage>(
-        `/api/clusters/${encode(id)}/topics/${encode(topic)}/messages?mode=oldest&limit=1`
+        `${cluster(env, id)}/topics/${encode(topic)}/messages?mode=oldest&limit=1`
       ),
     staleTime: 5 * 60_000,
     retry: false,

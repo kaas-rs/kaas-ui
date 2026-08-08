@@ -27,6 +27,7 @@ import { createMessageStore, type MessageStoreState } from "./message-store"
 import { openMessageStream } from "./transport"
 
 export interface MessageStreamQuery {
+  envId: string
   clusterId: string
   topic: string
   mode: SeekMode
@@ -75,9 +76,9 @@ export function streamUrl(query: MessageStreamQuery): string {
   // `EventSource` takes a URL, not a path handed to `fetch`, so it needs the
   // prefix applied here rather than inheriting it from the client.
   return withBase(
-    `/api/clusters/${encodeURIComponent(query.clusterId)}/topics/${encodeURIComponent(
-      query.topic
-    )}/messages/stream?${params}`
+    `/api/environments/${encodeURIComponent(query.envId)}/clusters/${encodeURIComponent(
+      query.clusterId
+    )}/topics/${encodeURIComponent(query.topic)}/messages/stream?${params}`
   )
 }
 

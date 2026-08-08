@@ -172,16 +172,29 @@ impl RegistryHandle {
     /// subject page, and it is the one thing here that can change without a
     /// new version appearing.
     pub async fn compatibility(&self, subject: &str) -> Option<String> {
+        self.config_at(&format!("/config/{}", encode(subject)))
+            .await
+    }
+
+    /// The registry-wide compatibility mode.
+    ///
+    /// What a subject with no override of its own is actually governed by, and
+    /// therefore the only way a compatibility column can say anything on the
+    /// common registry where nobody has set a per-subject rule. A column that
+    /// is blank on every row because the answer lives one endpoint over is a
+    /// column that has taught the reader nothing.
+    pub async fn global_compatibility(&self) -> Option<String> {
+        self.config_at("/config").await
+    }
+
+    async fn config_at(&self, path: &str) -> Option<String> {
         #[derive(Deserialize)]
         struct Config {
             #[serde(rename = "compatibilityLevel")]
             compatibility_level: Option<String>,
         }
 
-        let response = self
-            .get(&format!("/config/{}", encode(subject)))
-            .await
-            .ok()?;
+        let response = self.get(path).await.ok()?;
         let config: Config = response.json().await.ok()?;
         config.compatibility_level
     }

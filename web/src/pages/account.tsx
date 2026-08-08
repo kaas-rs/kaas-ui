@@ -15,8 +15,8 @@
 import { ShieldCheck } from "lucide-react"
 import type { ReactNode } from "react"
 
-import { useClusters, useIdentity } from "@/api/client"
-import type { Action, ClusterCard, Resource } from "@/api/types"
+import { useFleet, useIdentity } from "@/api/client"
+import type { Action, Resource } from "@/api/types"
 import { ClusterChip, Empty, Section, Spinner } from "@/components/domain"
 import { Badge } from "@/components/ui/badge"
 import {
@@ -96,13 +96,14 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
 
 export function Account() {
   const identity = useIdentity()
-  const clusters = useClusters()
+  // The fleet, not one environment's clusters: this page answers "what do I
+  // reach", and that question does not sit inside an environment.
+  const fleet = useFleet()
+  const cards = fleet.data?.items.flatMap((section) => section.clusters) ?? []
 
   if (identity.isLoading) return <Spinner label="reading your identity" />
   const me = identity.data
   if (!me) return <Empty>the server did not say who you are</Empty>
-
-  const cards: ClusterCard[] = clusters.data?.items ?? []
 
   return (
     <div className="max-w-3xl">
@@ -175,7 +176,7 @@ export function Account() {
       </Section>
 
       <Section title="Access">
-        {clusters.isLoading ? (
+        {fleet.isLoading ? (
           <Spinner label="reading the fleet" />
         ) : cards.length === 0 ? (
           <Empty>

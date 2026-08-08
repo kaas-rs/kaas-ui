@@ -16,7 +16,7 @@ use crate::{ApiResult, AppState, Caller, call};
 /// `GET /api/clusters/{id}/groups`
 #[utoipa::path(
     get,
-    path = "/api/clusters/{id}/groups",
+    path = "/api/environments/{env}/clusters/{id}/groups",
     params(("id" = String, Path, description = "Cluster id")),
     responses((status = 200, description = "Groups", body = Envelope<GroupSummary>)),
     tag = "groups",
@@ -24,9 +24,9 @@ use crate::{ApiResult, AppState, Caller, call};
 pub async fn list(
     State(state): State<AppState>,
     caller: Caller,
-    Path(id): Path<String>,
+    Path((env, id)): Path<(String, String)>,
 ) -> ApiResult<Json<Envelope<GroupSummary>>> {
-    let (handle, admin) = state.connected(&id, &caller)?;
+    let (handle, admin) = state.connected(&env, &id, &caller)?;
     caller.require(&id, &handle.labels, Resource::Consumer, Action::View, None)?;
     let listings = call("list_groups", admin.list_groups()).await?;
 
@@ -44,8 +44,9 @@ pub async fn list(
 /// never resolves.
 #[utoipa::path(
     get,
-    path = "/api/clusters/{id}/groups/{group}",
+    path = "/api/environments/{env}/clusters/{id}/groups/{group}",
     params(
+        ("env" = String, Path, description = "Environment id"),
         ("id" = String, Path, description = "Cluster id"),
         ("group" = String, Path, description = "Group id"),
     ),
@@ -55,9 +56,9 @@ pub async fn list(
 pub async fn detail(
     State(state): State<AppState>,
     caller: Caller,
-    Path((id, group)): Path<(String, String)>,
+    Path((env, id, group)): Path<(String, String, String)>,
 ) -> ApiResult<Json<Envelope<GroupDetail>>> {
-    let (handle, admin) = state.connected(&id, &caller)?;
+    let (handle, admin) = state.connected(&env, &id, &caller)?;
     caller.require(&id, &handle.labels, Resource::Consumer, Action::View, None)?;
     let described = call("describe_groups", admin.describe_groups([group])).await?;
     Ok(Json(Envelope::from_per_item(
@@ -75,8 +76,9 @@ pub async fn detail(
 /// how a lag column becomes something nobody trusts.
 #[utoipa::path(
     get,
-    path = "/api/clusters/{id}/groups/{group}/offsets",
+    path = "/api/environments/{env}/clusters/{id}/groups/{group}/offsets",
     params(
+        ("env" = String, Path, description = "Environment id"),
         ("id" = String, Path, description = "Cluster id"),
         ("group" = String, Path, description = "Group id"),
     ),
@@ -86,9 +88,9 @@ pub async fn detail(
 pub async fn offsets(
     State(state): State<AppState>,
     caller: Caller,
-    Path((id, group)): Path<(String, String)>,
+    Path((env, id, group)): Path<(String, String, String)>,
 ) -> ApiResult<Json<Envelope<GroupOffset>>> {
-    let (handle, admin) = state.connected(&id, &caller)?;
+    let (handle, admin) = state.connected(&env, &id, &caller)?;
     caller.require(&id, &handle.labels, Resource::Consumer, Action::View, None)?;
 
     let committed = call("fetch_offsets", admin.fetch_offsets(&group, None)).await?;

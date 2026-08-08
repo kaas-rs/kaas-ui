@@ -49,6 +49,9 @@ export interface Envelope<T> {
 export type ClusterStatus = "connecting" | "ready" | "unreachable"
 
 export interface ClusterCard {
+  /** The environment holding it — the first segment of every URL that reaches it. */
+  environment: string
+  /** The configured id, unique within that environment. */
   id: string
   name: string
   labels: Record<string, string>
@@ -107,14 +110,29 @@ export interface ResourceCard {
 
 /** One section of the fleet: an environment and everything in it. */
 export interface EnvironmentSection {
-  /** The `env` label collected here; empty for the clusters carrying none. */
+  /** The configured id, and the first segment of every URL beneath it. */
   id: string
   name: string
   description: string | null
-  /** Declared in `environments:`, or discovered from a label. */
-  declared: boolean
   clusters: ClusterCard[]
+  /** The registries in it this caller may read. */
+  schemaRegistries: EnvironmentRegistry[]
   resources: ResourceCard[]
+}
+
+/**
+ * A schema registry inside an environment.
+ *
+ * Not the `ResourceCard` beside it — that is an inventory line with its own id
+ * and nothing behind it. This one is addressable:
+ * `/environments/{env}/schema-registries/{id}`. The id is scoped to the
+ * environment, so it can lead a route without becoming a namespace anyone can
+ * enumerate.
+ */
+export interface EnvironmentRegistry {
+  registry: RegistryCard
+  /** The clusters here that decode against it. Only the visible ones. */
+  usedBy: string[]
 }
 
 /**
@@ -264,6 +282,8 @@ export interface TopicSummary {
   replicationFactor: number
   offlinePartitionCount: number
   underReplicatedPartitionCount: number
+  /** Retained records across every partition. Null until `?metrics=true` answers, and on a topic where any partition failed to. */
+  messageCount: number | null
   logicalBytes: number | null
   replicatedBytes: number | null
 }
@@ -604,10 +624,30 @@ export interface SubjectSchema {
   references: SchemaReference[]
 }
 
+/**
+ * One row of the subject table.
+ *
+ * Everything but the name is null until `?details=true` answers: the name came
+ * free with the listing, the rest is a call per subject.
+ */
+export interface SubjectRow {
+  subject: string
+  id: number | null
+  format: SchemaFormat | null
+  version: number | null
+  compatibility: string | null
+  /** True when the mode is the registry's default rather than this subject's own. */
+  compatibilityInherited: boolean
+}
+
 export interface SubjectList {
   /** `null` where the cluster references no registry, which is normal. */
   registry: RegistryCard | null
-  subjects: string[]
+  subjects: SubjectRow[]
+  /** How many subjects matched before paging. */
+  total: number
+  /** The registry-wide default, when details were asked for. */
+  compatibility: string | null
 }
 
 export interface SubjectDetail {

@@ -26,8 +26,9 @@ pub struct ConfigQuery {
 /// `GET /api/clusters/{id}/configs?resource=broker:1`
 #[utoipa::path(
     get,
-    path = "/api/clusters/{id}/configs",
+    path = "/api/environments/{env}/clusters/{id}/configs",
     params(
+        ("env" = String, Path, description = "Environment id"),
         ("id" = String, Path, description = "Cluster id"),
         ("resource" = Option<String>, Query, description = "Comma-separated `type:name` list"),
     ),
@@ -37,10 +38,10 @@ pub struct ConfigQuery {
 pub async fn cluster_configs(
     State(state): State<AppState>,
     caller: Caller,
-    Path(id): Path<String>,
+    Path((env, id)): Path<(String, String)>,
     Query(query): Query<ConfigQuery>,
 ) -> ApiResult<Json<Envelope<ConfigResourceEntry>>> {
-    let (handle, admin) = state.connected(&id, &caller)?;
+    let (handle, admin) = state.connected(&env, &id, &caller)?;
     caller.require(
         &id,
         &handle.labels,
@@ -78,8 +79,9 @@ pub async fn cluster_configs(
 /// `GET /api/clusters/{id}/topics/{topic}/configs`
 #[utoipa::path(
     get,
-    path = "/api/clusters/{id}/topics/{topic}/configs",
+    path = "/api/environments/{env}/clusters/{id}/topics/{topic}/configs",
     params(
+        ("env" = String, Path, description = "Environment id"),
         ("id" = String, Path, description = "Cluster id"),
         ("topic" = String, Path, description = "Topic name"),
     ),
@@ -89,9 +91,9 @@ pub async fn cluster_configs(
 pub async fn topic_configs(
     State(state): State<AppState>,
     caller: Caller,
-    Path((id, topic)): Path<(String, String)>,
+    Path((env, id, topic)): Path<(String, String, String)>,
 ) -> ApiResult<Json<Envelope<ConfigResourceEntry>>> {
-    let (handle, admin) = state.connected(&id, &caller)?;
+    let (handle, admin) = state.connected(&env, &id, &caller)?;
     caller.require(
         &id,
         &handle.labels,

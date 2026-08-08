@@ -23,31 +23,15 @@ use utoipa::ToSchema;
 pub struct Config {
     /// How the HTTP server binds.
     pub server: ServerConfig,
-    /// The cluster registry.
-    pub clusters: Vec<ClusterEntry>,
-    /// The environments the fleet is sectioned by.
+    /// The fleet: every environment, and everything in one.
     ///
-    /// Optional, and declaring one buys exactly two things: a display name and
-    /// a position. Sections exist without it — a cluster's `env` label is
-    /// enough to make one — but "dev, staging, prod" is an order nobody can
-    /// derive from the strings, so undeclared environments sort after declared
-    /// ones instead of pretending alphabetical was meaningful.
+    /// The only place infrastructure is declared. An environment holds Kafka
+    /// clusters, the schema registries they resolve against, and the inventory
+    /// beside them — and it holds them *structurally*, so membership is where
+    /// a block sits rather than a label that has to agree with a list
+    /// somewhere else. Declaration order is display order, because "dev,
+    /// staging, prod" is an order nobody can derive from the strings.
     pub environments: Vec<EnvironmentEntry>,
-    /// Everything in an environment that is not a Kafka cluster.
-    pub resources: Vec<ResourceEntry>,
-    /// The schema registries, declared once and referenced by id.
-    ///
-    /// A registry serves an **environment**, not a cluster: every cluster in
-    /// `dev` resolves schema id 42 to the same schema, because it is the same
-    /// registry answering. So it is declared here and clusters name one with
-    /// [`ClusterEntry::schema_registry`] — reference, not membership, because
-    /// a cluster in an environment need not use that environment's registry.
-    ///
-    /// The binding is that explicit line and **not** the `env` label, which
-    /// stays what it is: free-form display metadata. A typo in a label would
-    /// silently point a cluster at nothing; an unknown registry id is a
-    /// startup error naming the id.
-    pub schema_registries: Vec<SchemaRegistryEntry>,
     /// Where the login provider is, when kaas-ui serves it under its own
     /// hostname.
     ///
@@ -154,8 +138,13 @@ pub struct ClusterEntry {
     pub name: Option<String>,
     /// Bootstrap servers, `host:port`.
     pub bootstrap: Vec<String>,
-    /// Free-form labels. `env` and `kind` group the fleet view; `env: prod`
-    /// additionally forces the danger tone on the cluster chip.
+    /// Free-form labels. `kind` groups the fleet view.
+    ///
+    /// **`env` is not one of them.** It used to be how a cluster joined an
+    /// environment; the nesting is that now, and setting it here is rejected
+    /// rather than merged, because a label that disagrees with the block it
+    /// sits in is a hole in the `cluster_labels: {env: prod}` selector people
+    /// write first. Read [`Self::effective_labels`] instead of this field.
     #[serde(default)]
     pub labels: BTreeMap<String, String>,
     /// How often the background task refreshes metadata.
@@ -212,6 +201,21 @@ pub struct ClusterEntry {
     pub codecs: Vec<TopicCodec>,
 }
 
+impl ClusterEntry {
+    /// The labels a visibility check sees: the configured ones, plus `env`.
+    ///
+    /// The counterpart of [`ResourceEntry::effective_labels`], and it exists
+    /// for the same reason: every role selector in the wild keys on `env`, and
+    /// the one place that can still be wrong about it is a reader that forgot
+    /// to add it. There is exactly one such place now.
+    #[must_use]
+    pub fn effective_labels(&self, environment: &str) -> BTreeMap<String, String> {
+        let mut labels = self.labels.clone();
+        labels.insert("env".to_owned(), environment.to_owned());
+        labels
+    }
+}
+
 /// One declared schema registry.
 ///
 /// Confluent-compatible only. Apicurio's native `/apis/registry/v3` is not
@@ -222,13 +226,15 @@ pub struct ClusterEntry {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "snake_case")]
 pub struct SchemaRegistryEntry {
-    /// Stable identifier, unique among registries. What a cluster's
+    /// Stable identifier, unique **within its environment**. What a cluster's
     /// `schema_registry:` names, and what every decoded payload reports as
     /// the registry that answered.
     ///
-    /// It never appears in a URL: the schema browser is rooted at
-    /// `/api/clusters/{id}/schemas`, deliberately, so registry ids do not
-    /// become a second enumerable namespace beside cluster ids.
+    /// It appears in a URL — `/api/environments/{env}/schema-registries/{id}`
+    /// — so it may not contain anything that would have to be escaped in a
+    /// path segment. Scoped rather than global: two environments may each hold
+    /// an `apicurio`, and neither can be reached without naming an environment
+    /// the caller can already see.
     pub id: String,
     /// Human-readable name. Defaults to the id.
     #[serde(default)]
@@ -358,7 +364,9 @@ impl TopicCodec {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "snake_case")]
 pub struct EnvironmentEntry {
-    /// Matches a cluster's `env` label, and a resource's `environment`.
+    /// Stable identifier. It leads every URL under `/api/environments`, so it
+    /// may not contain anything that would have to be escaped in a path
+    /// segment.
     pub id: String,
     /// Human-readable name. Defaults to the id.
     #[serde(default)]
@@ -366,6 +374,24 @@ pub struct EnvironmentEntry {
     /// One line under the heading, where the id does not say enough.
     #[serde(default)]
     pub description: Option<String>,
+    /// The Kafka clusters in this environment.
+    #[serde(default)]
+    pub kafka_clusters: Vec<ClusterEntry>,
+    /// The schema registries in this environment.
+    ///
+    /// A registry serves an **environment**: every cluster here that names one
+    /// resolves schema id 42 to the same schema, because it is the same
+    /// registry answering. Nesting is membership; a cluster still names the
+    /// one it uses with [`ClusterEntry::schema_registry`], because a cluster
+    /// sitting beside a registry need not decode against it — and a cluster
+    /// that should render hex must be able to say so.
+    #[serde(default)]
+    pub schema_registries: Vec<SchemaRegistryEntry>,
+    /// Everything else here that kaas-ui does not dial: Connect, an MQTT
+    /// broker, a REST proxy. Inventory, so that "what is in staging" has one
+    /// answer and it is not only the brokers.
+    #[serde(default)]
+    pub resources: Vec<ResourceEntry>,
 }
 
 impl EnvironmentEntry {
@@ -373,6 +399,18 @@ impl EnvironmentEntry {
     #[must_use]
     pub fn display_name(&self) -> &str {
         self.name.as_deref().unwrap_or(&self.id)
+    }
+
+    /// Whether anything at all is declared in here.
+    ///
+    /// An environment with nothing in it is legal — someone is about to fill
+    /// it — but it renders as a heading with no content, so callers that
+    /// arrange the fleet drop it rather than showing an empty section.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.kafka_clusters.is_empty()
+            && self.schema_registries.is_empty()
+            && self.resources.is_empty()
     }
 }
 
@@ -392,12 +430,6 @@ pub struct ResourceEntry {
     pub name: Option<String>,
     /// What it is. Decides the icon and the wording, nothing else.
     pub kind: ResourceKind,
-    /// Which section it belongs to.
-    ///
-    /// Required, and checked against the environments that actually exist: a
-    /// typo here would otherwise open a section of one nobody meant to create,
-    /// somewhere down the page, looking exactly like a real environment.
-    pub environment: String,
     /// Where it is, as an address a human can act on.
     #[serde(default)]
     pub endpoint: Option<String>,
@@ -406,7 +438,7 @@ pub struct ResourceEntry {
     pub note: Option<String>,
     /// Free-form labels, as on a cluster.
     ///
-    /// `env` is added from [`Self::environment`] before anything reads these,
+    /// `env` is added from where this entry sits before anything reads these,
     /// so a role's `cluster_labels: {env: prod}` selector covers a resource the
     /// same way it covers a broker.
     #[serde(default)]
@@ -422,13 +454,14 @@ impl ResourceEntry {
 
     /// The labels a visibility check sees: the configured ones, plus `env`.
     ///
-    /// Built rather than stored so the two can never disagree — a resource in
-    /// `prod` labelled `env: dev` would be a hole in exactly the selector
-    /// people write first.
+    /// Built from the nesting rather than stored, so the two can never
+    /// disagree — a resource inside `prod` labelled `env: dev` would be a hole
+    /// in exactly the selector people write first. Since the environment is
+    /// now structural there is nothing to keep in step, which is the point.
     #[must_use]
-    pub fn effective_labels(&self) -> BTreeMap<String, String> {
+    pub fn effective_labels(&self, environment: &str) -> BTreeMap<String, String> {
         let mut labels = self.labels.clone();
-        labels.insert("env".to_owned(), self.environment.clone());
+        labels.insert("env".to_owned(), environment.to_owned());
         labels
     }
 }
@@ -520,6 +553,55 @@ pub enum ConfigError {
     Invalid(String),
 }
 
+/// Whether an id can be a path segment verbatim.
+///
+/// Environment, cluster and registry ids all appear in URLs now, so they all
+/// answer to this. Deliberately narrower than percent-encoding would require:
+/// an id that needs escaping is one that will be copied into a curl command
+/// wrong, and refusing it at startup costs a rename once.
+fn is_path_safe(id: &str) -> bool {
+    id.chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// The top-level blocks that moved inside `environments:`.
+///
+/// `deny_unknown_fields` already refuses them, but it refuses them with
+/// "unknown field `clusters`", which reads as *misspelled* rather than
+/// *moved*. Anyone upgrading has a working config full of these, and the one
+/// thing they need told is where the block went.
+const MOVED_BLOCKS: [(&str, &str); 3] = [
+    ("clusters", "kafka_clusters"),
+    ("schema_registries", "schema_registries"),
+    ("resources", "resources"),
+];
+
+/// Say what to do about a pre-nesting config, before serde says something
+/// less useful about it.
+fn migration_error(yaml: &str) -> Option<ConfigError> {
+    let moved: Vec<&(&str, &str)> = MOVED_BLOCKS
+        .iter()
+        .filter(|(old, _)| {
+            yaml.lines().any(|line| {
+                line.trim_end() == format!("{old}:") || line.starts_with(&format!("{old}:"))
+            })
+        })
+        .collect();
+    if moved.is_empty() {
+        return None;
+    }
+    let moves = moved
+        .iter()
+        .map(|(old, new)| format!("`{old}:` -> `environments[].{new}:`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(ConfigError::Invalid(format!(
+        "this configuration is in the pre-nesting layout: {moves}. Everything now lives inside \
+         the environment that holds it, and a cluster's `env` label is gone — it is in an \
+         environment because it is declared there."
+    )))
+}
+
 impl Config {
     /// Load from a YAML file, overlaid with `KAAS_UI_*` environment variables.
     ///
@@ -527,6 +609,11 @@ impl Config {
     /// `KAAS_UI_SERVER__LISTEN=0.0.0.0:9000` sets `server.listen`, and
     /// `KAAS_UI_SERVER__BASE_PATH=/proxy/8099` sets the path prefix.
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
+        if let Ok(yaml) = std::fs::read_to_string(path)
+            && let Some(error) = migration_error(&yaml)
+        {
+            return Err(error);
+        }
         let mut config: Config = Figment::new()
             .merge(Yaml::file_exact(path))
             .merge(
@@ -543,6 +630,9 @@ impl Config {
 
     /// Parse from a YAML string. The environment is not consulted.
     pub fn from_yaml(yaml: &str) -> Result<Self, ConfigError> {
+        if let Some(error) = migration_error(yaml) {
+            return Err(error);
+        }
         let mut config: Config = Figment::new()
             .merge(Yaml::string(yaml))
             .extract()
@@ -550,6 +640,31 @@ impl Config {
         config.apply_defaults();
         config.validate()?;
         Ok(config)
+    }
+
+    /// Every cluster in the fleet, paired with the environment holding it.
+    ///
+    /// The nesting is the source of truth, so nothing caches a flattened copy
+    /// beside it — readers that genuinely want the whole fleet walk it through
+    /// here and get the environment id they need for a key or a label without
+    /// having to remember to.
+    pub fn clusters(&self) -> impl Iterator<Item = (&str, &ClusterEntry)> {
+        self.environments.iter().flat_map(|environment| {
+            environment
+                .kafka_clusters
+                .iter()
+                .map(move |cluster| (environment.id.as_str(), cluster))
+        })
+    }
+
+    /// Every schema registry in the fleet, paired with its environment.
+    pub fn schema_registries(&self) -> impl Iterator<Item = (&str, &SchemaRegistryEntry)> {
+        self.environments.iter().flat_map(|environment| {
+            environment
+                .schema_registries
+                .iter()
+                .map(move |registry| (environment.id.as_str(), registry))
+        })
     }
 
     /// Fill in what one block implies about another.
@@ -587,197 +702,218 @@ impl Config {
 
     /// Reject configurations that parse but cannot work.
     fn validate(&self) -> Result<(), ConfigError> {
-        if self.clusters.is_empty() {
+        if self.environments.is_empty() {
             return Err(ConfigError::Invalid(
-                "no clusters configured: kaas-ui with an empty registry has nothing to show".into(),
+                "no environments configured: every cluster, registry and resource lives inside \
+                 one, so a fleet without them has nothing to show"
+                    .into(),
             ));
         }
 
-        let mut registries: BTreeMap<&str, ()> = BTreeMap::new();
-        for registry in &self.schema_registries {
-            if registry.id.is_empty() {
+        let mut seen_environments: BTreeMap<&str, ()> = BTreeMap::new();
+        let mut cluster_count = 0usize;
+
+        for environment in &self.environments {
+            let env = environment.id.as_str();
+            if env.is_empty() {
                 return Err(ConfigError::Invalid(
-                    "a schema registry has an empty id: it is what a cluster's `schema_registry` \
-                     names"
+                    "an environment has an empty id: it leads every URL under \
+                     `/api/environments`"
                         .into(),
                 ));
             }
-            if registries.insert(registry.id.as_str(), ()).is_some() {
+            if !is_path_safe(env) {
                 return Err(ConfigError::Invalid(format!(
-                    "duplicate schema registry id {:?}",
-                    registry.id
+                    "environment id {env:?} may only contain letters, digits, '-' and '_': it \
+                     appears verbatim in every URL"
                 )));
             }
-            if !registry.url.starts_with("http://") && !registry.url.starts_with("https://") {
+            if seen_environments.insert(env, ()).is_some() {
                 return Err(ConfigError::Invalid(format!(
-                    "schema registry {:?} has url {:?}, which is not an http(s) url",
-                    registry.id, registry.url
+                    "duplicate environment id {env:?}"
                 )));
             }
-            // Whether the url is *ccompat* cannot be settled here — it takes
-            // asking the registry, and connecting is lazy. What can be settled
-            // here is the shape of the credentials.
-            if registry.username.is_none()
-                && (registry.password.is_some() || registry.password_file.is_some())
-            {
-                return Err(ConfigError::Invalid(format!(
-                    "schema registry {:?} configures a password with no username",
-                    registry.id
-                )));
-            }
-            if registry.username.is_some()
-                && (registry.bearer_token.is_some() || registry.bearer_token_file.is_some())
-            {
-                return Err(ConfigError::Invalid(format!(
-                    "schema registry {:?} configures both basic auth and a bearer token: only one \
-                     of them can be sent",
-                    registry.id
-                )));
-            }
-        }
 
-        let mut seen: BTreeMap<&str, ()> = BTreeMap::new();
-        for cluster in &self.clusters {
-            if cluster.id.is_empty() {
-                return Err(ConfigError::Invalid("a cluster has an empty id".into()));
-            }
-            if !cluster
-                .id
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-            {
-                return Err(ConfigError::Invalid(format!(
-                    "cluster id {:?} may only contain letters, digits, '-' and '_': it appears \
-                     verbatim in every URL",
-                    cluster.id
-                )));
-            }
-            if seen.insert(cluster.id.as_str(), ()).is_some() {
-                return Err(ConfigError::Invalid(format!(
-                    "duplicate cluster id {:?}",
-                    cluster.id
-                )));
-            }
-            if cluster.bootstrap.is_empty() {
-                return Err(ConfigError::Invalid(format!(
-                    "cluster {:?} has no bootstrap servers",
-                    cluster.id
-                )));
-            }
-            if let Some(sasl) = &cluster.sasl
-                && sasl.password.is_none()
-                && sasl.password_file.is_none()
-            {
-                return Err(ConfigError::Invalid(format!(
-                    "cluster {:?} configures sasl without a password or password_file",
-                    cluster.id
-                )));
-            }
-            if let Some(tls) = &cluster.tls
-                && tls.cert_file.is_some() != tls.key_file.is_some()
-            {
-                return Err(ConfigError::Invalid(format!(
-                    "cluster {:?} configures one half of a client certificate: cert_file and \
-                     key_file go together",
-                    cluster.id
-                )));
-            }
-            // The reference has to name something. Starting with decoding
-            // silently off is the failure this exists to prevent, and it is
-            // invisible: every Avro topic renders as hex and nothing says why.
-            if let Some(registry) = &cluster.schema_registry
-                && !registries.contains_key(registry.as_str())
-            {
-                return Err(ConfigError::Invalid(format!(
-                    "cluster {:?} references schema registry {:?}, which no `schema_registries:` \
-                     entry declares{}",
-                    cluster.id,
-                    registry,
-                    if registries.is_empty() {
-                        " — there are none".to_owned()
-                    } else {
-                        format!(
-                            " (declared: {})",
-                            registries
-                                .keys()
-                                .map(|id| format!("{id:?}"))
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        )
-                    }
-                )));
-            }
-            for codec in &cluster.codecs {
-                if codec.topic.is_empty() {
+            // Registries first: the clusters below reference them, and an
+            // unresolvable reference is the error worth reporting rather than
+            // whatever the reference happened to be checked against.
+            let mut registries: BTreeMap<&str, ()> = BTreeMap::new();
+            for registry in &environment.schema_registries {
+                if registry.id.is_empty() {
                     return Err(ConfigError::Invalid(format!(
-                        "cluster {:?} has a `codecs` entry with an empty topic",
+                        "a schema registry in environment {env:?} has an empty id: it is what a \
+                         cluster's `schema_registry` names"
+                    )));
+                }
+                if !is_path_safe(&registry.id) {
+                    return Err(ConfigError::Invalid(format!(
+                        "schema registry id {:?} in environment {env:?} may only contain letters, \
+                         digits, '-' and '_': it appears verbatim in every URL",
+                        registry.id
+                    )));
+                }
+                if registries.insert(registry.id.as_str(), ()).is_some() {
+                    return Err(ConfigError::Invalid(format!(
+                        "duplicate schema registry id {:?} in environment {env:?}",
+                        registry.id
+                    )));
+                }
+                if !registry.url.starts_with("http://") && !registry.url.starts_with("https://") {
+                    return Err(ConfigError::Invalid(format!(
+                        "schema registry {:?} in environment {env:?} has url {:?}, which is not an \
+                         http(s) url",
+                        registry.id, registry.url
+                    )));
+                }
+                // Whether the url is *ccompat* cannot be settled here — it takes
+                // asking the registry, and connecting is lazy. What can be settled
+                // here is the shape of the credentials.
+                if registry.username.is_none()
+                    && (registry.password.is_some() || registry.password_file.is_some())
+                {
+                    return Err(ConfigError::Invalid(format!(
+                        "schema registry {:?} in environment {env:?} configures a password with no \
+                         username",
+                        registry.id
+                    )));
+                }
+                if registry.username.is_some()
+                    && (registry.bearer_token.is_some() || registry.bearer_token_file.is_some())
+                {
+                    return Err(ConfigError::Invalid(format!(
+                        "schema registry {:?} in environment {env:?} configures both basic auth \
+                         and a bearer token: only one of them can be sent",
+                        registry.id
+                    )));
+                }
+            }
+
+            let mut clusters: BTreeMap<&str, ()> = BTreeMap::new();
+            for cluster in &environment.kafka_clusters {
+                cluster_count += 1;
+                if cluster.id.is_empty() {
+                    return Err(ConfigError::Invalid(format!(
+                        "a cluster in environment {env:?} has an empty id"
+                    )));
+                }
+                if !is_path_safe(&cluster.id) {
+                    return Err(ConfigError::Invalid(format!(
+                        "cluster id {:?} may only contain letters, digits, '-' and '_': it \
+                         appears verbatim in every URL",
                         cluster.id
                     )));
                 }
-                if codec.key.is_none() && codec.value.is_none() {
+                // Within the environment, not across the fleet. Two teams may
+                // each call their cluster `kafka`, and now that an id is only
+                // reachable under an environment there is nothing to collide.
+                if clusters.insert(cluster.id.as_str(), ()).is_some() {
                     return Err(ConfigError::Invalid(format!(
-                        "cluster {:?} has a `codecs` entry for {:?} that sets neither `key` nor \
-                         `value`",
-                        cluster.id, codec.topic
+                        "duplicate cluster id {:?} in environment {env:?}",
+                        cluster.id
+                    )));
+                }
+                // The nesting is the membership. A label saying otherwise is
+                // not merged and not ignored: it is the one input that could
+                // put a cluster in `prod` outside a `cluster_labels:
+                // {env: prod}` selector, silently.
+                if cluster.labels.contains_key("env") {
+                    return Err(ConfigError::Invalid(format!(
+                        "cluster {:?} sets an `env` label, which is no longer how a cluster joins \
+                         an environment — it is in {env:?} because it is declared there. Remove \
+                         the label.",
+                        cluster.id
+                    )));
+                }
+                if cluster.bootstrap.is_empty() {
+                    return Err(ConfigError::Invalid(format!(
+                        "cluster {:?} has no bootstrap servers",
+                        cluster.id
+                    )));
+                }
+                if let Some(sasl) = &cluster.sasl
+                    && sasl.password.is_none()
+                    && sasl.password_file.is_none()
+                {
+                    return Err(ConfigError::Invalid(format!(
+                        "cluster {:?} configures sasl without a password or password_file",
+                        cluster.id
+                    )));
+                }
+                if let Some(tls) = &cluster.tls
+                    && tls.cert_file.is_some() != tls.key_file.is_some()
+                {
+                    return Err(ConfigError::Invalid(format!(
+                        "cluster {:?} configures one half of a client certificate: cert_file and \
+                         key_file go together",
+                        cluster.id
+                    )));
+                }
+                // The reference has to name something *in this environment*.
+                // Starting with decoding silently off is the failure this
+                // exists to prevent, and it is invisible: every Avro topic
+                // renders as hex and nothing says why.
+                if let Some(registry) = &cluster.schema_registry
+                    && !registries.contains_key(registry.as_str())
+                {
+                    return Err(ConfigError::Invalid(format!(
+                        "cluster {:?} references schema registry {:?}, which environment {env:?} \
+                         does not declare{}",
+                        cluster.id,
+                        registry,
+                        if registries.is_empty() {
+                            " — it declares none".to_owned()
+                        } else {
+                            format!(
+                                " (it declares: {})",
+                                registries
+                                    .keys()
+                                    .map(|id| format!("{id:?}"))
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            )
+                        }
+                    )));
+                }
+                for codec in &cluster.codecs {
+                    if codec.topic.is_empty() {
+                        return Err(ConfigError::Invalid(format!(
+                            "cluster {:?} has a `codecs` entry with an empty topic",
+                            cluster.id
+                        )));
+                    }
+                    if codec.key.is_none() && codec.value.is_none() {
+                        return Err(ConfigError::Invalid(format!(
+                            "cluster {:?} has a `codecs` entry for {:?} that sets neither `key` \
+                             nor `value`",
+                            cluster.id, codec.topic
+                        )));
+                    }
+                }
+            }
+
+            let mut resources: BTreeMap<&str, ()> = BTreeMap::new();
+            for resource in &environment.resources {
+                if resource.id.is_empty() {
+                    return Err(ConfigError::Invalid(format!(
+                        "a resource in environment {env:?} has an empty id"
+                    )));
+                }
+                if resources.insert(resource.id.as_str(), ()).is_some() {
+                    return Err(ConfigError::Invalid(format!(
+                        "duplicate resource id {:?} in environment {env:?}",
+                        resource.id
                     )));
                 }
             }
         }
 
-        let mut environments: BTreeMap<&str, ()> = BTreeMap::new();
-        for environment in &self.environments {
-            if environment.id.is_empty() {
-                return Err(ConfigError::Invalid(
-                    "an environment has an empty id: it is what a cluster's `env` label names"
-                        .into(),
-                ));
-            }
-            if environments.insert(environment.id.as_str(), ()).is_some() {
-                return Err(ConfigError::Invalid(format!(
-                    "duplicate environment id {:?}",
-                    environment.id
-                )));
-            }
+        if cluster_count == 0 {
+            return Err(ConfigError::Invalid(
+                "no Kafka clusters configured: every environment declares only registries or \
+                 inventory, so there is nothing to connect to"
+                    .into(),
+            ));
         }
-
-        // An environment is real if it was declared or if a cluster is in it.
-        // Anything else a resource names is a typo, and the whole point of
-        // saying so here is that the alternative is silent: a lonely section,
-        // rendered like every other one, at the bottom of the fleet.
-        let mut inhabited: BTreeMap<&str, ()> = environments;
-        for cluster in &self.clusters {
-            if let Some(env) = cluster.labels.get("env") {
-                inhabited.insert(env.as_str(), ());
-            }
-        }
-
-        let mut seen_resources: BTreeMap<&str, ()> = BTreeMap::new();
-        for resource in &self.resources {
-            if resource.id.is_empty() {
-                return Err(ConfigError::Invalid("a resource has an empty id".into()));
-            }
-            if seen_resources.insert(resource.id.as_str(), ()).is_some() {
-                return Err(ConfigError::Invalid(format!(
-                    "duplicate resource id {:?}",
-                    resource.id
-                )));
-            }
-            if resource.environment.is_empty() {
-                return Err(ConfigError::Invalid(format!(
-                    "resource {:?} names no environment: there is no section to put it in",
-                    resource.id
-                )));
-            }
-            if !inhabited.contains_key(resource.environment.as_str()) {
-                return Err(ConfigError::Invalid(format!(
-                    "resource {:?} is in environment {:?}, which no cluster labels `env: {}` and \
-                     no `environments:` entry declares — declare it there if the environment holds \
-                     no Kafka cluster",
-                    resource.id, resource.environment, resource.environment
-                )));
-            }
-        }
-
         for role in &self.roles {
             if role.name.is_empty() {
                 return Err(ConfigError::Invalid(
@@ -857,7 +993,7 @@ impl ClusterEntry {
 /// `the_environment_overlay_still_overrides_the_file` now catches.
 fn is_ours(key: &str) -> bool {
     let key = key.to_ascii_lowercase();
-    for root in ["server", "clusters"] {
+    for root in ["server", "environments"] {
         if key == root
             || key.starts_with(&format!("{root}."))
             || key.starts_with(&format!("{root}__"))
@@ -872,74 +1008,183 @@ fn is_ours(key: &str) -> bool {
 mod tests {
     use super::*;
 
+    /// The smallest thing that loads: one environment, one cluster in it.
+    ///
+    /// Every fixture here starts this way now. That is the point of the shape
+    /// — there is no top level to declare a cluster at, so a config cannot be
+    /// written that leaves one homeless.
     const MINIMAL: &str = r#"
-clusters:
-  - id: kaas
-    bootstrap: ["kaas.kaas.svc.cluster.local:9092"]
+environments:
+  - id: dev
+    kafka_clusters:
+      - id: kaas
+        bootstrap: ["kaas.kaas.svc.cluster.local:9092"]
 "#;
+
+    /// The first cluster, for tests that declared exactly one.
+    fn only_cluster(config: &Config) -> &ClusterEntry {
+        config.clusters().next().expect("a cluster").1
+    }
 
     #[test]
     fn minimal_config_parses_and_defaults() {
         let config = Config::from_yaml(MINIMAL).unwrap();
-        assert_eq!(config.clusters.len(), 1);
+        assert_eq!(config.clusters().count(), 1);
         assert_eq!(config.server.listen.port(), 8080);
-        assert_eq!(config.clusters[0].display_name(), "kaas");
+        assert_eq!(only_cluster(&config).display_name(), "kaas");
+    }
+
+    #[test]
+    fn a_cluster_is_in_the_environment_that_holds_it() {
+        let config = Config::from_yaml(MINIMAL).unwrap();
+        let (environment, cluster) = config.clusters().next().unwrap();
+        assert_eq!(environment, "dev");
+        // Derived, never stored: the label and the block it sits in cannot
+        // disagree, because there is only one of them.
+        assert_eq!(
+            cluster.effective_labels(environment).get("env"),
+            Some(&"dev".to_owned())
+        );
+    }
+
+    #[test]
+    fn an_env_label_is_rejected_because_nesting_decides_it() {
+        // The one input that could have put a cluster in `prod` outside a
+        // `cluster_labels: {env: prod}` selector. Merging it silently is how
+        // that hole gets shipped; refusing it costs a deleted line.
+        let err = Config::from_yaml(
+            r#"
+environments:
+  - id: dev
+    kafka_clusters:
+      - id: kaas
+        bootstrap: ["a:9092"]
+        labels: { env: prod }
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            format!("{err}").contains("no longer how a cluster joins"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn the_same_id_in_two_environments_is_two_clusters() {
+        // What the nesting buys. `kafka` in dev and `kafka` in prod collided
+        // in one flat namespace; now each is reachable only under its own
+        // environment and neither has to be renamed.
+        let config = Config::from_yaml(
+            r#"
+environments:
+  - id: dev
+    kafka_clusters:
+      - id: kafka
+        bootstrap: ["dev:9092"]
+  - id: prod
+    kafka_clusters:
+      - id: kafka
+        bootstrap: ["prod:9092"]
+"#,
+        )
+        .unwrap();
+        let found: Vec<(&str, &str)> = config
+            .clusters()
+            .map(|(environment, cluster)| (environment, cluster.id.as_str()))
+            .collect();
+        assert_eq!(found, vec![("dev", "kafka"), ("prod", "kafka")]);
+    }
+
+    #[test]
+    fn a_duplicate_id_within_one_environment_is_still_rejected() {
+        let err = Config::from_yaml(
+            r#"
+environments:
+  - id: dev
+    kafka_clusters:
+      - id: kaas
+        bootstrap: ["a:9092"]
+      - id: kaas
+        bootstrap: ["b:9092"]
+"#,
+        )
+        .unwrap_err();
+        assert!(format!("{err}").contains("duplicate cluster id"), "{err}");
+    }
+
+    #[test]
+    fn a_pre_nesting_config_says_where_the_blocks_went() {
+        // Anyone upgrading has a working config full of top-level `clusters:`.
+        // `deny_unknown_fields` would call that a misspelling; it is a move,
+        // and the one thing worth being told is the destination.
+        let err = Config::from_yaml(
+            r#"
+clusters:
+  - id: kaas
+    bootstrap: ["a:9092"]
+"#,
+        )
+        .unwrap_err();
+        let message = format!("{err}");
+        assert!(message.contains("pre-nesting"), "{message}");
+        assert!(
+            message.contains("environments[].kafka_clusters"),
+            "{message}"
+        );
     }
 
     #[test]
     fn durations_are_human_readable() {
         let config = Config::from_yaml(
             r#"
-clusters:
-  - id: kaas
-    bootstrap: ["a:9092"]
-    refresh_interval: 45s
-    connect_timeout: 2500ms
+environments:
+  - id: dev
+    kafka_clusters:
+      - id: kaas
+        bootstrap: ["a:9092"]
+        refresh_interval: 45s
+        connect_timeout: 2500ms
 "#,
         )
         .unwrap();
         assert_eq!(
-            config.clusters[0].refresh_interval,
+            only_cluster(&config).refresh_interval,
             Some(Duration::from_secs(45))
         );
         assert_eq!(
-            config.clusters[0].connect_timeout,
+            only_cluster(&config).connect_timeout,
             Some(Duration::from_millis(2500))
         );
     }
 
     #[test]
     fn an_unknown_block_is_rejected_rather_than_ignored() {
-        // The whole point: someone writes `schema_registry:` before the phase
-        // that reads it exists, and finds out at startup rather than by
-        // wondering why nothing happened.
+        // The whole point: someone writes a block the shape does not have, and
+        // finds out at startup rather than by wondering why nothing happened.
         let err = Config::from_yaml(
             r#"
-clusters:
-  - id: kaas
-    bootstrap: ["a:9092"]
-    schema_registry:
-      url: http://localhost:8081
+environments:
+  - id: dev
+    kafka_clusters:
+      - id: kaas
+        bootstrap: ["a:9092"]
+        schema_registry:
+          url: http://localhost:8081
 "#,
         )
         .unwrap_err();
         assert!(format!("{err}").contains("schema_registry"), "{err}");
     }
 
-    /// The block the deployed sign-in screen is driven by.
-    ///
-    /// `OidcConfig` and `Connector` both `deny_unknown_fields`, so a typo in
-    /// either key is a startup failure rather than a silently empty list — and
-    /// an empty list is exactly what "let the provider ask" looks like, which
-    /// is why it must not be reachable by accident.
     #[test]
     fn named_connectors_parse_and_are_optional() {
         let config = Config::from_yaml(
             r#"
-clusters:
-  - id: kaas
-    bootstrap: ["a:9092"]
-
+environments:
+  - id: dev
+    kafka_clusters:
+      - id: kaas
+        bootstrap: ["a:9092"]
 auth:
   issuer: https://kaas.smeding.cloud/dex
   client_id: kaas-ui
@@ -947,26 +1192,22 @@ auth:
   connectors:
     - id: github
       name: GitHub
-    - id: microsoft
-      name: Microsoft
+    - id: local
+      name: Email
 "#,
         )
         .unwrap();
+        let connectors = &config.auth.as_ref().expect("an auth block").connectors;
+        assert_eq!(connectors.len(), 2);
+        assert_eq!(connectors[0].id, "github");
 
-        let auth = config.auth.expect("an auth block");
-        let ids: Vec<&str> = auth.connectors.iter().map(|c| c.id.as_str()).collect();
-        let names: Vec<&str> = auth.connectors.iter().map(|c| c.name.as_str()).collect();
-        assert_eq!(ids, ["github", "microsoft"]);
-        assert_eq!(names, ["GitHub", "Microsoft"]);
-
-        // Absent is the shape every deployment had before this existed, and it
-        // has to keep meaning "one unnamed button".
         let bare = Config::from_yaml(
             r#"
-clusters:
-  - id: kaas
-    bootstrap: ["a:9092"]
-
+environments:
+  - id: dev
+    kafka_clusters:
+      - id: kaas
+        bootstrap: ["a:9092"]
 auth:
   issuer: https://kaas.smeding.cloud/dex
   client_id: kaas-ui
@@ -984,21 +1225,20 @@ auth:
 environments:
   - id: dev
     name: Development
+    kafka_clusters:
+      - id: kaas
+        bootstrap: ["a:9092"]
+    resources:
+      - id: apicurio-dev
+        kind: schema_registry
+        endpoint: http://apicurio:8080/apis/ccompat/v7
   - id: prod
-
-clusters:
-  - id: kaas
-    bootstrap: ["a:9092"]
-    labels: { env: dev }
-
-resources:
-  - id: apicurio-dev
-    kind: schema_registry
-    environment: dev
-    endpoint: http://apicurio:8080/apis/ccompat/v7
-  - id: mosquitto
-    kind: mqtt_broker
-    environment: prod
+    kafka_clusters:
+      - id: prod-eu
+        bootstrap: ["b:9092"]
+    resources:
+      - id: mosquitto
+        kind: mqtt_broker
 "#,
         )
         .unwrap();
@@ -1007,11 +1247,14 @@ resources:
         // Undeclared name falls back to the id, so a section always has a
         // heading.
         assert_eq!(config.environments[1].display_name(), "prod");
-        assert_eq!(config.resources[0].kind, ResourceKind::SchemaRegistry);
-        // `env` is derived, never stored: it cannot disagree with the section.
         assert_eq!(
-            config.resources[1]
-                .effective_labels()
+            config.environments[0].resources[0].kind,
+            ResourceKind::SchemaRegistry
+        );
+        // `env` is derived from where the entry sits, never stored.
+        assert_eq!(
+            config.environments[1].resources[0]
+                .effective_labels("prod")
                 .get("env")
                 .map(String::as_str),
             Some("prod")
@@ -1019,89 +1262,117 @@ resources:
     }
 
     #[test]
-    fn a_resource_in_an_environment_nobody_declared_is_rejected() {
-        // The typo this exists for. Without the check it renders as a section
-        // of one at the bottom of the fleet, looking exactly like a real
-        // environment nobody has any clusters in.
+    fn a_resource_cannot_name_an_environment_that_does_not_exist() {
+        // This used to be a validation rule with an error message: a resource
+        // named an environment, and a typo opened a section of one at the
+        // bottom of the fleet looking exactly like a real environment. The
+        // shape retired the rule — there is nowhere to write the typo, because
+        // a resource has no environment field to get wrong.
         let err = Config::from_yaml(
             r#"
-clusters:
-  - id: kaas
-    bootstrap: ["a:9092"]
-    labels: { env: dev }
-
-resources:
-  - id: apicurio
-    kind: schema_registry
-    environment: dve
+environments:
+  - id: dev
+    kafka_clusters:
+      - id: kaas
+        bootstrap: ["a:9092"]
+    resources:
+      - id: apicurio
+        kind: schema_registry
+        environment: dve
 "#,
         )
         .unwrap_err();
-        assert!(
-            format!("{err}").contains("no `environments:` entry declares"),
-            "{err}"
-        );
+        assert!(format!("{err}").contains("environment"), "{err}");
     }
 
     #[test]
-    fn an_environment_of_resources_alone_is_legal_once_declared() {
-        // Declaring it is the opt-in: an environment with no Kafka cluster in
-        // it is a real thing to want, and saying so out loud is what separates
-        // it from the typo above.
+    fn an_environment_of_resources_alone_is_legal() {
+        // An environment with no Kafka cluster in it is a real thing to want,
+        // and it needs no opt-in now: writing the block is the declaration.
         let config = Config::from_yaml(
             r#"
 environments:
+  - id: dev
+    kafka_clusters:
+      - id: kaas
+        bootstrap: ["a:9092"]
   - id: edge
-
-clusters:
-  - id: kaas
-    bootstrap: ["a:9092"]
-    labels: { env: dev }
-
-resources:
-  - id: mosquitto
-    kind: mqtt_broker
-    environment: edge
+    resources:
+      - id: mosquitto
+        kind: mqtt_broker
 "#,
         )
         .unwrap();
-        assert_eq!(config.resources.len(), 1);
+        assert_eq!(config.environments[1].resources.len(), 1);
+        assert!(config.environments[1].kafka_clusters.is_empty());
+        assert!(!config.environments[1].is_empty());
     }
 
-    /// The shape the phase is about: declared once, referenced by id, and a
-    /// cluster in the same environment that uses none.
+    /// The shape the nesting is about: a registry beside the clusters that use
+    /// it, referenced by id, and a cluster in the same environment using none.
     #[test]
-    fn a_registry_is_declared_once_and_referenced_by_id() {
+    fn a_registry_sits_in_an_environment_and_is_referenced_by_id() {
         let config = Config::from_yaml(
             r#"
-schema_registries:
+environments:
   - id: dev
-    name: Apicurio (dev)
-    url: http://apicurio-registry.apicurio.svc.cluster.local:8080/apis/ccompat/v7
-    subjects_ttl: 15s
-
-clusters:
-  - id: strimzi
-    bootstrap: ["a:9092"]
-    labels: { env: dev }
-    schema_registry: dev
-  - id: kaas
-    bootstrap: ["b:9092"]
-    labels: { env: dev }
+    schema_registries:
+      - id: apicurio
+        name: Apicurio (dev)
+        url: http://apicurio-registry.apicurio.svc.cluster.local:8080/apis/ccompat/v7
+        subjects_ttl: 15s
+    kafka_clusters:
+      - id: strimzi
+        bootstrap: ["a:9092"]
+        schema_registry: apicurio
+      - id: kaas
+        bootstrap: ["b:9092"]
 "#,
         )
         .unwrap();
 
-        assert_eq!(config.schema_registries.len(), 1);
-        assert_eq!(config.schema_registries[0].display_name(), "Apicurio (dev)");
-        assert_eq!(config.clusters[0].schema_registry.as_deref(), Some("dev"));
-        // Reference, not membership: a cluster in `dev` need not use `dev`'s
-        // registry, and absence is a normal path rather than a mistake.
-        assert_eq!(config.clusters[1].schema_registry, None);
+        assert_eq!(config.schema_registries().count(), 1);
+        let (environment, registry) = config.schema_registries().next().unwrap();
+        assert_eq!(environment, "dev");
+        assert_eq!(registry.display_name(), "Apicurio (dev)");
 
-        let settings = config.schema_registries[0].to_settings().unwrap();
+        let clusters: Vec<&ClusterEntry> = config.clusters().map(|(_, c)| c).collect();
+        assert_eq!(clusters[0].schema_registry.as_deref(), Some("apicurio"));
+        // Reference, not membership: a cluster beside a registry need not
+        // decode against it, and absence is a normal path.
+        assert_eq!(clusters[1].schema_registry, None);
+
+        let settings = registry.to_settings().unwrap();
         assert_eq!(settings.subjects_ttl, Duration::from_secs(15));
         assert_eq!(settings.name, "Apicurio (dev)");
+    }
+
+    #[test]
+    fn a_reference_may_not_cross_an_environment_boundary() {
+        // `dev`'s registry is not in scope from `prod`, however global the id
+        // looks. Allowing it would make one environment's decoding depend on
+        // another's configuration.
+        let err = Config::from_yaml(
+            r#"
+environments:
+  - id: dev
+    schema_registries:
+      - id: apicurio
+        url: http://apicurio:8080/apis/ccompat/v7
+    kafka_clusters:
+      - id: kaas
+        bootstrap: ["a:9092"]
+  - id: prod
+    kafka_clusters:
+      - id: prod-eu
+        bootstrap: ["b:9092"]
+        schema_registry: apicurio
+"#,
+        )
+        .unwrap_err();
+        let message = format!("{err}");
+        assert!(message.contains("\"apicurio\""), "{message}");
+        assert!(message.contains("it declares none"), "{message}");
     }
 
     #[test]
@@ -1111,48 +1382,52 @@ clusters:
         // anywhere says why.
         let err = Config::from_yaml(
             r#"
-schema_registries:
+environments:
   - id: dev
-    url: http://apicurio:8080/apis/ccompat/v7
-
-clusters:
-  - id: strimzi
-    bootstrap: ["a:9092"]
-    schema_registry: dve
+    schema_registries:
+      - id: apicurio
+        url: http://apicurio:8080/apis/ccompat/v7
+    kafka_clusters:
+      - id: strimzi
+        bootstrap: ["a:9092"]
+        schema_registry: apicuriio
 "#,
         )
         .unwrap_err();
         let message = format!("{err}");
-        assert!(message.contains("\"dve\""), "{message}");
-        assert!(message.contains("\"dev\""), "{message}");
+        assert!(message.contains("\"apicuriio\""), "{message}");
+        assert!(message.contains("\"apicurio\""), "{message}");
     }
 
     #[test]
     fn a_registry_id_nobody_declared_at_all_says_there_are_none() {
         let err = Config::from_yaml(
             r#"
-clusters:
-  - id: strimzi
-    bootstrap: ["a:9092"]
-    schema_registry: dev
+environments:
+  - id: dev
+    kafka_clusters:
+      - id: strimzi
+        bootstrap: ["a:9092"]
+        schema_registry: apicurio
 "#,
         )
         .unwrap_err();
-        assert!(format!("{err}").contains("there are none"), "{err}");
+        assert!(format!("{err}").contains("it declares none"), "{err}");
     }
 
     #[test]
     fn half_a_credential_is_rejected() {
         let err = Config::from_yaml(
             r#"
-schema_registries:
+environments:
   - id: dev
-    url: http://apicurio:8080/apis/ccompat/v7
-    password: hunter2
-
-clusters:
-  - id: strimzi
-    bootstrap: ["a:9092"]
+    schema_registries:
+      - id: apicurio
+        url: http://apicurio:8080/apis/ccompat/v7
+        password: hunter2
+    kafka_clusters:
+      - id: strimzi
+        bootstrap: ["a:9092"]
 "#,
         )
         .unwrap_err();
@@ -1160,15 +1435,16 @@ clusters:
 
         let err = Config::from_yaml(
             r#"
-schema_registries:
+environments:
   - id: dev
-    url: http://apicurio:8080/apis/ccompat/v7
-    username: someone
-    bearer_token: abc
-
-clusters:
-  - id: strimzi
-    bootstrap: ["a:9092"]
+    schema_registries:
+      - id: apicurio
+        url: http://apicurio:8080/apis/ccompat/v7
+        username: someone
+        bearer_token: abc
+    kafka_clusters:
+      - id: strimzi
+        bootstrap: ["a:9092"]
 "#,
         )
         .unwrap_err();
@@ -1181,13 +1457,14 @@ clusters:
         // is an http url does not.
         let err = Config::from_yaml(
             r#"
-schema_registries:
+environments:
   - id: dev
-    url: apicurio-registry.apicurio.svc.cluster.local:8080
-
-clusters:
-  - id: strimzi
-    bootstrap: ["a:9092"]
+    schema_registries:
+      - id: apicurio
+        url: apicurio-registry.apicurio.svc.cluster.local:8080
+    kafka_clusters:
+      - id: strimzi
+        bootstrap: ["a:9092"]
 "#,
         )
         .unwrap_err();
@@ -1198,20 +1475,22 @@ clusters:
     fn a_topic_codec_matches_exactly_or_by_prefix() {
         let config = Config::from_yaml(
             r#"
-clusters:
-  - id: strimzi
-    bootstrap: ["a:9092"]
-    codecs:
-      - topic: raw-bytes-v1
-        value: hex
-      - topic: "orders-*"
-        key: string
-        value: json
+environments:
+  - id: dev
+    kafka_clusters:
+      - id: strimzi
+        bootstrap: ["a:9092"]
+        codecs:
+          - topic: raw-bytes-v1
+            value: hex
+          - topic: "orders-*"
+            key: string
+            value: json
 "#,
         )
         .unwrap();
 
-        let codecs = &config.clusters[0].codecs;
+        let codecs = &only_cluster(&config).codecs;
         assert!(codecs[0].matches("raw-bytes-v1"));
         assert!(!codecs[0].matches("raw-bytes-v10"));
         assert!(codecs[1].matches("orders-eu"));
@@ -1224,11 +1503,13 @@ clusters:
     fn a_codec_entry_that_sets_nothing_is_rejected() {
         let err = Config::from_yaml(
             r#"
-clusters:
-  - id: strimzi
-    bootstrap: ["a:9092"]
-    codecs:
-      - topic: orders
+environments:
+  - id: dev
+    kafka_clusters:
+      - id: strimzi
+        bootstrap: ["a:9092"]
+        codecs:
+          - topic: orders
 "#,
         )
         .unwrap_err();
@@ -1239,37 +1520,59 @@ clusters:
     }
 
     #[test]
-    fn duplicate_ids_are_rejected() {
-        let err = Config::from_yaml(
-            r#"
-clusters:
-  - id: kaas
-    bootstrap: ["a:9092"]
-  - id: kaas
-    bootstrap: ["b:9092"]
-"#,
-        )
-        .unwrap_err();
-        assert!(format!("{err}").contains("duplicate"), "{err}");
-    }
-
-    #[test]
     fn an_id_that_would_need_escaping_is_rejected() {
-        let err = Config::from_yaml(
+        for yaml in [
             r#"
-clusters:
-  - id: "prod/eu"
-    bootstrap: ["a:9092"]
+environments:
+  - id: "dev/eu"
+    kafka_clusters:
+      - id: kaas
+        bootstrap: ["a:9092"]
 "#,
-        )
-        .unwrap_err();
-        assert!(format!("{err}").contains("every URL"), "{err}");
+            r#"
+environments:
+  - id: dev
+    kafka_clusters:
+      - id: "prod/eu"
+        bootstrap: ["a:9092"]
+"#,
+            r#"
+environments:
+  - id: dev
+    schema_registries:
+      - id: "a/b"
+        url: http://apicurio:8080/apis/ccompat/v7
+    kafka_clusters:
+      - id: kaas
+        bootstrap: ["a:9092"]
+"#,
+        ] {
+            let err = Config::from_yaml(yaml).unwrap_err();
+            assert!(format!("{err}").contains("every URL"), "{err}");
+        }
     }
 
     #[test]
-    fn empty_registry_is_rejected() {
-        let err = Config::from_yaml("clusters: []").unwrap_err();
-        assert!(format!("{err}").contains("no clusters"), "{err}");
+    fn a_fleet_with_no_environments_is_rejected() {
+        let err = Config::from_yaml("environments: []").unwrap_err();
+        assert!(format!("{err}").contains("no environments"), "{err}");
+    }
+
+    #[test]
+    fn an_environment_holding_no_cluster_at_all_is_rejected() {
+        // Registries and inventory are things to look at, not things to
+        // connect to. A fleet of nothing but them has no brokers in it.
+        let err = Config::from_yaml(
+            r#"
+environments:
+  - id: edge
+    resources:
+      - id: mosquitto
+        kind: mqtt_broker
+"#,
+        )
+        .unwrap_err();
+        assert!(format!("{err}").contains("no Kafka clusters"), "{err}");
     }
 
     #[test]
@@ -1290,7 +1593,7 @@ clusters:
             assert!(!is_ours(injected), "{injected} should be ignored");
         }
 
-        for ours in ["SERVER__LISTEN", "server__listen", "CLUSTERS", "SERVER"] {
+        for ours in ["SERVER__LISTEN", "server__listen", "ENVIRONMENTS", "SERVER"] {
             assert!(is_ours(ours), "{ours} should be read");
         }
 
@@ -1314,9 +1617,11 @@ clusters:
                 r#"
 server:
   listen: "127.0.0.1:8080"
-clusters:
-  - id: kaas
-    bootstrap: ["a:9092"]
+environments:
+  - id: dev
+    kafka_clusters:
+      - id: kaas
+        bootstrap: ["a:9092"]
 "#,
             )?;
 
@@ -1329,7 +1634,7 @@ clusters:
                 .map_err(|error| figment::Error::from(error.to_string()))?;
 
             assert_eq!(config.server.listen.port(), 9999);
-            assert_eq!(config.clusters.len(), 1);
+            assert_eq!(config.clusters().count(), 1);
             Ok(())
         });
     }
@@ -1338,11 +1643,13 @@ clusters:
     fn half_a_client_certificate_is_rejected() {
         let err = Config::from_yaml(
             r#"
-clusters:
-  - id: kaas
-    bootstrap: ["a:9092"]
-    tls:
-      cert_file: /etc/certs/user.crt
+environments:
+  - id: dev
+    kafka_clusters:
+      - id: kaas
+        bootstrap: ["a:9092"]
+        tls:
+          cert_file: /etc/certs/user.crt
 "#,
         )
         .unwrap_err();
@@ -1351,9 +1658,11 @@ clusters:
 
     /// The deployed shape: Dex proxied here, issuer on kaas-ui's own hostname.
     const PROXIED_DEX: &str = r#"
-clusters:
-  - id: kaas
-    bootstrap: ["a:9092"]
+environments:
+  - id: dev
+    kafka_clusters:
+      - id: kaas
+        bootstrap: ["a:9092"]
 dex:
   upstream: http://dex.dex.svc.cluster.local:5556
 auth:
@@ -1411,12 +1720,14 @@ auth:
         // No `dex` block: nothing is proxied here, so there is no local Dex to
         // assume anything about. This is the case that made deriving from the
         // public URL the wrong shape — a deployment authenticating against
-        // somebody else\'s IdP must not be pointed at a Dex that is not theirs.
+        // somebody else's IdP must not be pointed at a Dex that is not theirs.
         let config = Config::from_yaml(
             r#"
-clusters:
-  - id: kaas
-    bootstrap: ["a:9092"]
+environments:
+  - id: dev
+    kafka_clusters:
+      - id: kaas
+        bootstrap: ["a:9092"]
 auth:
   issuer: https://accounts.example.test
   client_id: kaas-ui

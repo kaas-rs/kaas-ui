@@ -20,6 +20,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { PayloadBlock } from "./payload"
 
 export interface MessageDetailPanelProps {
+  envId: string
   clusterId: string
   topic: string
   /** The selected id, or nothing selected. */
@@ -38,6 +39,7 @@ export interface MessageDetailPanelProps {
 }
 
 export function MessageDetailPanel({
+  envId,
   clusterId,
   topic,
   selectedId,
@@ -46,7 +48,7 @@ export function MessageDetailPanel({
   keyCodec,
   valueCodec,
 }: MessageDetailPanelProps) {
-  const detail = useMessageDetail(clusterId, topic, selectedId, {
+  const detail = useMessageDetail(envId, clusterId, topic, selectedId, {
     keyCodec,
     valueCodec,
   })

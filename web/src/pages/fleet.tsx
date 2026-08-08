@@ -4,6 +4,7 @@ import { ArrowRight, RefreshCw } from "lucide-react"
 import { useFleet } from "@/api/client"
 import type {
   ClusterCard as ClusterCardData,
+  EnvironmentRegistry,
   EnvironmentSection,
   ResourceCard as ResourceCardData,
 } from "@/api/types"
@@ -20,6 +21,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card"
 import { PageTitle } from "@/components/page-title"
+import { cn } from "@/lib/utils"
 
 /**
  * The fleet, one section per environment.
@@ -84,8 +86,14 @@ function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`
 }
 
-/** One environment: its heading, and everything in it. */
-function Environment({ section }: { section: EnvironmentSection }) {
+/**
+ * One environment: its heading, and everything in it.
+ *
+ * Exported because the environment page renders exactly this — the fleet is
+ * every environment and the environment page is one of them, so a second
+ * layout would be two things to keep in step for no reason.
+ */
+export function Environment({ section }: { section: EnvironmentSection }) {
   // The same string `clusterTone` singles out. prod must not look like
   // anything else, and a section heading is the first place someone reads.
   const production = section.id === "prod"
@@ -136,6 +144,15 @@ function Environment({ section }: { section: EnvironmentSection }) {
         {section.clusters.map((card) => (
           <FleetCard key={card.id} card={card} />
         ))}
+        {/* Between the clusters and the inventory, because that is what it is:
+            a thing kaas-ui talks to, like a cluster, that is not a cluster. */}
+        {section.schemaRegistries.map((entry) => (
+          <RegistryTile
+            key={entry.registry.id}
+            envId={section.id}
+            entry={entry}
+          />
+        ))}
         {byResourceKind(section.resources).map((card) => (
           <ResourceTile key={card.id} card={card} />
         ))}
@@ -153,8 +170,8 @@ function FleetCard({ card }: { card: ClusterCardData }) {
       <CardHeader className="gap-2 px-4">
         <div className="flex items-start justify-between gap-3">
           <Link
-            to="/clusters/$clusterId"
-            params={{ clusterId: card.id }}
+            to="/environments/$envId/clusters/$clusterId"
+            params={{ envId: card.environment, clusterId: card.id }}
             className="font-semibold hover:underline"
             style={{ color: "var(--rust-ink)" }}
           >
@@ -215,8 +232,8 @@ function FleetCard({ card }: { card: ClusterCardData }) {
         />
         <Button variant="link" size="sm" asChild className="ml-auto h-auto p-0">
           <Link
-            to="/clusters/$clusterId/topics"
-            params={{ clusterId: card.id }}
+            to="/environments/$envId/clusters/$clusterId/topics"
+            params={{ envId: card.environment, clusterId: card.id }}
           >
             topics
             <ArrowRight aria-hidden />
@@ -235,6 +252,95 @@ function FleetCard({ card }: { card: ClusterCardData }) {
  * would be worse than no dot at all. `self-start` keeps it its own height
  * rather than stretching to match a cluster card three times as tall.
  */
+/**
+ * A schema registry, which is the one non-cluster kaas-ui actually dials.
+ *
+ * So unlike [`ResourceTile`] it has a status worth rendering and a page worth
+ * opening. `usedBy` empty is a real answer — declared, and nothing decodes
+ * against it — and saying so is the whole reason a registry nobody references
+ * is listed at all.
+ */
+function RegistryTile({
+  envId,
+  entry,
+}: {
+  envId: string
+  entry: EnvironmentRegistry
+}) {
+  const { registry, usedBy } = entry
+  const Icon = RESOURCE_KINDS.schema_registry.icon
+  const broken =
+    registry.status === "unreachable" || registry.status === "misconfigured"
+
+  return (
+    <Card className="gap-3 self-start py-4">
+      <CardHeader className="gap-2 px-4">
+        <div className="flex items-start justify-between gap-3">
+          <Link
+            to="/environments/$envId/schema-registries/$registryId"
+            params={{ envId, registryId: registry.id }}
+            className="font-semibold hover:underline"
+            style={{ color: "var(--rust-ink)" }}
+          >
+            {registry.name}
+          </Link>
+          <span
+            className={cn(
+              "shrink-0 rounded-sm border px-1.5 py-0.5 text-[11px]",
+              registry.status === "ready" && "border-ok/50 text-ok-ink",
+              registry.status === "unreachable" &&
+                "border-warn-ink/50 text-warn-ink",
+              registry.status === "misconfigured" &&
+                "border-danger/50 text-danger",
+              registry.status === "unprobed" && "border-dashed text-ink-faint"
+            )}
+            title={registry.error ?? undefined}
+          >
+            {registry.status}
+          </span>
+        </div>
+        <div className="flex items-center gap-1.5 text-[12px] text-ink-muted">
+          <Icon aria-hidden className="size-3.5" />
+          schema registry
+          <span className="font-mono text-[11px] text-ink-faint">
+            {registry.id}
+          </span>
+        </div>
+      </CardHeader>
+
+      <CardContent className="px-4">
+        <p className="break-all font-mono text-[12px] text-ink-muted">
+          {registry.url}
+        </p>
+        <p className="mt-2 text-[12px] text-ink-muted">
+          {usedBy.length > 0 ? (
+            <>
+              decoded against by{" "}
+              <span className="font-mono">{usedBy.join(", ")}</span>
+            </>
+          ) : (
+            <span className="text-ink-faint">
+              no cluster here references it
+            </span>
+          )}
+        </p>
+        {broken && registry.error ? (
+          <p
+            className={cn(
+              "mt-2 text-[11px]",
+              registry.status === "misconfigured"
+                ? "text-danger"
+                : "text-warn-ink"
+            )}
+          >
+            {registry.error}
+          </p>
+        ) : null}
+      </CardContent>
+    </Card>
+  )
+}
+
 function ResourceTile({ card }: { card: ResourceCardData }) {
   const kind = RESOURCE_KINDS[card.kind]
   const Icon = kind.icon
