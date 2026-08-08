@@ -190,7 +190,7 @@ export function SchemaRegistry({
                 <TableRow>
                   <Head
                     label={`subject${order === "asc" ? " ↑" : " ↓"}`}
-                    hint="What the schema is registered against. TopicNameStrategy makes it the topic plus -value or -key, which is why most of these look like topic names."
+                    hint="What the schema is registered against — usually a topic plus -value."
                     onClick={() => {
                       setOrder(order === "asc" ? "desc" : "asc")
                       setOffset(0)
@@ -198,21 +198,18 @@ export function SchemaRegistry({
                   />
                   <Head
                     label="id"
-                    hint="The global schema id — the number the wire format carries in front of every record. A registry-wide counter, so it is not a position within this subject."
+                    hint="The number the wire format carries. Registry-wide, not per subject."
                     right
                   />
-                  <Head
-                    label="type"
-                    hint="Avro, Protobuf or JSON Schema, as the registry labelled it. Confluent omits the label for Avro, which is a default rather than an absence."
-                  />
+                  <Head label="type" hint="Avro, Protobuf or JSON Schema." />
                   <Head
                     label="version"
-                    hint="The newest version registered against this subject. Open it to see the earlier ones."
+                    hint="The newest version of this subject."
                     right
                   />
                   <Head
                     label="compatibility"
-                    hint="What the registry will accept as the next version. `inherited` means it comes from the registry-wide default rather than a rule set on this subject."
+                    hint="What the registry will accept as the next version."
                   />
                 </TableRow>
               </TableHeader>
