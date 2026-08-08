@@ -153,7 +153,10 @@ export function SchemaDetail({
   // condition under which the diff would have nothing to draw. Two *different*
   // versions can satisfy it — a registration that only reordered keys.
   const identical = prettyJson(a.schema) === prettyJson(b.schema)
-  const older = versions.slice(0, -1).reverse()
+  // Only a count now that the old-versions table is gone — the compare
+  // control reaches every version, so a second list of them was two ways to
+  // open the same text.
+  const superseded = versions.length - 1
 
   return (
     <>
@@ -201,10 +204,10 @@ export function SchemaDetail({
             </Fact>
             <Fact label="Versions">
               {versions.length}
-              {older.length > 0 ? (
+              {superseded > 0 ? (
                 <span className="text-ink-faint text-[11px]">
                   {" "}
-                  ({older.length} superseded)
+                  ({superseded} superseded)
                 </span>
               ) : null}
             </Fact>
@@ -222,27 +225,33 @@ export function SchemaDetail({
 
       <AvailableOn envId={envId} registryId={registryId} subject={subject} />
 
-      {/* One view, not two tabs. At its default — newest against newest —
-          there is nothing to diff, so it renders the schema whole: the
-          "actual version" tab was that state of this control all along, and
-          keeping both meant two places showing the same text. Move either end
-          and it becomes a diff. */}
-      <Section title={versions.length > 1 ? "Compare versions" : "Schema"}>
-        {versions.length > 1 ? (
-          <div className="mb-2 flex flex-wrap items-center gap-4 text-xs">
-            <VersionSelect
-              label="From"
-              versions={versions}
-              value={a.version}
-              onChange={setLeft}
-            />
-            <VersionSelect
-              label="To"
-              versions={versions}
-              value={b.version}
-              onChange={setRight}
-            />
-            {/* Beside the selects it undoes, rather than off in the section
+      {/* One control, and the same one however many versions there are.
+          At its default — newest against newest — there is nothing to diff, so
+          it renders the schema whole. That is what the "actual version" tab
+          was: this control in its default state, kept as a second place
+          rendering the same text from the same data. Move either end and it
+          becomes a diff.
+
+          A single-version subject goes through it too, rather than getting a
+          different heading and no controls. Both ends are v1, so it shows the
+          schema — which is exactly what the special case showed — and the page
+          no longer changes shape the moment somebody registers a second
+          version. */}
+      <Section title="Compare versions">
+        <div className="mb-2 flex flex-wrap items-center gap-4 text-xs">
+          <VersionSelect
+            label="From"
+            versions={versions}
+            value={a.version}
+            onChange={setLeft}
+          />
+          <VersionSelect
+            label="To"
+            versions={versions}
+            value={b.version}
+            onChange={setRight}
+          />
+          {/* Beside the selects it undoes, rather than off in the section
                 header: a control that acts on two other controls belongs with
                 them, and the negative margin closes the row gap so it reads as
                 theirs instead of as a third peer.
@@ -256,50 +265,49 @@ export function SchemaDetail({
                 Absent at the default rather than disabled: reserving the space
                 would leave a hole in the row, and appearing is what makes it
                 noticeable at the moment it becomes useful. */}
-            {atDefault ? null : (
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                className="-ml-2 self-end"
-                onClick={() => {
-                  setLeft(undefined)
-                  setRight(undefined)
-                }}
-                aria-label={`Reset to v${newest.version}`}
-                title={`Reset to the newest version, v${newest.version}`}
-              >
-                <RotateCcw aria-hidden />
-              </Button>
-            )}
-            {/* Nothing to collapse when nothing changed, and a checkbox that
+          {atDefault ? null : (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="-ml-2 self-end"
+              onClick={() => {
+                setLeft(undefined)
+                setRight(undefined)
+              }}
+              aria-label={`Reset to v${newest.version}`}
+              title={`Reset to the newest version, v${newest.version}`}
+            >
+              <RotateCcw aria-hidden />
+            </Button>
+          )}
+          {/* Nothing to collapse when nothing changed, and a checkbox that
                 would silently do nothing is worse than one that says it
                 cannot. */}
-            <Label
-              className={cn(
-                "gap-1.5 self-end pb-1 text-[12px] font-normal",
-                identical ? "text-ink-faint" : "text-ink-muted"
-              )}
+          <Label
+            className={cn(
+              "gap-1.5 self-end pb-1 text-[12px] font-normal",
+              identical ? "text-ink-faint" : "text-ink-muted"
+            )}
+          >
+            <input
+              type="checkbox"
+              checked={compact && !identical}
+              disabled={identical}
+              onChange={(event) => setCompact(event.target.checked)}
+            />
+            compact
+            <span
+              className="text-ink-faint"
+              title={
+                identical
+                  ? "These two are the same schema, so there are no unchanged lines to drop"
+                  : "Drop the unchanged lines, keeping three either side of every change"
+              }
             >
-              <input
-                type="checkbox"
-                checked={compact && !identical}
-                disabled={identical}
-                onChange={(event) => setCompact(event.target.checked)}
-              />
-              compact
-              <span
-                className="text-ink-faint"
-                title={
-                  identical
-                    ? "These two are the same schema, so there are no unchanged lines to drop"
-                    : "Drop the unchanged lines, keeping three either side of every change"
-                }
-              >
-                {identical ? "(no changes)" : "(changes only)"}
-              </span>
-            </Label>
-          </div>
-        ) : null}
+              {identical ? "(no changes)" : "(changes only)"}
+            </span>
+          </Label>
+        </div>
 
         {identical ? (
           <>
@@ -319,28 +327,6 @@ export function SchemaDetail({
           <Diff before={a.schema} after={b.schema} compact={compact} />
         )}
       </Section>
-
-      {older.length ? (
-        <Section title="Old versions">
-          <div className="rounded-md border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="text-right">version</TableHead>
-                  <TableHead className="text-right">id</TableHead>
-                  <TableHead>type</TableHead>
-                  <TableHead />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {older.map((version) => (
-                  <OldVersion key={version.version} schema={version} />
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        </Section>
-      ) : null}
     </>
   )
 }
@@ -524,47 +510,6 @@ function ClusterRow({
         )}
       </TableCell>
     </TableRow>
-  )
-}
-
-/**
- * One superseded version, collapsed.
- *
- * Expanded on demand rather than rendered: the text is already in the response
- * — the server fetched every version to build it — so this is a disclosure and
- * not a fetch, and thirty versions of a hundred-line schema is a page nobody
- * can scroll.
- */
-function OldVersion({ schema }: { schema: SubjectSchema }) {
-  const [open, setOpen] = useState(false)
-  return (
-    <>
-      <TableRow>
-        <TableCell className="text-right font-mono">{schema.version}</TableCell>
-        <TableCell className="text-right font-mono">#{schema.id}</TableCell>
-        <TableCell>
-          <Badge variant="outline">{schema.format}</Badge>
-        </TableCell>
-        <TableCell className="text-right">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setOpen(!open)}
-            aria-expanded={open}
-          >
-            {open ? "hide" : "show"}
-          </Button>
-        </TableCell>
-      </TableRow>
-      {open ? (
-        <TableRow>
-          <TableCell colSpan={4} className="p-2">
-            <SchemaText text={schema.schema} format={schema.format} />
-            <References schema={schema} />
-          </TableCell>
-        </TableRow>
-      ) : null}
-    </>
   )
 }
 
