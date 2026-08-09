@@ -8,10 +8,15 @@
 // along. The page says so, because a settings page that looks account-shaped
 // invites the assumption that it syncs.
 //
-// Timezone is shown rather than chosen. It is the browser's, it is what every
-// timestamp in the app is rendered in, and until there is a reason to override
-// it the honest thing is to name it and say where it came from — an inert
-// dropdown with one option in it would be worse.
+// Timezone and notation are shown rather than chosen: they are the browser's,
+// and naming them beats an inert dropdown with one option in it. Two rows
+// rather than one because they are two questions — a laptop in Amsterdam set
+// to `en-US` is `Europe/Amsterdam` at `8/9/2026, 11:33:41`.
+//
+// Date order is the exception, and it is chosen, because it is the one part of
+// a notation that changes what a date *means* rather than how it looks. It
+// still defaults to the browser, so this page is the only place the difference
+// between "the browser says so" and "I said so" is visible.
 
 import { useEffect, useState, type ReactNode } from "react"
 import { Clock, ExternalLinkIcon, Monitor, Moon, Sun } from "lucide-react"
@@ -22,9 +27,24 @@ import { Empty, Mono, Section } from "@/components/domain"
 import { Button } from "@/components/ui/button"
 import { Item, ItemActions, ItemContent, ItemTitle } from "@/components/ui/item"
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import {
+  displayLocale,
   displayTimeZone,
+  formatClock,
+  formatDate,
+  localeDateOrder,
   resolveTheme,
+  useDateOrder,
+  useResolvedDateOrder,
   useTheme,
+  type DateOrder,
+  type ResolvedDateOrder,
   type Theme,
 } from "@/lib/settings"
 import { cn } from "@/lib/utils"
@@ -100,8 +120,65 @@ function ThemePicker() {
   )
 }
 
-/** A clock in the zone above, so the answer can be checked against a wrist. */
+const ORDERS: { value: ResolvedDateOrder; label: string }[] = [
+  { value: "dmy", label: "day first" },
+  { value: "ymd", label: "year first" },
+  { value: "mdy", label: "month first" },
+]
+
+/**
+ * Which field leads, and the sample that proves it.
+ *
+ * Four options, not one per notation: a locale settles the separators and the
+ * digits too, and none of that is what makes a date misread. `9/8/2026` is
+ * either the ninth of August or the eighth of September, and that is the whole
+ * question this answers.
+ *
+ * Each option carries today's date written its way, because the labels alone
+ * are the wrong end of it — "day first" is a description, `9/8/2026` is the
+ * thing you will actually be looking at.
+ */
+function DateOrderPicker({ timeZone }: { timeZone: string }) {
+  const [order, setOrder] = useDateOrder()
+  const sample = new Date()
+
+  return (
+    <Select value={order} onValueChange={(next) => setOrder(next as DateOrder)}>
+      <SelectTrigger className="w-[210px]" aria-label="Date order">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="system">
+          from browser
+          <span className="text-ink-faint">
+            {formatDate(sample, timeZone, localeDateOrder())}
+          </span>
+        </SelectItem>
+        {ORDERS.map((option) => (
+          <SelectItem key={option.value} value={option.value}>
+            {option.label}
+            <span className="text-ink-faint">
+              {formatDate(sample, timeZone, option.value)}
+            </span>
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  )
+}
+
+/**
+ * A clock in the zone and notation above, so both can be checked against a
+ * wrist.
+ *
+ * The same two settings a record's timestamp is written with, so this is also
+ * the sample — the field order and the separators here are what a message list
+ * will show. To the second and not beyond: a record
+ * carries milliseconds because they are what tells two records apart, and a
+ * clock ticking once a second would only show three digits that look stuck.
+ */
 function Now({ timeZone }: { timeZone: string }) {
+  const order = useResolvedDateOrder()
   const [now, setNow] = useState(() => new Date())
 
   useEffect(() => {
@@ -112,7 +189,7 @@ function Now({ timeZone }: { timeZone: string }) {
   return (
     <span className="inline-flex items-center gap-2 font-mono text-[13px]">
       <Clock aria-hidden className="text-ink-faint size-3.5" />
-      {formatInTimeZone(now, timeZone, "HH:mm:ss")}
+      {formatClock(now, timeZone, order)}
       <span className="text-ink-faint">
         UTC{formatInTimeZone(now, timeZone, "xxx")}
       </span>
@@ -123,6 +200,7 @@ function Now({ timeZone }: { timeZone: string }) {
 export function Settings() {
   const [theme] = useTheme()
   const timeZone = displayTimeZone()
+  const locale = displayLocale()
 
   return (
     <div className="max-w-3xl">
@@ -154,7 +232,20 @@ export function Settings() {
           >
             <Mono>{timeZone}</Mono>
           </Setting>
-          <Setting label="Local time" note="right now, in the zone above">
+          {/* A separate question from the zone, and not a redundant one: a
+              laptop in Amsterdam set to `en-US` is `Europe/Amsterdam` at
+              `8/9/2026, 09:05:03`. Shown rather than chosen, like the zone. */}
+
+          <Setting
+            label="Date order"
+            note="which of the three fields leads — the one thing a notation decides that changes what a date means"
+          >
+            <DateOrderPicker timeZone={timeZone} />
+          </Setting>
+          <Setting
+            label="Local time"
+            note="right now, in the zone and notation above — a record's timestamp is written the same way, and carries milliseconds as well"
+          >
             <Now timeZone={timeZone} />
           </Setting>
         </div>

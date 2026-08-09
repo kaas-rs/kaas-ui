@@ -34,7 +34,11 @@ import {
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { count } from "@/components/domain"
-import { displayTimeZone } from "@/lib/settings"
+import {
+  displayTimeZone,
+  formatTimestamp,
+  useResolvedDateOrder,
+} from "@/lib/settings"
 import { cn } from "@/lib/utils"
 import { downloadBuffer } from "./download"
 import { MessageDetailPanel } from "./message-detail"
@@ -70,6 +74,11 @@ export function MessageBrowser({
   className,
 }: MessageBrowserProps) {
   const isMobile = useIsMobile()
+
+  // Read once per render, here, and handed to both the picker that reads times
+  // in it and the list that writes them in it. Reading it is a formatter
+  // construction, so it is not a thing to do per row.
+  const timeZone = displayTimeZone()
 
   const mode = search.mode
   const config = SEEK_MODES[mode]
@@ -164,7 +173,7 @@ export function MessageBrowser({
         predicate={search.predicate}
         bounds={bounds.data?.items ?? []}
         retentionStart={retentionStart}
-        timeZone={displayTimeZone()}
+        timeZone={timeZone}
         onApply={onApply}
         onFilterChange={(filter) => onSearch({ filter, selected: undefined })}
         onPartitionsChange={(partitions) =>
@@ -195,6 +204,7 @@ export function MessageBrowser({
       </div>
 
       <Notices
+        timeZone={timeZone}
         dropped={stream.dropped}
         progress={stream.progress}
         resolved={stream.resolved}
@@ -227,6 +237,7 @@ export function MessageBrowser({
             onSelect={onSelect}
             onEdgeChange={stream.setAtEdge}
             unseen={stream.unseen}
+            timeZone={timeZone}
             terminal={
               stream.phase === "done" ? (
                 <Terminal
@@ -365,6 +376,7 @@ function StreamStatus({
 
 /** Everything the stream wants to say that is not a row. */
 function Notices({
+  timeZone,
   dropped,
   progress,
   resolved,
@@ -372,6 +384,7 @@ function Notices({
   phase,
   predicate,
 }: {
+  timeZone: string
   dropped: number
   progress: StreamProgress | null
   resolved: ResolvedSeek | null
@@ -379,6 +392,9 @@ function Notices({
   phase: string | null
   predicate: PredicateStats | null
 }) {
+  // The seek someone typed, written back to them the way they typed it. It was
+  // a UTC ISO string, which is not the notation the picker above takes.
+  const dateOrder = useResolvedDateOrder()
   // The bar is an in-flight indicator, not a result, so it goes when the scan
   // does. A window that has been read already says so twice — the "window
   // read" badge and the terminal row — and a bar left sitting underneath them
@@ -447,7 +463,10 @@ function Notices({
           <p className="flex items-start gap-2 text-[11px] text-warn-ink">
             <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
             <span>
-              This cluster resolved {new Date(resolved.timestamp).toISOString()}{" "}
+              This cluster resolved{" "}
+              <span title={new Date(resolved.timestamp).toISOString()}>
+                {formatTimestamp(resolved.timestamp, timeZone, dateOrder)}
+              </span>{" "}
               to no offset on any of its {resolved.partitions.length}{" "}
               partitions, so the window is empty. Brokers that keep no timestamp
               index answer a time seek this way; seeking by offset still works.

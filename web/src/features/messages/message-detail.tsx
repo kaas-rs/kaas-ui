@@ -16,6 +16,11 @@ import { useMessageDetail } from "@/api/client"
 import type { StreamRow } from "@/api/types"
 import { Badge } from "@/components/ui/badge"
 import { Empty, Mono, bytes } from "@/components/domain"
+import {
+  displayTimeZone,
+  formatTimestamp,
+  useResolvedDateOrder,
+} from "@/lib/settings"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { PayloadBlock } from "./payload"
 
@@ -83,7 +88,7 @@ export function MessageDetailPanel({
           <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs">
             <dt className="text-ink-faint">Timestamp</dt>
             <dd className="tabular-nums">
-              {new Date(retained.timestamp).toISOString()}{" "}
+              <RecordTime at={retained.timestamp} />{" "}
               <span className="text-ink-faint">({retained.timestampType})</span>
             </dd>
             <dt className="text-ink-faint">Value size</dt>
@@ -179,5 +184,23 @@ export function MessageDetailPanel({
         ) : null}
       </div>
     </div>
+  )
+}
+
+/**
+ * The record's moment, written the way the row above it was written.
+ *
+ * This panel showed a UTC ISO string while the list beside it showed local
+ * time in the reader's own notation, so one record read as two moments. The
+ * ISO form is the `title` instead — it is what gets pasted into a seek or a
+ * colleague's terminal, and it is the only rendering here that carries its own
+ * zone.
+ */
+function RecordTime({ at }: { at: number }) {
+  const order = useResolvedDateOrder()
+  return (
+    <span title={new Date(at).toISOString()}>
+      {formatTimestamp(at, displayTimeZone(), order)}
+    </span>
   )
 }

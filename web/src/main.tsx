@@ -18,7 +18,7 @@ import { PageTitle } from "@/components/page-title"
 import { Empty } from "@/components/domain"
 import { BASE_PATH } from "@/api/base"
 import { TooltipProvider } from "@/components/ui/tooltip"
-import { installTheme } from "@/lib/settings"
+import { installSettings } from "@/lib/settings"
 import { Fleet } from "@/pages/fleet"
 import { Account } from "@/pages/account"
 import { Settings } from "@/pages/settings"
@@ -316,7 +316,7 @@ const queryClient = new QueryClient({
 // inline script in `index.html` already resolved it before first paint; this
 // picks the same key up and keeps following the OS — outside React, because a
 // listener that lives in a component stops at the first navigation away from it.
-installTheme()
+installSettings()
 
 const container = document.getElementById("root")
 if (container) {

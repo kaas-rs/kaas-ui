@@ -16,6 +16,16 @@ import { useVirtualizer } from "@tanstack/react-virtual"
 import { AlertTriangle } from "lucide-react"
 
 import type { Payload, StreamRow } from "@/api/types"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
+import {
+  formatTimestamp,
+  useResolvedDateOrder,
+  type ResolvedDateOrder,
+} from "@/lib/settings"
 import { cn } from "@/lib/utils"
 import { CodecChip } from "./payload"
 import { insertsAtTop, type SeekMode } from "./seek-modes"
@@ -34,9 +44,20 @@ export const ROW_HEIGHT = 36
  * what they do about it — which is what they were always meant to do.
  *
  * The three fixed ones are what their content actually needs: thirteen digits
- * of offset, three of partition, and `14:35:12.553`.
+ * of offset, three of partition, and a full timestamp.
+ *
+ * That last one is not one width. The same instant in the 603 locales ICU
+ * knows comes out in 56 distinct layouts — a median of 23 characters and a
+ * 95th percentile of 24, but `2026-08-09 09 h 05 min 03,639 s` in `fr-CA` at
+ * 31, and once the digits stop being Latin the monospace advance stops
+ * predicting the width at all. So the column is sized for the notations most
+ * readers will be in, and the cell truncates with the whole value on hover
+ * rather than laying itself over the key column in the ones it is not.
+ *
+ * The 24-hour clock is what makes that median hold: a meridiem is three more
+ * characters, and it was the difference between 22 and 25 in English alone.
  */
-const COLUMNS = "96px 56px 150px minmax(0, 1fr) minmax(0, 2.2fr)"
+const COLUMNS = "96px 56px 180px minmax(0, 1fr) minmax(0, 2.2fr)"
 
 export interface MessageListProps {
   rows: StreamRow[]
@@ -49,6 +70,8 @@ export interface MessageListProps {
   unseen: number
   /** Rendered after the last row when the window is exhausted. */
   terminal?: React.ReactNode
+  /** Read once per render by the browser and handed down. */
+  timeZone: string
 }
 
 export function MessageList({
@@ -59,7 +82,11 @@ export function MessageList({
   onEdgeChange,
   unseen,
   terminal,
+  timeZone,
 }: MessageListProps) {
+  // Subscribed here rather than in the row: one subscription for the whole
+  // list, and changing the setting repaints every row that is on screen.
+  const dateOrder = useResolvedDateOrder()
   const scrollRef = useRef<HTMLDivElement>(null)
 
   const virtualizer = useVirtualizer({
@@ -101,11 +128,23 @@ export function MessageList({
         className="grid shrink-0 items-center gap-3 border-b border-line px-4 py-1.5 text-[11px] tracking-[0.05em] text-ink-faint uppercase"
         style={{ gridTemplateColumns: "var(--message-columns)" }}
       >
-        <span role="columnheader">Offset</span>
-        <span role="columnheader">Part</span>
-        <span role="columnheader">Timestamp</span>
-        <span role="columnheader">Key</span>
-        <span role="columnheader">Value</span>
+        <Head
+          label="Offset"
+          hint="its position in this partition's log, not in the topic"
+        />
+        <Head label="Part" hint="the partition this record landed on" />
+        <Head
+          label="Timestamp"
+          hint="the record's own timestamp — its producer's clock, unless the topic stamps on append"
+        />
+        <Head
+          label="Key"
+          hint="the key, decoded — what a compacted topic keeps one of"
+        />
+        <Head
+          label="Value"
+          hint="the payload, decoded — a null one is a tombstone, not an empty record"
+        />
       </div>
 
       {/* Inside the list because the list owns the scroller. Reaching for it
@@ -143,6 +182,8 @@ export function MessageList({
                 top={item.start}
                 selected={row.id === selectedId}
                 onSelect={onSelect}
+                timeZone={timeZone}
+                dateOrder={dateOrder}
               />
             )
           })}
@@ -150,6 +191,36 @@ export function MessageList({
         {terminal}
       </div>
     </div>
+  )
+}
+
+/**
+ * A column header that says what its column means.
+ *
+ * The same one line on hover the partition and subject tables carry, and for
+ * the same reason: every one of these is a Kafka term with a precise meaning
+ * and a plausible wrong reading. An offset numbers a *partition* and not a
+ * topic, so the same number appears once per partition; a timestamp is usually
+ * the producer's clock rather than the moment a broker saw the record; and a
+ * null value is a tombstone, which is the one thing worth knowing about that
+ * record and reads as nothing at all.
+ *
+ * A `<span>` rather than the shared `Head`: absolute positioning ruled out
+ * `<table>` here, so this is an ARIA grid and the cell is a `columnheader`
+ * span rather than a `<th>`.
+ */
+function Head({ label, hint }: { label: string; hint: string }) {
+  return (
+    <span role="columnheader">
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="cursor-help decoration-dotted underline-offset-4 hover:underline">
+            {label}
+          </span>
+        </TooltipTrigger>
+        <TooltipContent>{hint}</TooltipContent>
+      </Tooltip>
+    </span>
   )
 }
 
@@ -187,12 +258,16 @@ function Row({
   top,
   selected,
   onSelect,
+  timeZone,
+  dateOrder,
 }: {
   row: StreamRow
   rowIndex: number
   top: number
   selected: boolean
   onSelect(id: string): void
+  timeZone: string
+  dateOrder: ResolvedDateOrder
 }) {
   const common = {
     role: "row" as const,
@@ -232,6 +307,10 @@ function Row({
     )
   }
 
+  // Below the narrowing above: a malformed row is a span of offsets that did
+  // not decode, and has no timestamp to write.
+  const stamp = formatTimestamp(row.timestamp, timeZone, dateOrder)
+
   return (
     <div
       {...common}
@@ -247,8 +326,12 @@ function Row({
       <span role="gridcell" className="tabular-nums text-ink-muted">
         {row.partition}
       </span>
-      <span role="gridcell" className="font-mono text-[11px] text-ink-muted">
-        {formatTimestamp(row.timestamp)}
+      <span
+        role="gridcell"
+        className="truncate font-mono text-[11px] text-ink-muted"
+        title={stamp}
+      >
+        {stamp}
       </span>
       <PayloadCell
         payload={row.key}
@@ -298,11 +381,6 @@ function PayloadCell({
       )}
     </span>
   )
-}
-
-function formatTimestamp(ms: number): string {
-  const date = new Date(ms)
-  return `${date.toLocaleTimeString("en-GB")}.${String(date.getMilliseconds()).padStart(3, "0")}`
 }
 
 /**

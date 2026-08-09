@@ -14,6 +14,8 @@ import * as React from "react"
 import { CalendarIcon } from "lucide-react"
 import { set } from "date-fns"
 import { formatInTimeZone, fromZonedTime, toZonedTime } from "date-fns-tz"
+
+import { formatDate, useResolvedDateOrder } from "@/lib/settings"
 import type { Matcher } from "react-day-picker"
 
 import { Button } from "@/components/ui/button"
@@ -51,6 +53,7 @@ export function DateTimePicker({
   className,
 }: DateTimePickerProps) {
   const [open, setOpen] = React.useState(false)
+  const dateOrder = useResolvedDateOrder()
 
   // `step="1"` and seconds throughout: Kafka offsets move fast enough that
   // minute granularity is useless for the debugging this exists for.
@@ -98,9 +101,7 @@ export function DateTimePicker({
             aria-label="Date"
           >
             <CalendarIcon className="mr-2 size-4" />
-            {value
-              ? formatInTimeZone(value, timeZone, "d MMM yyyy")
-              : "Pick a date"}
+            {value ? formatDate(value, timeZone, dateOrder) : "Pick a date"}
           </Button>
         </PopoverTrigger>
         <PopoverContent className="w-auto p-0" align="start">
