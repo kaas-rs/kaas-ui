@@ -1858,9 +1858,9 @@ dependencies = [
 
 [[package]]
 name = "kafka-admin"
-version = "0.4.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d4fb4f1a282bef725c61bd512a71386f128f4bfaa16d10ab89771ee51171ffd7"
+checksum = "f3d8869f60916227fbcb67d3231e1fa8ed21f69db133d74ddc5beab1d13ca38b"
 dependencies = [
  "bytes",
  "futures",
@@ -1874,9 +1874,9 @@ dependencies = [
 
 [[package]]
 name = "kafka-conn"
-version = "0.4.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "627a1aa996cae9b227b25b887ae33a9d7586456934ee58041caa804ef29c2cf2"
+checksum = "0ff1634f31ff5ebc0d08e8f20b48103df8124c0c8f261909c0eef6b42744aed2"
 dependencies = [
  "base64 0.23.0",
  "bytes",
@@ -1889,6 +1889,7 @@ dependencies = [
  "rustls",
  "rustls-native-certs",
  "rustls-pemfile",
+ "serde_json",
  "sha2 0.11.0",
  "stringprep",
  "subtle",
@@ -1901,9 +1902,9 @@ dependencies = [
 
 [[package]]
 name = "kafka-meta"
-version = "0.4.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "412ec55be237a398e3f00ff4ecac9fed6dd122dbed94677c248a41cdb27b2dd9"
+checksum = "4ae0ea05b6e8a80e2e0e44cc11a114f4f616ab16336dfac86638e122a648c043"
 dependencies = [
  "arc-swap",
  "bytes",
@@ -1937,9 +1938,9 @@ dependencies = [
 
 [[package]]
 name = "kafka-read"
-version = "0.4.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0596cad2e175a9c7ab5dc34eb230695c72c532e99f0c8b2ec10665ea8ba747dd"
+checksum = "c4a7c84eae287361e02b5d7a671a74df8a16b251ea2c3d9e24b796a9eb931c51"
 dependencies = [
  "anyhow",
  "bytes",
