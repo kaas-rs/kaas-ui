@@ -299,6 +299,8 @@ export interface Partition {
   error: string | null
   earliestOffset: number | null
   latestOffset: number | null
+  /** Every non-future copy summed. Null until `?size=true` answers. */
+  replicatedBytes: number | null
 }
 
 export interface TopicDetail {
@@ -307,6 +309,12 @@ export interface TopicDetail {
   internal: boolean
   partitions: Partition[]
   brokerIds: number[]
+  /** Bytes on disk for one copy. Null until `?size=true` answers. */
+  logicalBytes: number | null
+  /** Bytes on disk across replicas. Null is "not asked, or not answered" — never zero. */
+  replicatedBytes: number | null
+  /** Log-directory entries holding a copy: one per replica per directory. */
+  logDirEntryCount: number | null
 }
 
 export interface ConfigEntry {

@@ -281,6 +281,25 @@ export function useTopic(env: string, id: string, topic: string) {
   })
 }
 
+/**
+ * The same topic again, for the one number the brokers have to be asked for.
+ *
+ * A second request rather than a flag on the first, exactly like the topic
+ * list: the page paints from the describe at once and the size arrives into
+ * it. `offsets=false` because the describe above already carried them, and
+ * asking twice is a `ListOffsets` per leader for nothing.
+ */
+export function useTopicSize(env: string, id: string, topic: string) {
+  return useQuery({
+    queryKey: ["topic-size", env, id, topic],
+    queryFn: () =>
+      get<Envelope<TopicDetail>>(
+        `${cluster(env, id)}/topics/${encode(topic)}?size=true&offsets=false`
+      ),
+    refetchInterval: METRICS_REFRESH,
+  })
+}
+
 export function useTopicConfigs(env: string, id: string, topic: string) {
   return useQuery({
     queryKey: ["topic-configs", env, id, topic],

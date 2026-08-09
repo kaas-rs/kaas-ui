@@ -13,8 +13,13 @@ import { Link, useNavigate, useSearch } from "@tanstack/react-router"
 import { useCallback, useState } from "react"
 import { ArrowLeft } from "lucide-react"
 
-import { useClusters, useTopic, useTopicConfigs } from "@/api/client"
-import type { Partition } from "@/api/types"
+import {
+  useClusters,
+  useTopic,
+  useTopicConfigs,
+  useTopicSize,
+} from "@/api/client"
+import type { Partition, TopicDetail as TopicDetailData } from "@/api/types"
 import { MessageBrowser } from "@/features/messages/browser"
 import type { TopicSearch, TopicTab } from "@/features/messages/search"
 import {
@@ -22,8 +27,10 @@ import {
   ErrorChips,
   Mono,
   PlacementLegend,
+  Stat,
   placementCell,
   Spinner,
+  bytes,
   count,
 } from "@/components/domain"
 import type { ReactNode } from "react"
@@ -34,7 +41,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { Button } from "@/components/ui/button"
-import { Card } from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
 import {
   Table,
@@ -147,15 +154,27 @@ export function TopicDetail({
         onValueChange={(tab) => setSearch({ tab: tab as TopicTab }, false)}
       >
         <TabsList>
-          <TabsTrigger value="partitions">partitions</TabsTrigger>
+          <TabsTrigger value="overview">overview</TabsTrigger>
           <TabsTrigger value="configs">configs</TabsTrigger>
           {mayReadMessages ? (
             <TabsTrigger value="messages">messages</TabsTrigger>
           ) : null}
         </TabsList>
 
-        <TabsContent value="partitions" className="mt-4">
-          <Partitions partitions={info.partitions} brokerIds={info.brokerIds} />
+        <TabsContent value="overview" className="mt-4 space-y-6">
+          <TopicFacts
+            envId={envId}
+            clusterId={clusterId}
+            topic={topic}
+            info={info}
+          />
+          <Partitions
+            partitions={info.partitions}
+            brokerIds={info.brokerIds}
+            envId={envId}
+            clusterId={clusterId}
+            topic={topic}
+          />
         </TabsContent>
         <TabsContent value="configs" className="mt-4">
           <TopicConfigs envId={envId} clusterId={clusterId} topic={topic} />
@@ -179,6 +198,151 @@ export function TopicDetail({
       </Tabs>
     </>
   )
+}
+
+/**
+ * The facts about a topic that are not one of its partitions.
+ *
+ * Assembled from three sources rather than one, because that is where they
+ * live: the describe this page already has, the config fetch the next tab
+ * makes, and a `DescribeLogDirs` fan-out that is its own request so the card
+ * paints before it lands.
+ *
+ * Message count is summed here rather than fetched, and by the same rule the
+ * server uses for the topic list: `latest - earliest` per partition, and a
+ * partition that answered neither end makes the whole number absent rather
+ * than smaller. A sum missing a partition is not a marked number, and nothing
+ * in a card that size could say so.
+ *
+ * Replication is three of the eight and it is all one question, so on a topic
+ * with one replica per partition all three go. `replication factor: 1` next to
+ * `under-replicated: 0` next to `in-sync: 6 of 6` is three ways of saying
+ * there is no replication to report on, and it crowds out the five facts that
+ * do vary. They come back the moment a topic has a second replica.
+ */
+function TopicFacts({
+  envId,
+  clusterId,
+  topic,
+  info,
+}: {
+  envId: string
+  clusterId: string
+  topic: string
+  info: TopicDetailData
+}) {
+  const size = useTopicSize(envId, clusterId, topic)
+  const configs = useTopicConfigs(envId, clusterId, topic)
+
+  const partitions = info.partitions
+  // The smallest replica count across partitions, which is what anyone means
+  // by "replication factor" — and what the server means by it in the list.
+  const replicationFactor = partitions.length
+    ? Math.min(...partitions.map((partition) => partition.replicas.length))
+    : 0
+  const replicated = replicationFactor > 1
+
+  const underReplicated = partitions.filter(
+    (partition) => partition.underReplicated
+  ).length
+  const inSync = partitions.reduce(
+    (total, partition) => total + partition.isr.length,
+    0
+  )
+  const replicas = partitions.reduce(
+    (total, partition) => total + partition.replicas.length,
+    0
+  )
+
+  const complete = partitions.every(
+    (partition) =>
+      partition.earliestOffset !== null && partition.latestOffset !== null
+  )
+  const messages = complete
+    ? partitions.reduce(
+        (total, partition) =>
+          total +
+          ((partition.latestOffset ?? 0) - (partition.earliestOffset ?? 0)),
+        0
+      )
+    : null
+
+  const onDisk = size.data?.items[0]?.replicatedBytes ?? null
+  // What kafbat-ui labels a "segment count". `DescribeLogDirs` reports no
+  // segment files at all, so the number is one per replica copy per log
+  // directory, and it is named for what it counts rather than for what the
+  // other UI calls it.
+  const entries = size.data?.items[0]?.logDirEntryCount ?? null
+  const cleanup =
+    configs.data?.items[0]?.entries.find(
+      (entry) => entry.name === "cleanup.policy"
+    )?.value ?? null
+
+  return (
+    <Card>
+      <CardContent>
+        <ErrorChips errors={size.data?.errors ?? []} />
+        <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-[13px] sm:grid-cols-4">
+          <Stat label="partitions" value={count(partitions.length)} />
+          {replicated ? (
+            <Stat label="replication factor" value={count(replicationFactor)} />
+          ) : null}
+          {replicated ? (
+            <Stat
+              label="under-replicated"
+              value={count(underReplicated)}
+              tone={underReplicated > 0 ? "warn" : undefined}
+            />
+          ) : null}
+          {replicated ? (
+            <Stat
+              label="in-sync replicas"
+              value={count(inSync)}
+              note={`of ${count(replicas)}`}
+              tone={inSync < replicas ? "warn" : undefined}
+            />
+          ) : null}
+          <Stat label="type" value={info.internal ? "internal" : "external"} />
+          <Stat
+            label="segment size"
+            value={pending(onDisk, bytes, size.isFetching)}
+            note={onDisk === null ? undefined : "on disk, all replicas"}
+          />
+          <Stat
+            label="log-dir entries"
+            value={pending(entries, count, size.isFetching)}
+            note={entries === null ? undefined : "one per copy, per directory"}
+          />
+          <Stat
+            label="cleanup policy"
+            value={cleanup ?? (configs.isLoading ? "\u00b7" : "\u2014")}
+          />
+          <Stat
+            label="messages"
+            value={pending(messages, count, false)}
+            note={complete ? "retained" : undefined}
+          />
+        </dl>
+      </CardContent>
+    </Card>
+  )
+}
+
+/**
+ * A number in one of its three states, as text.
+ *
+ * The same rule the topic table's `Metric` cell draws, for the same reason:
+ * blank means the fan-out is still out, and an em dash means it came back
+ * without a number. A dash that quietly means "still loading" is how a cluster
+ * looks broken for as long as it is slow.
+ */
+function pending(
+  value: number | null,
+  render: (value: number) => string,
+  fetching: boolean
+): string {
+  if (value !== null) return render(value)
+  return fetching ? "\u00b7" : "\u2014"
 }
 
 /**
@@ -231,10 +395,28 @@ function Head({
 function Partitions({
   partitions,
   brokerIds,
+  envId,
+  clusterId,
+  topic,
 }: {
   partitions: Partition[]
   brokerIds: number[]
+  envId: string
+  clusterId: string
+  topic: string
 }) {
+  // The same query the card reads, so this costs no second fan-out — and it
+  // is joined by partition index rather than by position, because a partition
+  // no broker reported a copy of is absent from the size answer and would
+  // otherwise slide every row below it onto the wrong number.
+  const size = useTopicSize(envId, clusterId, topic)
+  const sizes = new Map(
+    (size.data?.items[0]?.partitions ?? []).map((partition) => [
+      partition.partition,
+      partition.replicatedBytes,
+    ])
+  )
+
   return (
     <div className="space-y-3">
       <div className="overflow-x-auto rounded-md border">
@@ -274,6 +456,11 @@ function Partitions({
               <Head
                 label="records"
                 hint="latest − earliest: what is retained, not what was ever written"
+                right
+              />
+              <Head
+                label="size"
+                hint="bytes on disk for every non-future copy of this partition"
                 right
               />
             </TableRow>
@@ -338,6 +525,13 @@ function Partitions({
                   </TableCell>
                   <TableCell className="text-right font-mono">
                     {count(records)}
+                  </TableCell>
+                  <TableCell className="text-right font-mono">
+                    {pending(
+                      sizes.get(partition.partition) ?? null,
+                      bytes,
+                      size.isFetching
+                    )}
                   </TableCell>
                 </TableRow>
               )

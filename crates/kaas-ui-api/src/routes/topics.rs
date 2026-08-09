@@ -262,6 +262,7 @@ async fn enrich(
         ("id" = String, Path, description = "Cluster id"),
         ("topic" = String, Path, description = "Topic name"),
         ("offsets" = Option<bool>, Query, description = "Also fetch the offset range"),
+        ("size" = Option<bool>, Query, description = "Also fetch bytes on disk"),
     ),
     responses((status = 200, description = "Topic detail", body = Envelope<TopicDetail>)),
     tag = "topics",
@@ -305,15 +306,43 @@ pub async fn detail(
         }
     }
 
+    // Opt-in, and its own request from the browser, because this is a
+    // `DescribeLogDirs` to every broker: the page paints from the describe and
+    // the size arrives into it, which is the two-request shape the topic list
+    // already uses for the same fan-out.
+    if query.size.unwrap_or(false) {
+        match call("topic_sizes", admin.topic_sizes()).await {
+            Ok(sizes) => {
+                let mine = oks(&sizes).find(|(name, _)| *name == &topic);
+                if let Some((_, size)) = mine {
+                    for detail in &mut envelope.items {
+                        detail.set_size(size);
+                    }
+                }
+                for (name, error) in kafka_admin::types::errs(&sizes) {
+                    if name == &topic {
+                        envelope = envelope
+                            .with_errors(vec![kaas_ui_core::ResourceError::new(name, error)]);
+                    }
+                }
+            }
+            Err(error) => {
+                envelope = envelope.with_errors(vec![error.into_resource_error("DescribeLogDirs")])
+            }
+        }
+    }
+
     Ok(Json(envelope))
 }
 
-/// Whether the detail page should also fetch offsets.
+/// What the detail page wants beyond the describe itself.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DetailQuery {
     /// Defaults to true.
     pub offsets: Option<bool>,
+    /// Defaults to false: a `DescribeLogDirs` fan-out is not free.
+    pub size: Option<bool>,
 }
 
 /// `GET /api/clusters/{id}/topics/{topic}/offsets`

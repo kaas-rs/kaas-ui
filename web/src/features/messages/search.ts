@@ -77,21 +77,22 @@ export type MessageSearch = Fields
 /**
  * The topic page's tabs. In the URL, so a shared link opens the right one.
  *
- * `placement` was one of these until the grid moved into the partition table.
- * It is not listed here and does not need to be: `?tab=placement` falls
- * through the `.catch` below onto `partitions`, which is now where the
- * placement is — so links shared while it was its own tab still open on the
- * view they were pointing at.
+ * Two names have been retired here, `placement` and then `partitions`, as the
+ * grid moved into the partition table and the table gained a card above it.
+ * Neither is listed and neither needs to be: both fall through the `.catch`
+ * below onto `overview`, which is where that content now lives, so links
+ * shared under either name still open on the view they were pointing at.
  */
-export const TOPIC_TABS = ["partitions", "configs", "messages"] as const
+export const TOPIC_TABS = ["overview", "configs", "messages"] as const
 
 export type TopicTab = (typeof TOPIC_TABS)[number]
 
 export const topicSearch = fields
-  // `.catch` rather than `.default`: it covers a missing tab *and* a nonsense
-  // one. A tab is a thing people hand-edit, and `?tab=message` landing on an
-  // error boundary rather than on the topic would be a poor reward for it.
-  .extend({ tab: z.enum(TOPIC_TABS).catch("partitions") })
+  // `.catch` rather than `.default`: it covers a missing tab, a retired one
+  // *and* a nonsense one. A tab is a thing people hand-edit, and `?tab=message`
+  // landing on an error boundary rather than on the topic would be a poor
+  // reward for it.
+  .extend({ tab: z.enum(TOPIC_TABS).catch("overview") })
   .transform((search) => ({ ...usable(search), tab: search.tab }))
 
 export type TopicSearch = Fields & { tab: TopicTab }

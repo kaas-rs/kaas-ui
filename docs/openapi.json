@@ -601,6 +601,15 @@
             "schema": {
               "type": "boolean"
             }
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "description": "Also fetch bytes on disk",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -3080,6 +3089,14 @@
                   },
                   "description": "The replica set, in assignment order — the placement grid's rows."
                 },
+                "replicatedBytes": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int64",
+                  "description": "Every non-future copy of this partition summed, when `?size=true`\nasked for it — what the disks hold for this one partition.\n\nThe replicated figure rather than the leader's copy, because the\nquestion a per-partition size answers is \"which one is the big one\",\nand because the leader's copy reads `0` on a leaderless partition\nrather than declining to answer."
+                },
                 "underReplicated": {
                   "type": "boolean",
                   "description": "ISR smaller than the replica set."
@@ -3146,6 +3163,22 @@
                   "type": "boolean",
                   "description": "Whether Kafka considers this internal."
                 },
+                "logDirEntryCount": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "description": "Log-directory entries holding a copy of this topic.\n\nOne per replica per directory, which is what kafbat-ui labels a\n\"segment count\" — `DescribeLogDirs` reports no segment files at all,\nso the name is borrowed and wrong. Carried under the name it earns,\nand future replicas count: a directory move in flight is an entry on a\ndisk, whatever the totals above exclude.",
+                  "minimum": 0
+                },
+                "logicalBytes": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int64",
+                  "description": "Bytes on disk for one copy, when `?size=true` asked for them."
+                },
                 "name": {
                   "type": "string",
                   "description": "Topic name."
@@ -3156,6 +3189,14 @@
                     "$ref": "#/components/schemas/Partition"
                   },
                   "description": "Every partition."
+                },
+                "replicatedBytes": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int64",
+                  "description": "Bytes on disk across replicas.\n\n`None` means the caller did not ask, or `DescribeLogDirs` did not\nanswer for this topic — never that the topic is empty. A zero would be\na claim, and this is the absence of one."
                 },
                 "topicId": {
                   "type": [
@@ -4432,6 +4473,14 @@
             },
             "description": "The replica set, in assignment order — the placement grid's rows."
           },
+          "replicatedBytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Every non-future copy of this partition summed, when `?size=true`\nasked for it — what the disks hold for this one partition.\n\nThe replicated figure rather than the leader's copy, because the\nquestion a per-partition size answers is \"which one is the big one\",\nand because the leader's copy reads `0` on a leaderless partition\nrather than declining to answer."
+          },
           "underReplicated": {
             "type": "boolean",
             "description": "ISR smaller than the replica set."
@@ -5328,6 +5377,22 @@
             "type": "boolean",
             "description": "Whether Kafka considers this internal."
           },
+          "logDirEntryCount": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Log-directory entries holding a copy of this topic.\n\nOne per replica per directory, which is what kafbat-ui labels a\n\"segment count\" — `DescribeLogDirs` reports no segment files at all,\nso the name is borrowed and wrong. Carried under the name it earns,\nand future replicas count: a directory move in flight is an entry on a\ndisk, whatever the totals above exclude.",
+            "minimum": 0
+          },
+          "logicalBytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Bytes on disk for one copy, when `?size=true` asked for them."
+          },
           "name": {
             "type": "string",
             "description": "Topic name."
@@ -5338,6 +5403,14 @@
               "$ref": "#/components/schemas/Partition"
             },
             "description": "Every partition."
+          },
+          "replicatedBytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Bytes on disk across replicas.\n\n`None` means the caller did not ask, or `DescribeLogDirs` did not\nanswer for this topic — never that the topic is empty. A zero would be\na claim, and this is the absence of one."
           },
           "topicId": {
             "type": [

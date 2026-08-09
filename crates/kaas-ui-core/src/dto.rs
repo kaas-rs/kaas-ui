@@ -5,7 +5,7 @@
 //! below are the boundary, and they are the only place a library bump can
 //! break, rather than every screen at once.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
 
 use kafka_admin::{
@@ -744,6 +744,22 @@ pub struct TopicDetail {
     pub partitions: Vec<Partition>,
     /// The brokers holding replicas, for the placement grid's columns.
     pub broker_ids: Vec<i32>,
+    /// Bytes on disk for one copy, when `?size=true` asked for them.
+    pub logical_bytes: Option<i64>,
+    /// Bytes on disk across replicas.
+    ///
+    /// `None` means the caller did not ask, or `DescribeLogDirs` did not
+    /// answer for this topic — never that the topic is empty. A zero would be
+    /// a claim, and this is the absence of one.
+    pub replicated_bytes: Option<i64>,
+    /// Log-directory entries holding a copy of this topic.
+    ///
+    /// One per replica per directory, which is what kafbat-ui labels a
+    /// "segment count" — `DescribeLogDirs` reports no segment files at all,
+    /// so the name is borrowed and wrong. Carried under the name it earns,
+    /// and future replicas count: a directory move in flight is an entry on a
+    /// disk, whatever the totals above exclude.
+    pub log_dir_entry_count: Option<usize>,
 }
 
 impl TopicDetail {
@@ -763,6 +779,34 @@ impl TopicDetail {
             internal: topic.internal,
             partitions: topic.partitions.iter().map(Partition::of).collect(),
             broker_ids,
+            logical_bytes: None,
+            replicated_bytes: None,
+            log_dir_entry_count: None,
+        }
+    }
+
+    /// Attach sizes from `topic_sizes()`.
+    ///
+    /// A setter rather than a consuming `with_size`, for the same reason
+    /// `TopicSummary::set_size` is one: the caller already owns the row.
+    pub fn set_size(&mut self, size: &TopicSize) {
+        self.logical_bytes = Some(size.logical_bytes);
+        self.replicated_bytes = Some(size.replicated_bytes);
+        self.log_dir_entry_count = Some(size.replicas.len());
+
+        // Joined by index rather than by position: `size.partitions` holds one
+        // entry per partition *some broker reported a copy of*, which is not
+        // the same list as the describe's, and zipping the two would put one
+        // partition's bytes on another's row.
+        let by_index: HashMap<i32, i64> = size
+            .partitions
+            .iter()
+            .map(|partition| (partition.partition, partition.replicated_bytes))
+            .collect();
+        for partition in &mut self.partitions {
+            if let Some(bytes) = by_index.get(&partition.partition) {
+                partition.set_size(*bytes);
+            }
         }
     }
 }
@@ -791,6 +835,14 @@ pub struct Partition {
     pub earliest_offset: Option<i64>,
     /// Next offset to be written.
     pub latest_offset: Option<i64>,
+    /// Every non-future copy of this partition summed, when `?size=true`
+    /// asked for it — what the disks hold for this one partition.
+    ///
+    /// The replicated figure rather than the leader's copy, because the
+    /// question a per-partition size answers is "which one is the big one",
+    /// and because the leader's copy reads `0` on a leaderless partition
+    /// rather than declining to answer.
+    pub replicated_bytes: Option<i64>,
 }
 
 impl Partition {
@@ -809,6 +861,7 @@ impl Partition {
                 .map(str::to_owned),
             earliest_offset: None,
             latest_offset: None,
+            replicated_bytes: None,
         }
     }
 
@@ -819,6 +872,11 @@ impl Partition {
     pub fn set_offsets(&mut self, earliest: Option<i64>, latest: Option<i64>) {
         self.earliest_offset = earliest;
         self.latest_offset = latest;
+    }
+
+    /// Attach the on-disk size, fetched separately for the same reason.
+    pub fn set_size(&mut self, replicated: i64) {
+        self.replicated_bytes = Some(replicated);
     }
 }
 
