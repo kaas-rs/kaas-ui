@@ -18,7 +18,7 @@ is surprising.
 | 3 — messages | seven seek modes over SSE, virtualised list, detail panel, URL state |
 | 4 — auth | OIDC via Dex, encrypted-cookie sessions, roles in kafbat's shape, the access audit |
 | 5 — groups | four group kinds, members, committed offsets, lag as states rather than a subtraction |
-| 6 — schema registry | one registry per environment, Avro/Protobuf/JSON Schema, the codec chip, the schema browser, the sandboxed JS predicate |
+| 6 — schema registry | one registry per environment, Avro/Protobuf/JSON Schema, the codec chip, the schema browser, the payload filter over decoded values |
 
 Still open: [Phase 7](08-phase-7-read-only-admin.md),
 [Phase 8](09-phase-8-cross-cluster.md).
@@ -26,19 +26,19 @@ Still open: [Phase 7](08-phase-7-read-only-admin.md),
 ## Acceptance, as it stands
 
 ```sh
-cargo xtask ci      # green: fmt, clippy, 213 unit tests, five invariant greps
-cargo xtask live    # green: 52 assertions against kaas, strimzi and dead
+cargo xtask ci      # green: fmt, clippy, 239 unit tests, five invariant greps
+cargo xtask live    # green: 61 assertions against kaas, strimzi and dead
 cargo xtask login   # 11 assertions, a real login. Dormant — see below.
 ```
 
 The invariant greps are the ones that matter, because they are what keeps the
 architecture from being edited away: exactly one `Admin::connect_read_only`
-(today at `crates/kaas-ui-core/src/registry.rs:200`), no Kafka version literal
+(today at `crates/kaas-ui-core/src/registry.rs:258`), no Kafka version literal
 anywhere, no committed `xtask link` fence, and sign-in being an `<a href>`
 rather than a `fetch` — see Phase 4.
 
-Unit tests: 63 in `kaas-ui-api`, 57 in `kaas-ui-core`, 40 in `kaas-ui-auth`,
-40 in `kaas-ui-serde` (32 unit, 8 against a stub registry), 10 in
+Unit tests: 67 in `kaas-ui-api`, 72 in `kaas-ui-core`, 40 in `kaas-ui-auth`,
+47 in `kaas-ui-serde` (38 unit, 9 against a stub registry), 10 in
 `kaas-ui-server`, 3 in `xtask`.
 
 `cargo xtask live` gained a third outcome in Phase 6: **skip**. The seek-mode
@@ -62,7 +62,7 @@ these numbers are what that claim now rests on.
 | resident memory, idle, three clusters configured | **8.7 MiB** (predicted ~15 MB) | — |
 | time to serve after start | 53 ms | 52.6 ms |
 | `GET /health` | 0.3 ms | 0.6 ms |
-| `GET /api/clusters`, with `dead` failing in the background | 1.2 ms | 1.6 ms |
+| `GET /api/environments`, with `dead` failing in the background | 1.2 ms | 1.8 ms |
 
 The image size comes from the release job, which measures it on every push and
 writes it into the job summary — so it is checked rather than remembered.
@@ -496,42 +496,98 @@ for Protobuf and getting Avro is answered with Avro and an `overrideRefused`
 note, not with a failure.
 
 **Decode-then-filter is one operation.** `PayloadDecoder::accept` is the only
-way a row is built, and the predicate lives inside the decoder rather than
-beside it, so there is no arrangement of calls that runs the expensive filter
-on a record the cheap ones would have dropped. Two counters hold it:
-`the_predicate_is_evaluated_zero_times_for_a_record_a_cheap_filter_dropped`
-drives `forward()` over a synthetic stream with an offset floor, and the live
-run asserts that a partition-restricted scan evaluates the predicate exactly as
-many times as that partition had records.
+way a row is built, and the filter lives inside the decoder rather than beside
+it, so there is no arrangement of calls that renders a row the filter rejected
+and none that filters on anything but the decoded value. What can still run
+earlier is everything that needs no payload — partitions and the window are in
+the scan spec, the offset floor is checked in the read loop — and
+`a_record_below_the_floor_is_never_decoded_and_never_matched` drives `forward()`
+over a synthetic stream to hold that.
 
-**`rquickjs` needs its `parallel` feature, and that is not about parallelism.**
-The message stream owns its interpreter and runs on a spawned task, so a
-`!Send` runtime could not be used there at all. The memory cap and the
-interrupt handler are installed on the runtime *before the context exists*, and
-therefore before the user's own source is compiled — a pathological expression
-can hang a parser as easily as a loop can hang an interpreter.
+**The JS predicate is gone, and the filter box took its job.** Phase 6 shipped
+a second filtering tier: a user JavaScript expression over the decoded value,
+compiled per request into an `rquickjs` runtime with a 16 MiB cap, a 256 KiB
+stack, a 10 ms per-record budget and an interrupt handler installed before the
+user's source was ever parsed. It worked — measured live, `while (true) {}`
+over a ten-record window was killed four times in **44 ms** with the request
+returning normally and RSS at 4.4 MB — and it is still the wrong shape for a
+search box. It was the largest attacker-reachable machine in the process,
+maintained so that people could type `v => v.amount > 100` into a toolbar, and
+what they mostly typed was a word they were looking for.
 
-The predicate accepts an arrow function **or** a bare expression over `value`,
-because the second is what people type first. It sees the decoded value where
-there is one, the rendered **string** where there is not — so
-`v.includes("boom")` works on a topic with no schema — and `null` for a
-tombstone. A predicate returning an object or a promise is an error rather
-than a match: `!!promise` is `true`, so an `async` filter would otherwise
-match every record and look like it worked.
+So `?filter=` moved to where the predicate stood. It is a **literal substring
+of the decoded value**: no expression, no pattern, no interpreter, one call to
+`str::contains`, and every character in the needle means only itself.
+`a_needle_is_matched_literally_and_never_evaluated` asserts that over eight
+shapes of injection — regex, SQL, JNDI, template, script tag, header
+splitting — and the live run asserts the other half: `?filter=sequence` finds
+rows on the Avro canary whose *bytes* contain no such string, because Avro
+carries field names in the schema and not in the record.
 
-Measured, live: `while (true) {}` over a ten-record window was killed four
-times in **44 ms** and the request returned normally; RSS afterwards was
-4.4 MB.
+**Matching the decoded value costs the two-tier design.** kaas-lib's
+`RecordFilter` matches bytes, so a needle for the decoded value cannot go into
+the scan spec at all, and every record in the window is now decoded before it
+can be rejected. Two things follow, and both are in the wire contract rather
+than in a comment: `limit` is a budget for records **read**, and `hasMore`
+reports whether the *read* filled it. `nextOffset` comes off the window that
+was examined rather than off the surviving rows — anchoring on the rows would
+return `None` for a window that matched nothing, and paging would stop dead on
+the first five hundred records a selective filter emptied. The exception is a
+backward page cut to its limit, where the last row *shown* is the boundary:
+`tail` over-fetches with `div_ceil`, and stepping past what it read would skip
+records nobody saw.
+
+The needle is capped at 256 characters — `MAX_FILTER_CHARS` — and a longer one
+is a `400`. It is a comparison the server repeats per record at the caller's
+choosing, which makes its length a cost the caller sets and someone else pays.
+The frontend trims to the same ceiling by code point rather than by
+`String.length`, because half a surrogate pair is not a substring of anything.
 
 **No Monaco.** The phase plan named it for the schema text and the diff.
 `@monaco-editor/react` is around 2.5 MB gzipped for a viewer that never edits,
-against a frontend bundle that is 250 kB gzipped in total, and the filter
-editor is a one-line expression input. The schema browser pretty-prints JSON —
+against a frontend bundle that is 250 kB gzipped in total. The schema browser
+pretty-prints JSON —
 which Avro and JSON Schema both are — shows `.proto` as registered, and takes
 a line diff between two versions with a 40-line longest-common-subsequence
 implementation. Both sides are normalised before diffing, so a version that
 differs only in the registry's whitespace shows as unchanged. Syntax
 highlighting is the one thing genuinely not delivered.
+
+**All three subject naming strategies name a topic where one is in the name,
+and the schema is what says where.** The page used to strip `-value` and give
+up, so `TopicNameStrategy` linked to its topic and the other two read as
+"not derivable" — but only `RecordNameStrategy` genuinely has no topic in it.
+`orders-com.acme.Order` is a topic and a record joined by the same `-` that
+`orders-value` uses, and the seam is invisible in the string; it is not
+invisible in the schema, which declares `com.acme.Order`. `kaas-ui-serde`'s
+`naming` module reads that declared name out of the three formats — Avro
+`namespace` + `name`, `package` + the first top-level `message`, JSON Schema
+`title` — and `SubjectNaming` takes it off the end of the subject, exactly,
+with nothing guessed. `SubjectDetail.naming` carries the strategy, the topic
+and the name, so the frontend classifies nothing.
+
+Two consequences worth stating. A subject with no declared name (a top-level
+Avro union, an unreachable registry) falls back to the suffixes alone rather
+than splitting at a guessed `-` — a link to a topic that does not exist is
+worse than no link. And `RecordNameStrategy` now says *why* there is no topic
+instead of showing the same "not derivable" as a subject nobody can parse: the
+mapping from record to topics lives in the records, so the topic column is
+absent and one line explains it. Decoding was never affected by any of this —
+it resolves by schema id and never reads the subject.
+
+**The same reading answers the question from the topic's end**, which is why
+`naming` is on `SubjectRow` and not only on `SubjectDetail`. A topic page that
+wants its schema has to find the subjects naming *this* topic, and a prefix
+match cannot: `orders-` claims `orders-eu-value`, and under
+`TopicRecordNameStrategy` the seam is in the schema rather than in the string.
+So the topic overview searches the registry for subjects mentioning the topic —
+a substring, deliberately wide — and keeps the rows whose `naming.topic` is
+equal to it. The column costs no registry call: `describe` already holds the
+newest schema for the id and the format, and the declared name comes with it.
+The card is absent when nothing matches, which is most topics in most
+deployments; both sides appear when both exist, because a key schema and a
+value schema are two subjects and picking one would be picking whichever
+sorted first.
 
 **The schema browser is guarded like the topic list**, `Resource::Topic` +
 `Action::View`, and it does **not** require a connected cluster. A registry
@@ -654,6 +710,33 @@ called a top-level `clusters:` a misspelling; a pre-nesting config is now
 refused with the destination of each block named. `config.dev.yaml`,
 `config.live-auth.yaml` and the deployed ConfigMap in `k3s-cluster` were
 converted together.
+
+**One route kept the old scope under the new URL, and nothing caught it for
+two phases.** `GET /api/environments/{env}/clusters` took the `{env}` segment
+and ignored it: the handler returned every visible cluster in the fleet, so
+`dev/clusters` listed `prod-eu`. Everything above it was correct — the fleet
+arranges by environment, `/environments/{env}` filters, both lookups are keyed
+`(environment, id)` — which is exactly why it survived. The frontend's own
+comment on that call already said "environment-scoped because a cluster id
+is", so the client believed the contract the server was not keeping, and every
+`find` by id alone in the UI was one same-named cluster away from picking the
+wrong one.
+
+It was found by porting `xtask live` (below), not by a unit test, and the
+lesson is the ordinary one: a scope bug looks like correct data until two
+environments hold the same id, and the dev fleet's `staging`/`prod` sections
+were the fixture that could have shown it all along. There is now an assertion
+that a listing does not reach past the environment that names it.
+
+**`xtask live` was written against `/api/clusters/…` and had stopped running.**
+Not degraded — *stopped*: the third assertion is the fleet, it 404s, and the
+run aborts there, so every phase's acceptance command had been reporting
+nothing since the nesting landed. The paths are now built from one `ENV`
+constant, and the two checks that could not be ported as prefixes were
+rewritten as the claims they had become: the schema browser is one call to a
+registry rather than the same call to two clusters, and "a cluster with no
+registry" is a null on its card rather than an empty list from a route that no
+longer exists. 61 assertions, green.
 
 ### Measured
 

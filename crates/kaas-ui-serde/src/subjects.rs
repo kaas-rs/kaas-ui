@@ -37,6 +37,12 @@ pub struct SubjectSchema {
     /// The schema itself, as the registry stores it. Text rather than parsed,
     /// because this is what Monaco highlights and what a diff is taken over.
     pub schema: String,
+    /// The fully-qualified name this version declares, where it declares one.
+    ///
+    /// Read once here rather than per request, because the schema cache is
+    /// forever and this is a fact about the text. It is what makes the two
+    /// record naming strategies readable — see [`crate::naming`].
+    pub record_name: Option<String>,
     /// Subjects this one refers to.
     pub references: Vec<SchemaReference>,
 }
@@ -135,18 +141,23 @@ impl RegistryHandle {
             ))
         })?;
 
+        // Confluent omits `schemaType` for Avro, which is the default rather
+        // than an absence.
+        let format = match raw.schema_type.as_deref() {
+            Some("PROTOBUF") => SchemaFormat::Protobuf,
+            Some("JSON") => SchemaFormat::Json,
+            _ => SchemaFormat::Avro,
+        };
+        let text = raw.schema.unwrap_or_default();
+        let record_name = crate::naming::declared_name(format, &text);
+
         let schema = Arc::new(SubjectSchema {
             subject: raw.subject.unwrap_or_else(|| subject.to_owned()),
             version: raw.version.unwrap_or(version),
             id: raw.id.unwrap_or_default(),
-            // Confluent omits `schemaType` for Avro, which is the default
-            // rather than an absence.
-            format: match raw.schema_type.as_deref() {
-                Some("PROTOBUF") => SchemaFormat::Protobuf,
-                Some("JSON") => SchemaFormat::Json,
-                _ => SchemaFormat::Avro,
-            },
-            schema: raw.schema.unwrap_or_default(),
+            format,
+            schema: text,
+            record_name,
             references: raw
                 .references
                 .into_iter()

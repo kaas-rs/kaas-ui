@@ -15,8 +15,8 @@ in [11-built.md](11-built.md).
 The workspace is five crates, a frontend and an xtask.
 
 ```sh
-cargo xtask ci      # green: fmt, clippy, 213 unit tests, five invariant greps
-cargo xtask live    # green: 52 assertions against kaas, strimzi and a dead cluster
+cargo xtask ci      # green: fmt, clippy, 239 unit tests, five invariant greps
+cargo xtask live    # green: 61 assertions against kaas, strimzi and a dead cluster
 cargo xtask login   # 11 assertions, a real login. Needs the dex-test app
                     # synced; it is currently out of the cluster, so this
                     # command reports that and does nothing.
@@ -30,7 +30,7 @@ cargo xtask login   # 11 assertions, a real login. Needs the dex-test app
 | 3 — messages | **done** — seven seek modes over SSE, virtualised list, detail panel, URL state |
 | 4 — auth | **done** — Dex deployed, people sign in, roles enforced, reads audited, and `cargo xtask login` performs a real login against a second Dex in the cluster |
 | 5 — groups | **done** — four kinds, members, committed offsets, lag as states rather than a subtraction |
-| 6 — schema registry | **done** — one registry per environment, Avro/Protobuf/JSON Schema, the codec chip, the schema browser, the sandboxed JS predicate |
+| 6 — schema registry | **done** — one registry per environment, Avro/Protobuf/JSON Schema, the codec chip, the schema browser, the payload filter over decoded values |
 | 7 — read-only admin | not started — ACLs, quotas, SCRAM, reassignments, transactions |
 | 8 — cross-cluster | not started — fleet topic search, cluster comparison, capability diff |
 
@@ -67,8 +67,7 @@ Running alongside all of them:
   `kaas-ui-core::dto` for three phases — UTF-8 or hex with the encoding named
   — and the crate was created by the phase that filled it, which is rule 6
   rather than an oversight. It now holds the Confluent framing, the registry
-  client, the codecs and the JS predicate sandbox, and `kaas-ui-core` depends
-  on it.
+  client and the codecs, and `kaas-ui-core` depends on it.
 - **`kaas-ui-auth` holds no OIDC in the version some of these documents
   describe.** It does now — see [11-built.md](11-built.md). Same rule, same
   reason: the crate is created by the phase that fills it.

@@ -62,7 +62,7 @@ pub struct TailQuery {
 }
 
 impl TailQuery {
-    /// The chip in the message list, as this request set it.
+    /// The codec override, as this request set it.
     fn codecs(&self) -> CodecOverride {
         CodecOverride {
             key: self.key_codec,
@@ -192,8 +192,13 @@ pub struct MessagePage {
     pub items: Vec<StreamRow>,
     /// Whatever failed while reading them.
     pub errors: Vec<kaas_ui_core::ResourceError>,
-    /// Whether the page filled, which is the only honest signal that there is
-    /// more. A short page means the window ran out.
+    /// Whether the **read** filled its budget, which is the only honest signal
+    /// that there is more.
+    ///
+    /// Not "the page is full": the payload filter runs after the decode, so a
+    /// page of three rows may have read five hundred records and have five
+    /// hundred thousand still to walk. Deriving this from the row count would
+    /// end paging at the first window a selective filter emptied.
     pub has_more: bool,
     /// The anchor to ask for next, or `None` at the end of the window.
     ///
@@ -205,12 +210,6 @@ pub struct MessagePage {
     /// modes. See [`resolve`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resolved: Option<ResolvedSeek>,
-    /// What the JS predicate did, where one was given.
-    ///
-    /// Present so that a filter which dropped a thousand records for
-    /// exceeding its budget does not look like a filter that matched nothing.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub predicate: Option<kaas_ui_serde::PredicateStats>,
 }
 
 /// `GET /api/clusters/{id}/topics/{topic}/messages`
@@ -230,11 +229,10 @@ pub struct MessagePage {
         ("timestamp" = Option<i64>, Query, description = "Epoch millis, for sinceTime and toTime"),
         ("partitions" = Option<String>, Query, description = "Comma-separated partition list"),
         ("visibility" = Option<String>, Query, description = "all | committed"),
-        ("filter" = Option<String>, Query, description = "Substring match on the value"),
-        ("limit" = Option<usize>, Query, description = "Records in this page"),
+        ("filter" = Option<String>, Query, description = "Literal substring of the decoded value"),
+        ("limit" = Option<usize>, Query, description = "Records to read for this page"),
         ("keyCodec" = Option<kaas_ui_serde::Codec>, Query, description = "Override how keys are read"),
         ("valueCodec" = Option<kaas_ui_serde::Codec>, Query, description = "Override how values are read"),
-        ("predicate" = Option<String>, Query, description = "JavaScript expression over the decoded value"),
     ),
     responses((status = 200, description = "One page of messages", body = MessagePage)),
     tag = "messages",
@@ -267,12 +265,15 @@ pub async fn page(
     let resolved =
         resolve::resolve(&admin, &topic, plan.partitions(), mode.timestamp_of(&query)).await;
 
-    // Compiled before the read, so a broken expression costs no round trip.
-    let decoder = PayloadDecoder::new(&handle, &topic, query.codecs())
-        .with_predicate(query.compile_predicate()?);
+    // Taken before the read, so a needle nobody can serve costs no round trip.
+    let decoder =
+        PayloadDecoder::new(&handle, &topic, query.codecs()).with_filter(query.payload_filter()?);
 
     let mut rows = Vec::new();
     let mut errors = Vec::new();
+    // What this read *looked at*, filter or no filter. The rows are what
+    // survived; only this can say where the next page starts.
+    let mut window = Window::default();
 
     match plan {
         Plan::Backward { spec } => {
@@ -281,6 +282,7 @@ pub async fn page(
             for partition in &tails {
                 malformed += partition.malformed;
                 for record in &partition.records {
+                    window.saw(record.offset);
                     if let Some(decoded) =
                         decoder.accept(record, kaas_ui_serde::PREVIEW_CHARS).await
                     {
@@ -303,14 +305,21 @@ pub async fn page(
             rows.sort_by_key(|row| std::cmp::Reverse(sort_key(row)));
         }
         Plan::Forward { spec, floor } => {
-            rows = collect_forward(admin.cluster(), *spec, floor, limit, &decoder).await?;
+            (rows, window) =
+                collect_forward(admin.cluster(), *spec, floor, limit, &decoder).await?;
             rows.sort_by_key(sort_key);
         }
     }
 
+    let collected = rows.len();
     rows.truncate(limit);
-    let has_more = rows.len() >= limit;
-    let next_offset = next_anchor(mode, &rows);
+    // A backward read over-fetches — `tail` spreads its limit across
+    // partitions with `div_ceil` — so rows past the limit are cut here and
+    // were never shown. Where that happened, the last row shown is the
+    // boundary; anywhere else it is the far end of what was read.
+    let cut = collected > rows.len();
+    let has_more = window.examined >= limit;
+    let next_offset = next_anchor(mode, &rows, &window, cut);
 
     state.record_read(
         &caller
@@ -328,21 +337,52 @@ pub async fn page(
         has_more,
         next_offset,
         resolved,
-        predicate: decoder.predicate_stats(),
     }))
 }
 
-/// Read a bounded forward window into a `Vec`.
+/// The extent of what one read looked at, before anything was filtered out.
+///
+/// The page's rows cannot answer "where does the next page start" on their
+/// own: with a payload filter every one of them may have been dropped, and an
+/// anchor derived from an empty list is no anchor at all — paging would stop
+/// at the first window that matched nothing.
+#[derive(Debug, Default)]
+struct Window {
+    /// Records and malformed batches read, matched or not.
+    examined: usize,
+    lowest: Option<i64>,
+    highest: Option<i64>,
+}
+
+impl Window {
+    fn saw(&mut self, offset: i64) {
+        self.examined += 1;
+        self.lowest = Some(self.lowest.map_or(offset, |low| low.min(offset)));
+        self.highest = Some(self.highest.map_or(offset, |high| high.max(offset)));
+    }
+
+    /// A batch that did not decode covers a range, and the reader has seen all
+    /// of it — the row says so — so the next page starts past its end.
+    fn saw_range(&mut self, offset: i64, last_offset: Option<i64>) {
+        self.saw(offset);
+        if let Some(last) = last_offset {
+            self.highest = Some(self.highest.map_or(last, |high| high.max(last)));
+        }
+    }
+}
+
+/// Read a bounded forward window into a `Vec`, with what it walked.
 async fn collect_forward(
     cluster: &kafka_meta::Cluster,
     spec: ScanSpec,
     floor: Option<i64>,
     limit: usize,
     decoder: &PayloadDecoder,
-) -> ApiResult<Vec<StreamRow>> {
+) -> ApiResult<(Vec<StreamRow>, Window)> {
     let scan = crate::call("scan", kafka_read::scan(cluster, spec)).await?;
     let mut stream = Box::pin(scan);
     let mut rows = Vec::new();
+    let mut window = Window::default();
 
     while let Some(event) = stream.next().await {
         match event {
@@ -350,8 +390,9 @@ async fn collect_forward(
                 if floor.is_some_and(|floor| record.offset < floor) {
                     continue;
                 }
-                // The floor is a cheap filter and is checked above, so a
-                // record below it never reaches the predicate.
+                // Counted before the decode: this is the budget the scan spec
+                // is bounded by, and it is what `hasMore` is read from.
+                window.saw(record.offset);
                 if let Some(decoded) = decoder.accept(&record, kaas_ui_serde::PREVIEW_CHARS).await {
                     rows.push(StreamRow::render(&record, decoded));
                 }
@@ -362,16 +403,22 @@ async fn collect_forward(
                 last_offset,
                 reason,
                 ..
-            }) => rows.push(StreamRow::malformed(partition, offset, last_offset, reason)),
+            }) => {
+                window.saw_range(offset, last_offset);
+                rows.push(StreamRow::malformed(partition, offset, last_offset, reason));
+            }
             Ok(ScanEvent::Done(_)) => break,
             Ok(_) => {}
             Err(error) => return Err(ApiError::from(error)),
         }
-        if rows.len() >= limit {
+        // Both ceilings, because they are no longer the same number: a page
+        // is full at `limit` rows, and a read is spent at `limit` records
+        // whether or not any of them matched.
+        if rows.len() >= limit || window.examined >= limit {
             break;
         }
     }
-    Ok(rows)
+    Ok((rows, window))
 }
 
 /// Sort a row by when it happened, then by where, so the order is total.
@@ -386,17 +433,29 @@ fn sort_key(row: &StreamRow) -> (i64, i64, i32) {
 }
 
 /// Where the next page starts, given this one.
-fn next_anchor(mode: SeekMode, rows: &[StreamRow]) -> Option<i64> {
-    let offsets = rows.iter().map(|row| match row {
-        StreamRow::Record(record) => record.offset,
-        StreamRow::Malformed(row) => row.offset,
-    });
+///
+/// Off the **window** rather than off the rows, so a filter that rejected
+/// every record still moves the cursor: the reader has seen the fate of
+/// everything that was read, not just of what survived. The exception is a
+/// page that was cut to its limit — records past the cut were read and
+/// discarded unseen, so the last row shown is the boundary and stepping past
+/// it would skip them.
+fn next_anchor(mode: SeekMode, rows: &[StreamRow], window: &Window, cut: bool) -> Option<i64> {
+    let (low, high) = if cut {
+        let offsets = rows.iter().map(|row| match row {
+            StreamRow::Record(record) => record.offset,
+            StreamRow::Malformed(row) => row.offset,
+        });
+        (offsets.clone().min(), offsets.max())
+    } else {
+        (window.lowest, window.highest)
+    };
     if mode.is_backward() {
         // Walking back: the next window ends just below the oldest offset in
         // this one.
-        offsets.min()?.checked_sub(1)
+        low?.checked_sub(1)
     } else {
-        offsets.max()?.checked_add(1)
+        high?.checked_add(1)
     }
 }
 
@@ -524,22 +583,98 @@ mod tests {
         }))
     }
 
+    /// The window a page of these rows would have walked, unfiltered.
+    fn walked(rows: &[StreamRow]) -> Window {
+        let mut window = Window::default();
+        for row in rows {
+            window.saw(match row {
+                StreamRow::Record(record) => record.offset,
+                StreamRow::Malformed(row) => row.offset,
+            });
+        }
+        window
+    }
+
     #[test]
     fn a_backward_page_points_at_the_offset_below_its_oldest() {
         let rows = vec![record(0, 900, 5), record(1, 880, 4), record(0, 895, 3)];
-        assert_eq!(next_anchor(SeekMode::ToOffset, &rows), Some(879));
+        let window = walked(&rows);
+        assert_eq!(
+            next_anchor(SeekMode::ToOffset, &rows, &window, false),
+            Some(879)
+        );
     }
 
     #[test]
     fn a_forward_page_points_at_the_offset_above_its_newest() {
         let rows = vec![record(0, 100, 1), record(1, 140, 2)];
-        assert_eq!(next_anchor(SeekMode::FromOffset, &rows), Some(141));
+        let window = walked(&rows);
+        assert_eq!(
+            next_anchor(SeekMode::FromOffset, &rows, &window, false),
+            Some(141)
+        );
     }
 
     #[test]
     fn an_empty_page_has_nowhere_to_go_next() {
-        assert_eq!(next_anchor(SeekMode::ToOffset, &[]), None);
-        assert_eq!(next_anchor(SeekMode::Oldest, &[]), None);
+        let nothing = Window::default();
+        assert_eq!(next_anchor(SeekMode::ToOffset, &[], &nothing, false), None);
+        assert_eq!(next_anchor(SeekMode::Oldest, &[], &nothing, false), None);
+    }
+
+    /// The regression the window exists for.
+    ///
+    /// The payload filter runs after the decode, so a window can be read in
+    /// full and produce no rows at all. Anchoring on the rows would return
+    /// `None` there — "nothing further in this direction" — and paging would
+    /// stop on the first window a selective filter emptied, with the topic
+    /// barely touched.
+    #[test]
+    fn a_page_whose_filter_matched_nothing_still_says_where_to_look_next() {
+        let mut window = Window::default();
+        for offset in 4_000..4_500 {
+            window.saw(offset);
+        }
+        assert_eq!(
+            next_anchor(SeekMode::FromOffset, &[], &window, false),
+            Some(4_500)
+        );
+        assert_eq!(
+            next_anchor(SeekMode::ToOffset, &[], &window, false),
+            Some(3_999)
+        );
+    }
+
+    /// The other half of the same rule, and it points the other way.
+    ///
+    /// A backward read over-fetches — `tail` spreads its limit across
+    /// partitions with `div_ceil` — and the rows past the limit are cut before
+    /// anyone sees them. The next window has to start just below the oldest
+    /// row *shown*, not below the oldest record read, or the cut records are
+    /// skipped and never appear in any page.
+    #[test]
+    fn a_page_cut_to_its_limit_resumes_from_the_last_row_shown() {
+        let shown = vec![record(0, 900, 5), record(1, 895, 4)];
+        let mut window = walked(&shown);
+        for offset in 880..895 {
+            window.saw(offset);
+        }
+        assert_eq!(
+            next_anchor(SeekMode::Newest, &shown, &window, true),
+            Some(894)
+        );
+    }
+
+    #[test]
+    fn a_malformed_batch_is_read_to_its_end_before_the_next_page_begins() {
+        // The row names a range and the reader has seen all of it. Resuming at
+        // the base offset would re-read the same batch forever.
+        let mut window = Window::default();
+        window.saw_range(4_102, Some(4_530));
+        assert_eq!(
+            next_anchor(SeekMode::FromOffset, &[], &window, false),
+            Some(4_531)
+        );
     }
 
     #[test]

@@ -13,9 +13,16 @@ use kaas_ui_auth::{Access, Action, Resource};
 
 use crate::{ApiError, ApiResult, AppState, Caller, call};
 
-/// `GET /api/clusters`
+/// `GET /api/environments/{env}/clusters`
 ///
-/// One card per configured cluster, reachable or not.
+/// One card per cluster **declared in this environment**, reachable or not.
+///
+/// Scoped to the environment that names it, and that is not decoration: an id
+/// is unique only within its environment, so a listing that reached past this
+/// one could hand a client two clusters called `kafka` with nothing to tell
+/// them apart — and every lookup by id alone would then pick whichever came
+/// first. Absence is a 404 through the same lookup the rest of the namespace
+/// uses, so an environment nobody can see cannot be probed from here either.
 ///
 /// **Reads `Cluster::snapshot()` and nothing else**, so it never awaits: the
 /// snapshot sits behind an `ArcSwap` and carries brokers, controller id,
@@ -24,13 +31,26 @@ use crate::{ApiError, ApiResult, AppState, Caller, call};
 /// request — which is the property the dead-cluster fixture exists to prove.
 #[utoipa::path(
     get,
-    path = "/api/clusters",
-    responses((status = 200, description = "Every configured cluster", body = Envelope<ClusterCard>)),
+    path = "/api/environments/{env}/clusters",
+    params(("env" = String, Path, description = "Environment id")),
+    responses(
+        (status = 200, description = "Every cluster in this environment", body = Envelope<ClusterCard>),
+        (status = 404, description = "No such environment, or nothing in it is visible"),
+    ),
     tag = "clusters",
 )]
-pub async fn list(State(state): State<AppState>, caller: Caller) -> Json<Envelope<ClusterCard>> {
+pub async fn list(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(env): Path<String>,
+) -> ApiResult<Json<Envelope<ClusterCard>>> {
+    state.environment(&env, &caller)?;
     let registry = state.registry();
-    Json(Envelope::new(cards(&registry, caller.access())))
+    let members: Vec<ClusterCard> = cards(&registry, caller.access())
+        .into_iter()
+        .filter(|card| card.environment == env)
+        .collect();
+    Ok(Json(Envelope::new(members)))
 }
 
 /// One card per visible cluster, nudging the unreachable ones to retry.

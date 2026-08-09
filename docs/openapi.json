@@ -9,28 +9,6 @@
     "version": "0.10.1"
   },
   "paths": {
-    "/api/clusters": {
-      "get": {
-        "tags": [
-          "clusters"
-        ],
-        "summary": "`GET /api/clusters`",
-        "description": "One card per configured cluster, reachable or not.\n\n**Reads `Cluster::snapshot()` and nothing else**, so it never awaits: the\nsnapshot sits behind an `ArcSwap` and carries brokers, controller id,\ncluster id and every partition's replicas, ISR and offline set. An\nunreachable cluster costs a timeout on its own background task, not on this\nrequest — which is the property the dead-cluster fixture exists to prove.",
-        "operationId": "list",
-        "responses": {
-          "200": {
-            "description": "Every configured cluster",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Envelope_ClusterCard"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/environments": {
       "get": {
         "tags": [
@@ -49,6 +27,42 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/api/environments/{env}/clusters": {
+      "get": {
+        "tags": [
+          "clusters"
+        ],
+        "summary": "`GET /api/environments/{env}/clusters`",
+        "description": "One card per cluster **declared in this environment**, reachable or not.\n\nScoped to the environment that names it, and that is not decoration: an id\nis unique only within its environment, so a listing that reached past this\none could hand a client two clusters called `kafka` with nothing to tell\nthem apart — and every lookup by id alone would then pick whichever came\nfirst. Absence is a 404 through the same lookup the rest of the namespace\nuses, so an environment nobody can see cannot be probed from here either.\n\n**Reads `Cluster::snapshot()` and nothing else**, so it never awaits: the\nsnapshot sits behind an `ArcSwap` and carries brokers, controller id,\ncluster id and every partition's replicas, ISR and offline set. An\nunreachable cluster costs a timeout on its own background task, not on this\nrequest — which is the property the dead-cluster fixture exists to prove.",
+        "operationId": "list",
+        "parameters": [
+          {
+            "name": "env",
+            "in": "path",
+            "description": "Environment id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every cluster in this environment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope_ClusterCard"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such environment, or nothing in it is visible"
           }
         }
       }
@@ -762,7 +776,7 @@
           {
             "name": "filter",
             "in": "query",
-            "description": "Substring match on the value",
+            "description": "Literal substring of the decoded value",
             "required": false,
             "schema": {
               "type": "string"
@@ -771,7 +785,7 @@
           {
             "name": "limit",
             "in": "query",
-            "description": "Records in this page",
+            "description": "Records to read for this page",
             "required": false,
             "schema": {
               "type": "integer",
@@ -794,15 +808,6 @@
             "required": false,
             "schema": {
               "$ref": "#/components/schemas/Codec"
-            }
-          },
-          {
-            "name": "predicate",
-            "in": "query",
-            "description": "JavaScript expression over the decoded value",
-            "required": false,
-            "schema": {
-              "type": "string"
             }
           }
         ],
@@ -906,7 +911,7 @@
           {
             "name": "filter",
             "in": "query",
-            "description": "Substring match on the value",
+            "description": "Literal substring of the decoded value",
             "required": false,
             "schema": {
               "type": "string"
@@ -915,7 +920,7 @@
           {
             "name": "limit",
             "in": "query",
-            "description": "Records, ignored by live",
+            "description": "Records to read, ignored by live",
             "required": false,
             "schema": {
               "type": "integer",
@@ -4343,7 +4348,7 @@
           },
           "hasMore": {
             "type": "boolean",
-            "description": "Whether the page filled, which is the only honest signal that there is\nmore. A short page means the window ran out."
+            "description": "Whether the **read** filled its budget, which is the only honest signal\nthat there is more.\n\nNot \"the page is full\": the payload filter runs after the decode, so a\npage of three rows may have read five hundred records and have five\nhundred thousand still to walk. Deriving this from the row count would\nend paging at the first window a selective filter emptied."
           },
           "items": {
             "type": "array",
@@ -4360,17 +4365,6 @@
             "format": "int64",
             "description": "The anchor to ask for next, or `None` at the end of the window.\n\nOne number for every partition, because that is what the seek modes\ntake: partitions are at different offsets, so this is where to *start*\nthe next page and not a claim about any particular partition."
           },
-          "predicate": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/PredicateStats",
-                "description": "What the JS predicate did, where one was given.\n\nPresent so that a filter which dropped a thousand records for\nexceeding its budget does not look like a filter that matched nothing."
-              }
-            ]
-          },
           "resolved": {
             "oneOf": [
               {
@@ -4383,6 +4377,16 @@
             ]
           }
         }
+      },
+      "NamingStrategy": {
+        "type": "string",
+        "description": "Which of the three formed a subject name.",
+        "enum": [
+          "topicName",
+          "topicRecordName",
+          "recordName",
+          "unrecognized"
+        ]
       },
       "NoteKind": {
         "type": "string",
@@ -4607,49 +4611,6 @@
           "message": {
             "type": "string",
             "description": "What to tell the reader."
-          }
-        }
-      },
-      "PredicateStats": {
-        "type": "object",
-        "description": "What a predicate has done so far.\n\nReported beside the scan's own progress, because a filter that silently\ndropped a thousand records for exceeding its budget looks exactly like a\nfilter that matched nothing.",
-        "required": [
-          "evaluated",
-          "matched",
-          "timedOut",
-          "failed"
-        ],
-        "properties": {
-          "evaluated": {
-            "type": "integer",
-            "format": "int64",
-            "description": "Records the predicate was run on.",
-            "minimum": 0
-          },
-          "failed": {
-            "type": "integer",
-            "format": "int64",
-            "description": "Records whose evaluation threw — a bad field access on one odd record,\nor the memory cap firing.",
-            "minimum": 0
-          },
-          "lastError": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "The most recent failure, so one bad expression is diagnosable without\na log."
-          },
-          "matched": {
-            "type": "integer",
-            "format": "int64",
-            "description": "Records it accepted.",
-            "minimum": 0
-          },
-          "timedOut": {
-            "type": "integer",
-            "format": "int64",
-            "description": "Records killed by the per-record budget. **Not** the same as rejected:\nnobody knows whether these matched.",
-            "minimum": 0
           }
         }
       },
@@ -5174,6 +5135,7 @@
         "description": "The versions of one subject, newest last.",
         "required": [
           "subject",
+          "naming",
           "versions",
           "errors"
         ],
@@ -5191,6 +5153,10 @@
               "$ref": "#/components/schemas/ResourceError"
             },
             "description": "Versions the registry listed and would not hand over, with why.\n\nPartial failure is a result: a subject with thirty versions of which\none is unreadable renders twenty-nine and names the thirtieth."
+          },
+          "naming": {
+            "$ref": "#/components/schemas/SubjectNaming",
+            "description": "How the subject name was formed, and the topic that recovers from it.\n\nRead from the newest version, because the name a subject is registered\nunder is a property of the schema in force. A subject whose versions\ncould not be fetched still gets an answer — the two suffix strategies\nneed no schema — and `strategy` says which kind of answer it is."
           },
           "registry": {
             "oneOf": [
@@ -5256,12 +5222,40 @@
           }
         }
       },
+      "SubjectNaming": {
+        "type": "object",
+        "description": "A subject name, read.",
+        "required": [
+          "strategy"
+        ],
+        "properties": {
+          "recordName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The fully-qualified name the schema declares, where it declares one."
+          },
+          "strategy": {
+            "$ref": "#/components/schemas/NamingStrategy",
+            "description": "Which strategy the name fits."
+          },
+          "topic": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The topic the subject names, where the strategy carries one.\n\n`None` under [`NamingStrategy::RecordName`] because there is no topic in\nthe name, and under [`NamingStrategy::Unrecognized`] because there is no\nrule to read it by. The two are not the same fact and `strategy` is what\ntells them apart."
+          }
+        }
+      },
       "SubjectRow": {
         "type": "object",
         "description": "One row of the subject table.\n\nEverything but the name is `Option`, and for one reason: the name is in the\nlisting the registry already gave us, and the rest is a call per subject.\nThe client asks for the page first and the columns second.",
         "required": [
           "subject",
-          "compatibilityInherited"
+          "compatibilityInherited",
+          "naming"
         ],
         "properties": {
           "compatibility": {
@@ -5294,6 +5288,10 @@
             "format": "int32",
             "description": "The global schema id of the newest version — the number the wire\nformat carries.",
             "minimum": 0
+          },
+          "naming": {
+            "$ref": "#/components/schemas/SubjectNaming",
+            "description": "How the subject name was formed, and the topic that recovers from it.\n\nThe same fact [`SubjectDetail`] carries, on every row, because it is\nwhat answers the question from the other end: a *topic* page asks which\nsubjects name it, and a prefix match cannot tell `orders-value` from\n`orders-eu-value`. Free here — `describe` already holds the newest\nschema, so the declared name costs no registry call — and without\n`details` it is read from the name alone, which still resolves the two\nsuffix strategies."
           },
           "subject": {
             "type": "string",
@@ -5331,6 +5329,13 @@
             "format": "int32",
             "description": "The global schema id — the number the wire format carries.",
             "minimum": 0
+          },
+          "recordName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The fully-qualified name this version declares, where it declares one.\n\nRead once here rather than per request, because the schema cache is\nforever and this is a fact about the text. It is what makes the two\nrecord naming strategies readable — see [`crate::naming`]."
           },
           "references": {
             "type": "array",

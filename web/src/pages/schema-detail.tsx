@@ -14,7 +14,7 @@ import { Link } from "@tanstack/react-router"
 import { AlertTriangle, ArrowLeft, FileWarning, RotateCcw } from "lucide-react"
 
 import { useEnvironment, useSubjectVersions, useTopics } from "@/api/client"
-import type { SubjectSchema } from "@/api/types"
+import type { SubjectNaming, SubjectSchema } from "@/api/types"
 import { Empty, ErrorChips, Mono, Section, Spinner } from "@/components/domain"
 import { PageTitle } from "@/components/page-title"
 import { Badge } from "@/components/ui/badge"
@@ -41,23 +41,6 @@ import { cn } from "@/lib/utils"
 
 /** How many topics to search when resolving a subject's topic. */
 const PAGE = 50
-
-/**
- * The topic a subject was registered for, under `TopicNameStrategy`.
- *
- * Only that strategy is inferable: `RecordNameStrategy` names the Avro record
- * and `TopicRecordNameStrategy` glues both together, and neither can be undone
- * without guessing. Returning `null` there is the honest answer — the button
- * is absent rather than pointing somewhere plausible and wrong.
- */
-function topicOf(subject: string): string | null {
-  for (const suffix of ["-value", "-key"]) {
-    if (subject.endsWith(suffix) && subject.length > suffix.length) {
-      return subject.slice(0, -suffix.length)
-    }
-  }
-  return null
-}
 
 export function SchemaDetail({
   envId,
@@ -99,10 +82,14 @@ export function SchemaDetail({
     )
   }
 
-  const versions = detail.data?.versions ?? []
+  const data = detail.data
+  const versions = data?.versions ?? []
   const newest = versions[versions.length - 1]
 
-  if (!newest) {
+  // `!data` is what `!newest` already implied — the versions came out of it —
+  // and stating it is what lets the rest of the page read the response without
+  // a `?.` in front of every field.
+  if (!data || !newest) {
     // The response's own registry card is what tells "the subject holds
     // nothing" apart from "the registry could not answer" — the list page's
     // banner may still be showing a cached `ready` from before it went down.
@@ -223,7 +210,12 @@ export function SchemaDetail({
         </Card>
       </Section>
 
-      <AvailableOn envId={envId} registryId={registryId} subject={subject} />
+      <AvailableOn
+        envId={envId}
+        registryId={registryId}
+        subject={subject}
+        naming={data.naming}
+      />
 
       {/* One control, and the same one however many versions there are.
           At its default — newest against newest — there is nothing to diff, so
@@ -376,25 +368,33 @@ function Fact({
  *
  * * **the schema resolves here** — true of every cluster in `usedBy`, by
  *   configuration, whether or not anything has ever produced against it;
- * * **the topic is here** — only under `TopicNameStrategy`, and only where
- *   the cluster actually holds it. A subject outlives its topic, and a link to
- *   a topic that is not there is worse than no link.
+ * * **the topic is here** — under the two strategies whose subject contains a
+ *   topic, and only where the cluster actually holds it. A subject outlives its
+ *   topic, and a link to a topic that is not there is worse than no link.
+ *
+ * Which strategy that is comes from the server, which has the schema and can
+ * therefore take a declared record name off the end of a subject exactly. The
+ * page used to strip `-value` and give up on anything else, so every
+ * `TopicRecordNameStrategy` subject read as unlinkable when its topic was
+ * sitting in the name.
  */
 function AvailableOn({
   envId,
   registryId,
   subject,
+  naming,
 }: {
   envId: string
   registryId: string
   subject: string
+  naming: SubjectNaming
 }) {
   const environment = useEnvironment(envId)
   const usedBy =
     environment.data?.items[0]?.schemaRegistries.find(
       (entry) => entry.registry.id === registryId
     )?.usedBy ?? []
-  const topic = topicOf(subject)
+  const topic = naming.topic
 
   if (usedBy.length === 0) {
     return (
@@ -416,29 +416,40 @@ function AvailableOn({
             <TableRow>
               <TableHead>cluster</TableHead>
               <TableHead>schema resolves</TableHead>
-              <TableHead>
-                {topic ? (
-                  <>
-                    topic <span className="font-mono">{topic}</span>
-                  </>
-                ) : (
-                  "topic"
-                )}
-              </TableHead>
+              {/* The column exists only when the subject holds a topic. A
+                  `RecordNameStrategy` subject would otherwise repeat one
+                  sentence down every row, saying the same thing about the
+                  subject each time as though it were a fact about the cluster
+                  — and it would cost a topic listing per cluster to say it. */}
+              {topic === null ? null : (
+                <TableHead>
+                  topic <span className="font-mono">{topic}</span>
+                </TableHead>
+              )}
             </TableRow>
           </TableHeader>
           <TableBody>
-            {usedBy.map((clusterId) => (
-              <ClusterRow
-                key={clusterId}
-                envId={envId}
-                clusterId={clusterId}
-                topic={topic}
-              />
-            ))}
+            {usedBy.map((clusterId) =>
+              topic === null ? (
+                <TableRow key={clusterId}>
+                  <TableCell>
+                    <ClusterLink envId={envId} clusterId={clusterId} />
+                  </TableCell>
+                  <TableCell className="text-ok-ink text-[12px]">yes</TableCell>
+                </TableRow>
+              ) : (
+                <ClusterRow
+                  key={clusterId}
+                  envId={envId}
+                  clusterId={clusterId}
+                  topic={topic}
+                />
+              )
+            )}
           </TableBody>
         </Table>
       </div>
+      <NamingNote naming={naming} subject={subject} />
       <p className="mt-2 text-[11px] text-ink-faint">
         Every cluster here holds the same <Mono>Arc&lt;RegistryHandle&gt;</Mono>
         , so schema id {""}
@@ -450,11 +461,99 @@ function AvailableOn({
 }
 
 /**
- * One cluster's row: the schema, and the topic if this is that kind of subject.
+ * How the subject name was read, in one line, always.
+ *
+ * All four cases say something, including the two that yield no topic: "there
+ * is no topic in this name" and "this name follows no strategy I know" are
+ * different facts about the deployment, and a reader shown a missing column
+ * learns neither. Stated for the two that *do* yield one as well — under
+ * `TopicRecordNameStrategy` the seam is only obvious once you are told where
+ * it was found, and a link whose derivation is unexplained is a link you
+ * check by hand.
+ */
+function NamingNote({
+  naming,
+  subject,
+}: {
+  naming: SubjectNaming
+  subject: string
+}) {
+  const record = naming.recordName
+
+  const body = (() => {
+    switch (naming.strategy) {
+      case "topicName":
+        return (
+          <>
+            <Mono>TopicNameStrategy</Mono> — the <Mono>-value</Mono> /{" "}
+            <Mono>-key</Mono> suffix is what names the topic.
+          </>
+        )
+      case "topicRecordName":
+        return (
+          <>
+            <Mono>TopicRecordNameStrategy</Mono> — the schema declares{" "}
+            <Mono>{record}</Mono>, and what precedes it is the topic. Nothing in
+            the name says where that seam is; the schema does.
+          </>
+        )
+      case "recordName":
+        return (
+          <>
+            <Mono>RecordNameStrategy</Mono> — this names the record, not a
+            topic. The same record goes to whatever topics carry it, and which
+            those are lives in the records rather than in the registry, so there
+            is no topic to link to.
+          </>
+        )
+      case "unrecognized":
+        return record ? (
+          <>
+            No naming strategy fits: <Mono>{subject}</Mono> is neither{" "}
+            <Mono>{record}</Mono>, <Mono>{`<topic>-${record}`}</Mono> nor{" "}
+            <Mono>{"<topic>-value"}</Mono>, so no topic can be read out of it.
+          </>
+        ) : (
+          <>
+            The newest schema declares no name, so only a <Mono>-value</Mono> or{" "}
+            <Mono>-key</Mono> suffix could have named a topic — and{" "}
+            <Mono>{subject}</Mono> has neither.
+          </>
+        )
+    }
+  })()
+
+  return <p className="mt-2 text-[11px] text-ink-faint">{body}</p>
+}
+
+/** The cluster's own page. Both row shapes need it, only one has a topic. */
+function ClusterLink({
+  envId,
+  clusterId,
+}: {
+  envId: string
+  clusterId: string
+}) {
+  return (
+    <Link
+      to="/environments/$envId/clusters/$clusterId"
+      params={{ envId, clusterId }}
+      className="font-mono hover:underline"
+      style={{ color: "var(--rust-ink)" }}
+    >
+      {clusterId}
+    </Link>
+  )
+}
+
+/**
+ * One cluster's row, for a subject that names a topic.
  *
  * A hook per row rather than one lookup for all of them, because `useTopics`
  * is per cluster. It costs nothing at the broker — the topic list is served
  * from the metadata snapshot — so the honest answer is worth the extra query.
+ * Only rendered where there is a topic to look for, so the query is never the
+ * empty search that used to fetch fifty topics to display nothing.
  */
 function ClusterRow({
   envId,
@@ -463,38 +562,19 @@ function ClusterRow({
 }: {
   envId: string
   clusterId: string
-  topic: string | null
+  topic: string
 }) {
-  const topics = useTopics(envId, clusterId, {
-    search: topic ?? "",
-    limit: PAGE,
-  })
-  const exists = topic
-    ? topics.data?.items.some((entry) => entry.name === topic)
-    : undefined
+  const topics = useTopics(envId, clusterId, { search: topic, limit: PAGE })
+  const exists = topics.data?.items.some((entry) => entry.name === topic)
 
   return (
     <TableRow>
       <TableCell>
-        <Link
-          to="/environments/$envId/clusters/$clusterId"
-          params={{ envId, clusterId }}
-          className="font-mono hover:underline"
-          style={{ color: "var(--rust-ink)" }}
-        >
-          {clusterId}
-        </Link>
+        <ClusterLink envId={envId} clusterId={clusterId} />
       </TableCell>
       <TableCell className="text-ok-ink text-[12px]">yes</TableCell>
       <TableCell className="text-[12px]">
-        {topic === null ? (
-          <span
-            className="text-ink-faint"
-            title="Only TopicNameStrategy names a topic a subject can be undone into"
-          >
-            not derivable from this subject
-          </span>
-        ) : topics.isLoading ? (
+        {topics.isLoading ? (
           <span className="text-ink-faint">·</span>
         ) : exists ? (
           <Link

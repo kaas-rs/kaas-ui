@@ -245,7 +245,16 @@ active nav, focus ring, selected edge. For accent text on light use
   string needs no schema and no refetch — the raw bytes travel beside the
   decoded value. Overriding *up* to Avro cannot invent a schema id and is
   refused with a reason.
-- **The JS predicate never runs on a record a cheap filter could have
-  dropped.** `PayloadDecoder::accept` is the one place that ordering lives, and
-  two counters hold it. Its memory cap and interrupt handler are installed
-  before the first evaluation, including before the user's source is compiled.
+- **The payload filter is a literal substring of the *decoded* value.**
+  `PayloadDecoder::accept` is the one place it runs, and matching happens after
+  the decode — which is what lets `?filter=sequence` find rows on an Avro topic
+  whose bytes contain no such string. It is never a pattern and never an
+  expression: kaas-ui ran a JavaScript predicate here until the sandbox was
+  removed, and re-introducing an evaluator for a search box would be undoing
+  that on purpose. The needle is capped at `MAX_FILTER_CHARS`.
+- **A filtered page's `limit` is a budget for records read, not matched.** The
+  needle cannot go into kaas-lib's spec, which matches bytes, so a window is
+  read and then reduced. `hasMore` says whether the *read* filled its budget
+  and `nextOffset` comes off the window examined rather than off the surviving
+  rows — a page that matched nothing still has to say where to look next, or
+  paging stops on the first window a selective filter empties.

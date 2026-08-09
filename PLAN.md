@@ -448,11 +448,20 @@ with none coexist fine. Sniff the Confluent magic byte, fall back to per-topic
 config, then raw; always show what was chosen and let the user override it.
 Auto-detection that cannot be corrected is worse than none.
 
-**Filtering in two tiers.** Cheap predicates through kaas-lib's `RecordFilter`
-(offset, timestamp, partition, key prefix, headers) run before deserialization.
-A user JS predicate over the decoded value runs after, in `rquickjs` with a hard
-memory cap and an interrupt handler. Never run the JS predicate on a record a
-cheap filter could have dropped.
+**Filtering is a substring of the decoded value.** Selection that needs no
+payload — offset, timestamp, partition — goes into kaas-lib's scan spec and
+bounds what is read. What the reader types in the filter box is a **literal
+substring**, matched against the decoded value after the payload has been
+decoded, which is what lets it find a field name on an Avro topic: the names
+are in the schema and in the rendering, and nowhere in the bytes.
+
+This tier used to be a user JavaScript expression in an `rquickjs` sandbox with
+a memory cap and an interrupt handler. It is gone. A search box is not worth an
+interpreter — the sandbox was the largest piece of attacker-reachable machinery
+in the process, and a substring answers what people actually typed into it.
+Because the filter needs the decoded value, `limit` is a budget for records
+**read** rather than records matched, and a page that comes back short says so
+with `hasMore`.
 
 ### Frontend
 

@@ -176,7 +176,7 @@ async fn drains_with_streams_open(acceptance: &mut Acceptance, server: &mut Serv
     for partition in 0..3 {
         let opened = client
             .get(url(&format!(
-                "/api/clusters/kaas/topics/kperf-bench/messages/stream?mode=live&partitions={partition}"
+                "/api/environments/{ENV}/clusters/kaas/topics/kperf-bench/messages/stream?mode=live&partitions={partition}"
             )))
             .send()
             .await;
@@ -230,15 +230,24 @@ async fn drains_with_streams_open(acceptance: &mut Acceptance, server: &mut Serv
     );
 }
 
+/// The environment the live fixtures are declared in.
+///
+/// Everything below the fleet is addressed `(environment, id)` — a cluster id
+/// alone addresses nothing, because two environments may each hold a `kafka` —
+/// so every path here names one. `config.dev.yaml` puts `kaas`, `strimzi` and
+/// `dead` in `dev`; the `staging` and `prod` sections beside them point at
+/// names that do not resolve and exist to be counted, not read.
+const ENV: &str = "dev";
+
 pub(crate) fn url(path: &str) -> String {
     format!("http://127.0.0.1:{PORT}{path}")
 }
 
 /// Percent-encode a query parameter value.
 ///
-/// A JS predicate is full of characters a query string treats as structure —
-/// `&`, `=`, `+`, spaces — so it cannot be pasted into a URL raw. Hand-rolled
-/// rather than adding a dependency to the build tool for four lines.
+/// A payload filter is arbitrary text, and some of it — `&`, `=`, `+`, spaces
+/// — is structure to a query string. Hand-rolled rather than adding a
+/// dependency to the build tool for four lines.
 fn urlencode(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for byte in value.bytes() {
@@ -318,17 +327,62 @@ async fn assertions() -> Result<Acceptance, String> {
     tokio::time::sleep(Duration::from_secs(3)).await;
 
     // --- the fleet ----------------------------------------------------------
+    //
+    // `/api/environments` is the entry point and the only route that does not
+    // name one: it is what tells a caller which environments there are. Every
+    // cluster in the file is reached beneath one.
     let fleet_started = Instant::now();
-    let fleet = get(&client, "/api/clusters").await?;
+    let fleet = get(&client, "/api/environments").await?;
     let fleet_took = fleet_started.elapsed();
-    let cards = fleet["items"].as_array().cloned().unwrap_or_default();
+    let sections = fleet["items"].as_array().cloned().unwrap_or_default();
 
     acceptance.check(
-        "GET /api/clusters returns every configured cluster",
+        "GET /api/environments returns one section per configured environment",
+        if sections.len() >= 2 {
+            Ok(sections
+                .iter()
+                .map(|section| {
+                    format!(
+                        "{}={}",
+                        section["id"].as_str().unwrap_or("?"),
+                        section["clusters"].as_array().map_or(0, Vec::len)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" "))
+        } else {
+            Err(format!("got {} sections", sections.len()))
+        },
+    );
+
+    let cards = get(&client, &format!("/api/environments/{ENV}/clusters")).await?["items"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+
+    acceptance.check(
+        &format!("GET /api/environments/{ENV}/clusters returns the clusters declared in {ENV}"),
         if cards.len() >= 2 {
             Ok(format!("{} clusters", cards.len()))
         } else {
             Err(format!("got {}", cards.len()))
+        },
+    );
+
+    // The listing under an environment is *that* environment's, which is the
+    // whole reason the id sits in the path. A cluster id is unique only within
+    // its environment, so a listing that reaches past it hands the client two
+    // clusters with one name and no way to tell them apart — and every `find`
+    // by id in the frontend then picks whichever sorted first.
+    acceptance.check(
+        "a cluster listing does not reach past the environment that names it",
+        match cards
+            .iter()
+            .filter_map(|card| card["environment"].as_str())
+            .find(|environment| *environment != ENV)
+        {
+            None => Ok(format!("all {} in {ENV}", cards.len())),
+            Some(other) => Err(format!("a cluster from {other:?} is listed under {ENV}")),
         },
     );
 
@@ -395,7 +449,11 @@ async fn assertions() -> Result<Acceptance, String> {
     // --- capabilities: the conformance report -------------------------------
     let mut projections = Vec::new();
     for id in &ids {
-        let capabilities = get(&client, &format!("/api/clusters/{id}/capabilities")).await?;
+        let capabilities = get(
+            &client,
+            &format!("/api/environments/{ENV}/clusters/{id}/capabilities"),
+        )
+        .await?;
         let available: Vec<String> = capabilities["features"]
             .as_array()
             .cloned()
@@ -446,7 +504,11 @@ async fn assertions() -> Result<Acceptance, String> {
 
     // --- topics -------------------------------------------------------------
     for id in &ids {
-        let topics = get(&client, &format!("/api/clusters/{id}/topics")).await?;
+        let topics = get(
+            &client,
+            &format!("/api/environments/{ENV}/clusters/{id}/topics"),
+        )
+        .await?;
         let names: Vec<String> = topics["items"]
             .as_array()
             .cloned()
@@ -468,7 +530,7 @@ async fn assertions() -> Result<Acceptance, String> {
         if let Some(sample) = names.first() {
             let filtered = get(
                 &client,
-                &format!("/api/clusters/{id}/topics?search={sample}"),
+                &format!("/api/environments/{ENV}/clusters/{id}/topics?search={sample}"),
             )
             .await?;
             let filtered_count = filtered["items"].as_array().map_or(0, Vec::len);
@@ -489,7 +551,10 @@ async fn assertions() -> Result<Acceptance, String> {
         asked.push("kaas-ui-does-not-exist-b".into());
         let partial = get(
             &client,
-            &format!("/api/clusters/{id}/topics?name={}", asked.join(",")),
+            &format!(
+                "/api/environments/{ENV}/clusters/{id}/topics?name={}",
+                asked.join(",")
+            ),
         )
         .await?;
         let items = partial["items"].as_array().map_or(0, Vec::len);
@@ -511,7 +576,11 @@ async fn assertions() -> Result<Acceptance, String> {
 
         // Topic detail, and the tail, on the shared fixture.
         if names.iter().any(|name| name == "kperf-bench") {
-            let detail = get(&client, &format!("/api/clusters/{id}/topics/kperf-bench")).await?;
+            let detail = get(
+                &client,
+                &format!("/api/environments/{ENV}/clusters/{id}/topics/kperf-bench"),
+            )
+            .await?;
             let partitions = detail["items"][0]["partitions"]
                 .as_array()
                 .map_or(0, Vec::len);
@@ -536,7 +605,7 @@ async fn assertions() -> Result<Acceptance, String> {
 
             let tail = get(
                 &client,
-                &format!("/api/clusters/{id}/topics/kperf-bench/messages/tail?limit=20"),
+                &format!("/api/environments/{ENV}/clusters/{id}/topics/kperf-bench/messages/tail?limit=20"),
             )
             .await?;
             let records = tail["items"].as_array().map_or(0, Vec::len);
@@ -548,7 +617,7 @@ async fn assertions() -> Result<Acceptance, String> {
             // and a skip keyed on the asserted response could never fail.
             let bounds = get(
                 &client,
-                &format!("/api/clusters/{id}/topics/kperf-bench/offsets"),
+                &format!("/api/environments/{ENV}/clusters/{id}/topics/kperf-bench/offsets"),
             )
             .await?;
             let held: i64 = bounds["items"].as_array().map_or(0, |list| {
@@ -585,14 +654,18 @@ async fn assertions() -> Result<Acceptance, String> {
     // precondition**, not a regression, and reporting it as a failure would
     // train everyone to ignore this run.
     for id in &ids {
-        let topics = get(&client, &format!("/api/clusters/{id}/topics")).await?;
+        let topics = get(
+            &client,
+            &format!("/api/environments/{ENV}/clusters/{id}/topics"),
+        )
+        .await?;
         let has_bench = topics["items"]
             .as_array()
             .is_some_and(|list| list.iter().any(|topic| topic["name"] == "kperf-bench"));
         if !has_bench {
             continue;
         }
-        let base = format!("/api/clusters/{id}/topics/kperf-bench");
+        let base = format!("/api/environments/{ENV}/clusters/{id}/topics/kperf-bench");
 
         let bounds = get(&client, &format!("{base}/offsets")).await?;
         let partition_zero = bounds["items"]
@@ -769,7 +842,7 @@ async fn assertions() -> Result<Acceptance, String> {
     {
         let target = ids.first().cloned().unwrap_or_default();
         let stream_url = url(&format!(
-            "/api/clusters/{target}/topics/kperf-bench/messages/stream?mode=live"
+            "/api/environments/{ENV}/clusters/{target}/topics/kperf-bench/messages/stream?mode=live"
         ));
 
         // Five is the per-caller ceiling, and it applies only to a caller a
@@ -894,7 +967,11 @@ async fn assertions() -> Result<Acceptance, String> {
 
     // --- groups -------------------------------------------------------------
     for id in &ids {
-        let groups = get(&client, &format!("/api/clusters/{id}/groups")).await?;
+        let groups = get(
+            &client,
+            &format!("/api/environments/{ENV}/clusters/{id}/groups"),
+        )
+        .await?;
         let listed = groups["items"].as_array().cloned().unwrap_or_default();
         acceptance.check(
             &format!("{id}: groups list"),
@@ -904,7 +981,7 @@ async fn assertions() -> Result<Acceptance, String> {
         if let Some(group) = listed.first().and_then(|g| g["groupId"].as_str()) {
             let offsets = get(
                 &client,
-                &format!("/api/clusters/{id}/groups/{group}/offsets"),
+                &format!("/api/environments/{ENV}/clusters/{id}/groups/{group}/offsets"),
             )
             .await?;
             let rows = offsets["items"].as_array().cloned().unwrap_or_default();
@@ -940,7 +1017,9 @@ async fn assertions() -> Result<Acceptance, String> {
     for cluster in ["strimzi", "kaas"] {
         let tail = get(
             &client,
-            &format!("/api/clusters/{cluster}/topics/{CANARY}/messages/tail?limit=1"),
+            &format!(
+                "/api/environments/{ENV}/clusters/{cluster}/topics/{CANARY}/messages/tail?limit=1"
+            ),
         )
         .await;
         let value = tail
@@ -996,7 +1075,7 @@ async fn assertions() -> Result<Acceptance, String> {
     // than a second read of it.
     let overridden = get(
         &client,
-        &format!("/api/clusters/strimzi/topics/{CANARY}/messages/tail?limit=1&valueCodec=hex"),
+        &format!("/api/environments/{ENV}/clusters/strimzi/topics/{CANARY}/messages/tail?limit=1&valueCodec=hex"),
     )
     .await;
     acceptance.check(
@@ -1023,7 +1102,7 @@ async fn assertions() -> Result<Acceptance, String> {
     // for the same bytes even inside one record.
     let headers = get(
         &client,
-        &format!("/api/clusters/strimzi/topics/{CANARY}/messages/tail?limit=1"),
+        &format!("/api/environments/{ENV}/clusters/strimzi/topics/{CANARY}/messages/tail?limit=1"),
     )
     .await
     .map(|body| body["items"][0]["headers"].clone());
@@ -1045,39 +1124,103 @@ async fn assertions() -> Result<Acceptance, String> {
         },
     );
 
-    // The browser: same registry, same subjects, named on both.
-    let mut subject_lists = Vec::new();
-    for cluster in ["strimzi", "kaas"] {
-        if let Ok(body) = get(&client, &format!("/api/clusters/{cluster}/schemas")).await {
-            subject_lists.push((cluster, body));
-        }
-    }
+    // The browser hangs off the *registry*, not off a cluster: it used to be
+    // `/api/clusters/{id}/schemas`, which made "the same subjects from either
+    // cluster" a claim about two responses. It is now one response, and the
+    // claim it replaces is the stronger one — both clusters name the same
+    // registry id, so there is only one thing to ask.
+    let referenced: Vec<(String, String)> = cards
+        .iter()
+        .filter_map(|card| {
+            Some((
+                card["id"].as_str()?.to_owned(),
+                card["schemaRegistry"].as_str()?.to_owned(),
+            ))
+        })
+        .collect();
     acceptance.check(
-        "the schema browser shows the same subjects from either cluster",
-        match subject_lists.as_slice() {
-            [(_, first), (_, second)]
-                if first["subjects"] == second["subjects"]
-                    && first["registry"]["id"] == second["registry"]["id"]
-                    && first["registry"]["status"] == "ready" =>
-            {
-                Ok(format!(
-                    "{} subject(s) from registry {}",
-                    first["subjects"].as_array().map_or(0, Vec::len),
-                    first["registry"]["id"]
-                ))
-            }
-            [(_, first), (_, second)] => Err(format!("{first} vs {second}")),
-            _ => Err("the browser answered on neither cluster".to_owned()),
+        "both live clusters reference one registry, so there is one cache to ask",
+        match referenced.as_slice() {
+            [] => Err("no cluster references a registry".to_owned()),
+            [(_, first), rest @ ..] if rest.iter().all(|(_, id)| id == first) => Ok(referenced
+                .iter()
+                .map(|(cluster, id)| format!("{cluster}→{id}"))
+                .collect::<Vec<_>>()
+                .join(" ")),
+            _ => Err(format!("{referenced:?}")),
         },
     );
 
-    let subject = subject_lists
+    // A cluster that references none is a normal path, not a degraded one, and
+    // the card is where that shows now that there is no per-cluster route.
+    acceptance.check(
+        "a cluster referencing no registry says so on its card",
+        match cards
+            .iter()
+            .find(|card| card["schemaRegistry"].is_null())
+            .and_then(|card| card["id"].as_str())
+        {
+            Some(id) => Ok(id.to_owned()),
+            None => Err("every cluster references a registry; nothing tests absence".to_owned()),
+        },
+    );
+
+    let registry_id = referenced
         .first()
-        .and_then(|(_, body)| body["subjects"][0].as_str().map(str::to_owned));
-    if let Some(subject) = subject {
+        .map(|(_, id)| id.clone())
+        .unwrap_or_default();
+    let subjects = get(
+        &client,
+        &format!("/api/environments/{ENV}/schema-registries/{registry_id}/subjects?details=true"),
+    )
+    .await;
+    let rows = subjects
+        .as_ref()
+        .ok()
+        .and_then(|body| body["subjects"].as_array().cloned())
+        .unwrap_or_default();
+    acceptance.check(
+        "the registry lists its subjects",
+        match &subjects {
+            Ok(body) if !rows.is_empty() && body["registry"]["status"] == "ready" => Ok(format!(
+                "{} subject(s) from registry {}",
+                rows.len(),
+                body["registry"]["id"]
+            )),
+            Ok(body) => Err(format!("{body}")),
+            Err(error) => Err(error.clone()),
+        },
+    );
+
+    // The column the topic page reads. A subject that names a topic says which
+    // topic, from the server, because no prefix match can: `orders-` would
+    // claim `orders-eu-value`, and under `TopicRecordNameStrategy` the seam
+    // between topic and record is in the schema rather than in the name.
+    acceptance.check(
+        "a subject naming a topic says which topic, and it is the whole name",
+        match rows
+            .iter()
+            .find(|row| row["naming"]["topic"].as_str() == Some(CANARY))
+        {
+            Some(row) => Ok(format!(
+                "{} → {} ({})",
+                row["subject"], row["naming"]["topic"], row["naming"]["strategy"]
+            )),
+            None => Err(format!(
+                "no subject names {CANARY}: {:?}",
+                rows.iter()
+                    .map(|row| row["subject"].clone())
+                    .collect::<Vec<_>>()
+            )),
+        },
+    );
+
+    if let Some(subject) = rows.first().and_then(|row| row["subject"].as_str()) {
         let versions = get(
             &client,
-            &format!("/api/clusters/kaas/schemas/{subject}/versions"),
+            &format!(
+                "/api/environments/{ENV}/schema-registries/{registry_id}/subjects/{subject}/versions"
+            ),
         )
         .await;
         acceptance.check(
@@ -1101,99 +1244,151 @@ async fn assertions() -> Result<Acceptance, String> {
         );
     }
 
-    // A cluster that references no registry is a normal path, and says so
-    // rather than failing.
+    // A registry id nobody configured is absent, not forbidden — the same rule
+    // a cluster id follows, and for the same reason: an id that answers 403 is
+    // an id that can be enumerated.
+    let unknown_registry = client
+        .get(url(&format!(
+            "/api/environments/{ENV}/schema-registries/not-a-registry/subjects"
+        )))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
     acceptance.check(
-        "a cluster with no registry answers the browser with no registry",
-        match get(&client, "/api/clusters/dead/schemas").await {
-            Ok(body) if body["registry"].is_null() && body["subjects"] == Value::Array(vec![]) => {
-                Ok(String::new())
-            }
-            Ok(body) => Err(format!("{body}")),
-            Err(error) => Err(error),
+        "an unconfigured registry is 404, not 403",
+        if unknown_registry.status() == reqwest::StatusCode::NOT_FOUND {
+            Ok(String::new())
+        } else {
+            Err(format!("got {}", unknown_registry.status()))
         },
     );
 
-    // --- the JS predicate ---------------------------------------------------
+    // --- the payload filter ------------------------------------------------
     //
-    // `sequence` increases by exactly one per record within a canary run, so
-    // an even/odd split over a window is arithmetic rather than luck.
-    let filtered = get(
+    // It matches a literal substring of the *decoded* value, which is a claim
+    // the Avro canary can settle by itself: `sequence` is a field **name**, so
+    // it exists in the schema and in the rendering and nowhere in the bytes.
+    // A filter applied before the decode could not find it, and one applied
+    // after cannot miss it.
+    let by_field_name = get(
         &client,
         &format!(
-            "/api/clusters/strimzi/topics/{CANARY}/messages\
-             ?mode=newest&limit=20&predicate={}",
-            urlencode("v => v.sequence % 2 === 0")
+            "/api/environments/{ENV}/clusters/strimzi/topics/{CANARY}/messages\
+             ?mode=newest&limit=20&filter={}",
+            urlencode("sequence")
         ),
     )
     .await;
     acceptance.check(
-        "a JS predicate filters a decoded topic",
-        match filtered {
+        "the payload filter matches a field name the encoded bytes do not contain",
+        match by_field_name {
             Ok(body) => {
-                let stats = body["predicate"].clone();
-                let evaluated = stats["evaluated"].as_u64().unwrap_or(0);
-                let matched = stats["matched"].as_u64().unwrap_or(0);
+                let rows = body["items"].as_array().cloned().unwrap_or_default();
+                // "sequence" as ASCII. Avro binary carries no field names, so
+                // finding this in the raw bytes would mean the fixture changed
+                // and the check no longer proves anything.
+                let in_the_bytes = rows.iter().any(|row| {
+                    row["value"]["raw"]["hex"]
+                        .as_str()
+                        .is_some_and(|hex| hex.contains("73657175656e6365"))
+                });
+                let in_the_rendering = rows.iter().all(|row| {
+                    row["value"]["text"]
+                        .as_str()
+                        .is_some_and(|text| text.contains("sequence"))
+                });
+                if !rows.is_empty() && in_the_rendering && !in_the_bytes {
+                    Ok(format!("{} rows, none of them by their bytes", rows.len()))
+                } else {
+                    Err(format!(
+                        "{} rows, rendered {in_the_rendering}, in bytes {in_the_bytes}",
+                        rows.len()
+                    ))
+                }
+            }
+            Err(error) => Err(error),
+        },
+    );
+
+    // The needle is data. Every character in it means itself, so a regex that
+    // would match everything matches nothing at all.
+    let as_a_pattern = get(
+        &client,
+        &format!(
+            "/api/environments/{ENV}/clusters/strimzi/topics/{CANARY}/messages\
+             ?mode=newest&limit=20&filter={}",
+            urlencode(".*")
+        ),
+    )
+    .await;
+    acceptance.check(
+        "a needle is matched literally rather than as a pattern",
+        match as_a_pattern {
+            Ok(body) => {
                 let rows = body["items"].as_array().map_or(0, Vec::len);
-                // Every row that came back matched, roughly half were rejected,
-                // and nothing was killed or thrown.
-                if evaluated > 0
-                    && matched as usize == rows
-                    && matched < evaluated
-                    && stats["timedOut"] == 0
-                    && stats["failed"] == 0
-                {
-                    Ok(format!("{matched}/{evaluated} matched"))
+                if rows == 0 {
+                    Ok(String::new())
                 } else {
-                    Err(format!("{stats}, {rows} rows"))
+                    Err(format!("{rows} rows matched `.*` as a pattern"))
                 }
             }
             Err(error) => Err(error),
         },
     );
 
-    // The non-negotiable: an interrupt handler the runtime installs before the
-    // first evaluation, and a budget that is per record rather than per scan.
-    let looping_started = Instant::now();
-    let looping = get(
-        &client,
-        &format!(
-            "/api/clusters/strimzi/topics/{CANARY}/messages\
-             ?mode=newest&limit=10&predicate={}",
-            urlencode("v => { while (true) {} }")
-        ),
-    )
-    .await;
-    let looping_took = looping_started.elapsed();
-    acceptance.check(
-        "a looping predicate is killed and reported rather than hanging the scan",
-        match looping {
-            Ok(body) => {
-                let stats = body["predicate"].clone();
-                let timed_out = stats["timedOut"].as_u64().unwrap_or(0);
-                if timed_out > 0
-                    && body["items"].as_array().is_some_and(Vec::is_empty)
-                    && looping_took < Duration::from_secs(10)
+    // The property paging rests on now that the filter runs after the decode:
+    // a window read in full that matched nothing is not the end of the topic,
+    // and the page has to say where to look next anyway. Anchoring on the rows
+    // would answer `null` here and stop paging with the topic barely touched.
+    //
+    // Asserted on both directions, because they reach it by different routes —
+    // the forward one counts what the scan emitted, the backward one what
+    // `tail` returned — and with different claims about `hasMore`. Only the
+    // forward read can promise it: `tail` spreads its limit across partitions
+    // with `div_ceil`, so on this canary, where one partition of three holds
+    // the records, a window of 20 reads 7 and never fills its budget. That is
+    // the library's shape rather than a filter effect, and demanding `hasMore`
+    // of it would be asserting the fixture instead of the behaviour.
+    for (mode, budget_fills) in [("oldest", true), ("newest", false)] {
+        acceptance.check(
+            &format!("a {mode} window that matched nothing still says where the next one starts"),
+            match get(
+                &client,
+                &format!(
+                    "/api/environments/{ENV}/clusters/strimzi/topics/{CANARY}/messages\
+                     ?mode={mode}&limit=20&filter={}",
+                    urlencode("no-record-contains-this-needle")
+                ),
+            )
+            .await
+            {
+                Ok(body)
+                    if body["items"].as_array().is_some_and(Vec::is_empty)
+                        && body["nextOffset"].is_i64()
+                        && (!budget_fills || body["hasMore"] == true) =>
                 {
-                    Ok(format!("{timed_out} killed in {looping_took:?}"))
-                } else {
-                    Err(format!("{stats} after {looping_took:?}"))
+                    Ok(format!(
+                        "next at {}, hasMore {}",
+                        body["nextOffset"], body["hasMore"]
+                    ))
                 }
-            }
-            Err(error) => Err(error),
-        },
-    );
+                Ok(body) => Err(format!("{body}")),
+                Err(error) => Err(error),
+            },
+        );
+    }
 
-    // The cheap filter runs first. Restricting to one partition is a *scan
-    // spec* decision, so the broker never sends the others — and the counter
-    // is what proves the expensive filter never saw them.
+    // Partition selection is in the scan spec, so the broker never sends the
+    // others — the filter narrows what is rendered, not what is read.
     //
     // Which partition is asked for is discovered rather than assumed: the
     // canary keys its records, so a hardcoded partition is a fixture that
     // silently becomes empty the first time the key distribution changes.
     let busiest = get(
         &client,
-        &format!("/api/clusters/strimzi/topics/{CANARY}/messages?mode=newest&limit=1"),
+        &format!(
+            "/api/environments/{ENV}/clusters/strimzi/topics/{CANARY}/messages?mode=newest&limit=1"
+        ),
     )
     .await
     .ok()
@@ -1202,63 +1397,60 @@ async fn assertions() -> Result<Acceptance, String> {
     let one_partition = get(
         &client,
         &format!(
-            "/api/clusters/strimzi/topics/{CANARY}/messages\
-             ?mode=newest&limit=50&partitions={busiest}&predicate={}",
-            urlencode("v => true")
+            "/api/environments/{ENV}/clusters/strimzi/topics/{CANARY}/messages\
+             ?mode=newest&limit=50&partitions={busiest}&filter={}",
+            urlencode("sequence")
         ),
     )
     .await;
     acceptance.check(
-        "a partition filter runs before the predicate, not after",
+        "a filtered read still reads only the partitions it was given",
         match one_partition {
             Ok(body) => {
-                let stats = body["predicate"].clone();
-                let evaluated = stats["evaluated"].as_u64().unwrap_or(0);
                 let rows = body["items"].as_array().cloned().unwrap_or_default();
                 let all_one = rows
                     .iter()
                     .all(|row| row["partition"].as_i64() == Some(busiest));
-                // Evaluated exactly as many times as there were records in the
-                // one partition asked for: anything more means it ran on a
-                // record the spec had already excluded.
-                if all_one && evaluated == rows.len() as u64 && evaluated > 0 {
-                    Ok(format!("{evaluated} evaluations, all partition {busiest}"))
+                if all_one && !rows.is_empty() {
+                    Ok(format!("{} rows, all partition {busiest}", rows.len()))
                 } else {
-                    Err(format!("{stats}, {} rows", rows.len()))
+                    Err(format!("{} rows from partition {busiest}", rows.len()))
                 }
             }
             Err(error) => Err(error),
         },
     );
 
-    // A syntax error is a `400` naming it, once, rather than a filter that
-    // silently matches nothing for the length of a scan.
-    let broken = client
+    // A needle the server will not serve is refused once, by length, rather
+    // than compared against every record in a window on the caller's say-so.
+    let enormous = client
         .get(url(&format!(
-            "/api/clusters/strimzi/topics/{CANARY}/messages?mode=newest&predicate={}",
-            urlencode("v => ((((")
+            "/api/environments/{ENV}/clusters/strimzi/topics/{CANARY}/messages?mode=newest&filter={}",
+            urlencode(&"x".repeat(kaas_ui_core::decode::MAX_FILTER_CHARS + 1))
         )))
         .send()
         .await
         .map_err(|e| e.to_string())?;
-    let broken_status = broken.status();
-    let broken_body: Value = broken.json().await.unwrap_or(Value::Null);
+    let enormous_status = enormous.status();
+    let enormous_body: Value = enormous.json().await.unwrap_or(Value::Null);
     acceptance.check(
-        "a predicate that does not compile is a 400 naming the error",
-        if broken_status == reqwest::StatusCode::BAD_REQUEST
-            && broken_body["message"]
+        "a needle past the ceiling is a 400 naming the ceiling",
+        if enormous_status == reqwest::StatusCode::BAD_REQUEST
+            && enormous_body["message"]
                 .as_str()
-                .is_some_and(|message| message.contains("did not compile"))
+                .is_some_and(|message| message.contains("at most"))
         {
             Ok(String::new())
         } else {
-            Err(format!("{broken_status}: {broken_body}"))
+            Err(format!("{enormous_status}: {enormous_body}"))
         },
     );
 
-    // --- an unknown cluster is absent, not forbidden ------------------------
+    // --- an unknown id is absent, not forbidden -----------------------------
     let status = client
-        .get(url("/api/clusters/definitely-not-configured"))
+        .get(url(&format!(
+            "/api/environments/{ENV}/clusters/definitely-not-configured"
+        )))
         .send()
         .await
         .map_err(|e| e.to_string())?
@@ -1269,6 +1461,25 @@ async fn assertions() -> Result<Acceptance, String> {
             Ok(String::new())
         } else {
             Err(format!("got {status}"))
+        },
+    );
+
+    // And the segment above it. An environment nobody can see must be absent
+    // too, or every id beneath it is probeable one level up.
+    let unknown_environment = client
+        .get(url(
+            "/api/environments/definitely-not-an-environment/clusters",
+        ))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .status();
+    acceptance.check(
+        "an unconfigured environment is 404, not an empty list",
+        if unknown_environment == reqwest::StatusCode::NOT_FOUND {
+            Ok(String::new())
+        } else {
+            Err(format!("got {unknown_environment}"))
         },
     );
 

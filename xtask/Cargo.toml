@@ -9,7 +9,11 @@ rust-version.workspace = true
 publish     = false
 
 [dependencies]
-kaas-ui-api = { workspace = true }
+kaas-ui-api  = { workspace = true }
+# For the one constant acceptance has to agree with: the payload filter's
+# ceiling. A literal here would pass on the day it was written and stop
+# proving anything the day the ceiling moved.
+kaas-ui-core = { workspace = true }
 
 reqwest    = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "cookies"] }
 serde_json = { workspace = true }

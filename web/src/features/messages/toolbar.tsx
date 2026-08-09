@@ -4,7 +4,7 @@
 import { useEffect, useState } from "react"
 import { RotateCw } from "lucide-react"
 
-import type { Codec, PartitionOffsets } from "@/api/types"
+import type { PartitionOffsets } from "@/api/types"
 import { Button } from "@/components/ui/button"
 import { DateTimePicker } from "@/components/date-time-picker"
 import { Input } from "@/components/ui/input"
@@ -17,25 +17,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { MAX_FILTER_CHARS } from "./search"
 import { SEEK_GROUPS, SEEK_MODES, type SeekMode } from "./seek-modes"
 
 export interface ToolbarProps {
   mode: SeekMode
   offset?: number
   timestamp?: number
+  /** A literal substring of the decoded value. */
   filter?: string
   partitions?: string
   visibility: "all" | "committed"
-  /**
-   * How keys and values are read, where this view overrode the configuration.
-   *
-   * Only the four that need no schema: falling *back* to hex or string is
-   * always possible, and asking for Avro cannot invent a schema id.
-   */
-  keyCodec?: ChoosableCodec
-  valueCodec?: ChoosableCodec
-  /** A JavaScript expression over the decoded value. */
-  predicate?: string
   /** Both ends of every partition, for clamping. */
   bounds: PartitionOffsets[]
   /** The oldest record the topic still holds, bounding the calendar. */
@@ -46,22 +38,7 @@ export interface ToolbarProps {
   onFilterChange(filter: string | undefined): void
   onPartitionsChange(partitions: string | undefined): void
   onVisibilityChange(visibility: "all" | "committed"): void
-  onCodecChange(next: {
-    keyCodec?: ChoosableCodec
-    valueCodec?: ChoosableCodec
-  }): void
-  onPredicateChange(predicate: string | undefined): void
   onRestart(): void
-}
-
-/** The codecs a reader may pick. See `Codec` for why the other three are not. */
-export type ChoosableCodec = Extract<Codec, "auto" | "string" | "hex" | "json">
-
-const CODEC_LABELS: Record<ChoosableCodec, string> = {
-  auto: "Auto",
-  string: "String",
-  hex: "Hex",
-  json: "JSON",
 }
 
 export function Toolbar({
@@ -71,9 +48,6 @@ export function Toolbar({
   filter,
   partitions,
   visibility,
-  keyCodec,
-  valueCodec,
-  predicate,
   bounds,
   retentionStart,
   timeZone,
@@ -81,8 +55,6 @@ export function Toolbar({
   onFilterChange,
   onPartitionsChange,
   onVisibilityChange,
-  onCodecChange,
-  onPredicateChange,
   onRestart,
 }: ToolbarProps) {
   const config = SEEK_MODES[mode]
@@ -97,7 +69,6 @@ export function Toolbar({
     timestamp !== undefined ? new Date(timestamp) : undefined
   )
   const [draftFilter, setDraftFilter] = useState(filter ?? "")
-  const [draftPredicate, setDraftPredicate] = useState(predicate ?? "")
 
   useEffect(() => setDraftMode(mode), [mode])
   useEffect(() => setDraftOffset(offset?.toString() ?? ""), [offset])
@@ -109,7 +80,6 @@ export function Toolbar({
     [timestamp]
   )
   useEffect(() => setDraftFilter(filter ?? ""), [filter])
-  useEffect(() => setDraftPredicate(predicate ?? ""), [predicate])
 
   const draftConfig = SEEK_MODES[draftMode]
 
@@ -216,49 +186,24 @@ export function Toolbar({
 
       <span className="flex-1" />
 
+      {/* A literal substring of the decoded value, matched by the server
+          after the payload has been decoded — so it searches what the row
+          shows, and finding a field name on an Avro topic works even though
+          the name is nowhere in the bytes. Applied on Enter or blur rather
+          than on change: it reopens the stream. */}
       <Input
         value={draftFilter}
         placeholder="Filter payload…"
         aria-label="Filter payload"
+        title="A literal substring of the decoded value. Not a pattern — every character matches only itself."
+        maxLength={MAX_FILTER_CHARS}
         className="w-[200px]"
         onChange={(event) => setDraftFilter(event.target.value)}
         onKeyDown={(event) => {
-          // Applied on Enter, not on change. The filter runs in the Rust
-          // process — see below — so every keystroke would reopen the stream.
           if (event.key === "Enter")
             onFilterChange(draftFilter.trim() || undefined)
         }}
         onBlur={() => onFilterChange(draftFilter.trim() || undefined)}
-      />
-
-      {/* The second tier, and it says so. `filter` above is a substring match
-          the server applies before a record is deserialised; this one runs on
-          the decoded value in a sandbox, after it. Applied on Enter or blur
-          for the same reason the substring filter is: it reopens the stream. */}
-      <Input
-        value={draftPredicate}
-        placeholder="v =&gt; v.amount &gt; 100"
-        aria-label="Filter expression (JavaScript)"
-        title="A JavaScript expression over the decoded value. Runs after the cheap filters, in a sandbox with a memory cap and a per-record time budget."
-        className="w-[220px] font-mono text-[11px]"
-        spellCheck={false}
-        onChange={(event) => setDraftPredicate(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter")
-            onPredicateChange(draftPredicate.trim() || undefined)
-        }}
-        onBlur={() => onPredicateChange(draftPredicate.trim() || undefined)}
-      />
-
-      <CodecSelect
-        label="Key codec"
-        value={keyCodec}
-        onChange={(next) => onCodecChange({ keyCodec: next })}
-      />
-      <CodecSelect
-        label="Value codec"
-        value={valueCodec}
-        onChange={(next) => onCodecChange({ valueCodec: next })}
       />
 
       {/* `committed` is read_committed: records from transactions that were
@@ -312,47 +257,6 @@ export function Toolbar({
         </Button>
       )}
     </div>
-  )
-}
-
-/**
- * The override control, as a select.
- *
- * "Auto" is the absence of an override rather than a value: it is what the
- * per-topic configuration and the framing decide between, and pinning it in
- * the URL would make a link outlive a configuration change it should have
- * followed.
- */
-function CodecSelect({
-  label,
-  value,
-  onChange,
-}: {
-  label: string
-  value?: ChoosableCodec
-  onChange(next: ChoosableCodec | undefined): void
-}) {
-  return (
-    <Select
-      value={value ?? "auto"}
-      onValueChange={(next) =>
-        onChange(next === "auto" ? undefined : (next as ChoosableCodec))
-      }
-    >
-      <SelectTrigger className="w-[110px]" aria-label={label} title={label}>
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectGroup>
-          <SelectLabel>{label}</SelectLabel>
-          {(Object.keys(CODEC_LABELS) as ChoosableCodec[]).map((codec) => (
-            <SelectItem key={codec} value={codec}>
-              {CODEC_LABELS[codec]}
-            </SelectItem>
-          ))}
-        </SelectGroup>
-      </SelectContent>
-    </Select>
   )
 }
 

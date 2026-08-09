@@ -325,7 +325,7 @@ impl Payload {
         schema: SchemaRef,
         ceiling: usize,
     ) -> Self {
-        let rendered = serde_json::to_string_pretty(value).unwrap_or_else(|_| "null".to_owned());
+        let rendered = render_json(value);
         let (text, truncated) = truncate(&rendered, ceiling);
         let (hex, hex_truncated) = hex_of(original, ceiling);
         Self {
@@ -405,6 +405,17 @@ fn hex_of(bytes: &[u8], ceiling: usize) -> (String, bool) {
         let _ = write!(hex, "{byte:02x}");
     }
     (hex, false)
+}
+
+/// How a decoded value becomes text.
+///
+/// Public because the payload filter matches against the *same* rendering the
+/// reader is shown, and a record whose preview was cut has to be re-rendered
+/// whole to be searched. Two spellings of "as JSON" would mean a needle that
+/// matches a short record and misses the identical content in a long one.
+#[must_use]
+pub fn render_json(value: &serde_json::Value) -> String {
+    serde_json::to_string_pretty(value).unwrap_or_else(|_| "null".to_owned())
 }
 
 fn truncate(text: &str, ceiling: usize) -> (String, bool) {

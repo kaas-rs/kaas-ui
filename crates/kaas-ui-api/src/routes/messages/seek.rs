@@ -11,8 +11,8 @@
 //! it shows a seeking state and then the whole window at once, while a forward
 //! mode fills the list as it goes.
 
-use bytes::Bytes;
-use kafka_read::{RecordFilter, ScanSpec, StartPosition, TailAnchor, TailSpec, Visibility};
+use kaas_ui_core::decode::PayloadFilter;
+use kafka_read::{ScanSpec, StartPosition, TailAnchor, TailSpec, Visibility};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -128,49 +128,42 @@ pub struct SeekQuery {
     pub partitions: Option<String>,
     /// `all` or `committed`.
     pub visibility: Option<String>,
-    /// Substring match on the decoded value.
+    /// A literal substring of the **decoded** value.
+    ///
+    /// Applied by [`kaas_ui_core::decode::PayloadDecoder::accept`] after the
+    /// payload has been decoded, which is what lets it search a field name on
+    /// an Avro topic — the field names are not in the bytes. It is a substring
+    /// and nothing else: no pattern, no expression, no evaluator.
+    ///
+    /// It therefore cannot go into the scan spec, and `limit` is a budget for
+    /// records **read** rather than records matched. A filtered page comes
+    /// back short and says so with `hasMore`.
     pub filter: Option<String>,
     /// How many records. Ignored by `live`.
     pub limit: Option<usize>,
     /// How to read keys, overriding the per-topic configuration.
     ///
-    /// The chip in the message list, travelling as a query parameter so the
-    /// URL stays the shareable artifact. It can always fall *back* — hex and
-    /// string need no schema, so they work with the registry down — and it
-    /// cannot invent a schema id to move up.
+    /// A query parameter and nothing else, so the URL stays the shareable
+    /// artifact. It can always fall *back* — hex and string need no schema, so
+    /// they work with the registry down — and it cannot invent a schema id to
+    /// move up.
     pub key_codec: Option<kaas_ui_serde::Codec>,
     /// How to read values, overriding the per-topic configuration.
     pub value_codec: Option<kaas_ui_serde::Codec>,
-    /// A JavaScript expression over the decoded value.
-    ///
-    /// The **second** tier of filtering, and never the first: `filter`,
-    /// `partitions`, `offset` and the timestamps above are cheap and go into
-    /// the scan spec, where kaas-lib applies them before a record is ever
-    /// deserialised. This one runs on the decoded value, after them, in a
-    /// sandbox with a memory cap and an interrupt handler.
-    pub predicate: Option<String>,
 }
 
 impl SeekQuery {
-    /// Compile the user predicate, if this request carries one.
+    /// The payload filter this request carries, if it carries one.
     ///
-    /// A `Result`, so an expression that does not compile is a `400` naming
-    /// the syntax error rather than a filter that silently matches nothing.
-    pub fn compile_predicate(&self) -> crate::ApiResult<Option<kaas_ui_serde::Predicate>> {
-        let Some(source) = self
-            .predicate
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-        else {
-            return Ok(None);
-        };
-        kaas_ui_serde::Predicate::compile(source)
-            .map(Some)
+    /// A `Result` for one reason only: a needle longer than the ceiling is a
+    /// `400` saying so, rather than a comparison the server repeats per record
+    /// on the caller's say-so.
+    pub fn payload_filter(&self) -> crate::ApiResult<Option<PayloadFilter>> {
+        PayloadFilter::parse(self.filter.as_deref())
             .map_err(|error| ApiError::bad_request(error.to_string()))
     }
 
-    /// The codec chips, as this request set them.
+    /// The codec overrides, as this request set them.
     #[must_use]
     pub fn codecs(&self) -> kaas_ui_core::decode::CodecOverride {
         kaas_ui_core::decode::CodecOverride {
@@ -243,13 +236,11 @@ impl Plan {
 
         let partitions = parse_partitions(query.partitions.as_deref())?;
         let visibility = parse_visibility(query.visibility.as_deref())?;
-        let filter = query
-            .filter
-            .as_deref()
-            .map(str::trim)
-            .filter(|needle| !needle.is_empty())
-            .map(|needle| RecordFilter::ValueContains(Bytes::from(needle.to_owned())));
-
+        // No `RecordFilter` here, deliberately. kaas-lib's filters match raw
+        // bytes, and the payload filter is a substring of the *decoded* value
+        // — it cannot be expressed against bytes that are still Avro. It is
+        // applied in `PayloadDecoder::accept` instead, which makes `limit`
+        // below a budget for records read rather than records matched.
         let limit = limit_for(mode, query.limit)?;
 
         let plan = if mode.is_backward() {
@@ -262,9 +253,6 @@ impl Plan {
             });
             if let Some(partitions) = partitions {
                 spec = spec.partitions(partitions);
-            }
-            if let Some(filter) = filter {
-                spec = spec.filter(filter);
             }
             Self::Backward {
                 spec: Box::new(spec),
@@ -297,9 +285,6 @@ impl Plan {
             }
             if let Some(partitions) = partitions {
                 spec = spec.partitions(partitions);
-            }
-            if let Some(filter) = filter {
-                spec = spec.filter(filter);
             }
 
             Self::Forward {
@@ -554,23 +539,46 @@ mod tests {
     }
 
     #[test]
-    fn a_filter_of_whitespace_is_no_filter() {
-        // Otherwise clearing the box leaves a filter that matches everything
-        // and costs a comparison per record.
-        let plan = Plan::build(
-            "orders",
-            &SeekQuery {
-                mode: Some(SeekMode::Oldest),
-                filter: Some("   ".to_owned()),
-                ..SeekQuery::default()
-            },
-        )
-        .unwrap()
-        .1;
-        match plan {
-            Plan::Forward { spec, .. } => assert!(spec.filter.is_none()),
-            other => panic!("expected a forward plan, got {other:?}"),
+    fn the_payload_filter_never_reaches_the_scan_spec() {
+        // kaas-lib's filters match raw bytes. Handing one this needle would
+        // search the Avro encoding of a record for a string that only exists
+        // once it has been decoded — nothing would ever match, and the reader
+        // would be told the topic has no such record.
+        for mode in [SeekMode::Oldest, SeekMode::Newest] {
+            let plan = Plan::build(
+                "orders",
+                &SeekQuery {
+                    mode: Some(mode),
+                    filter: Some("order-123".to_owned()),
+                    ..SeekQuery::default()
+                },
+            )
+            .unwrap()
+            .1;
+            match plan {
+                Plan::Forward { spec, .. } => assert!(spec.filter.is_none()),
+                Plan::Backward { spec } => assert!(spec.filter.is_none()),
+            }
         }
+    }
+
+    #[test]
+    fn a_needle_past_the_ceiling_is_a_400_rather_than_a_cost_per_record() {
+        let query = SeekQuery {
+            mode: Some(SeekMode::Newest),
+            filter: Some("x".repeat(kaas_ui_core::decode::MAX_FILTER_CHARS + 1)),
+            ..SeekQuery::default()
+        };
+        let error = query.payload_filter().unwrap_err();
+        assert_eq!(error.status(), axum::http::StatusCode::BAD_REQUEST);
+
+        // And whitespace is not a filter: otherwise clearing the box leaves
+        // one that matches everything and costs a comparison per record.
+        let blank = SeekQuery {
+            filter: Some("   ".to_owned()),
+            ..SeekQuery::default()
+        };
+        assert!(blank.payload_filter().unwrap().is_none());
     }
 
     #[test]

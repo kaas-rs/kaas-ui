@@ -280,9 +280,10 @@ Confluent-framed Avro to `kaas-canary-v1`, registering
 --schema-registry http://apicurio-registry.apicurio.svc.cluster.local:8080/apis/ccompat/v7
 ```
 
-`rs.kaas.canary.Heartbeat` has five fields, and `sequence` increases by exactly
-one per record within a run — which is what makes an even/odd JS predicate over
-a window arithmetic rather than luck. Its headers (`content-type`,
+`rs.kaas.canary.Heartbeat` has five fields, and `sequence` is one of them —
+which is what settles where the payload filter runs, since an Avro record
+carries its field *names* nowhere in its bytes. A filter that finds `sequence`
+in a window of this topic could only have run after the decode. Its headers (`content-type`,
 `canary-run`, `canary-version`) are ordinary **unframed** payloads on a
 registry-backed record, which is the live fixture for "absence of framing is
 not a failure".

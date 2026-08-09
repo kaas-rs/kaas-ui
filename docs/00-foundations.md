@@ -138,7 +138,6 @@ Phase 4 added `openidconnect` 4.0. Phase 6 added, in `kaas-ui-serde`:
 | `protofish` | 0.5 | the value tree the Protobuf decoder hands back |
 | `reqwest` | 0.13 | the browser's own ccompat calls, and where TLS is turned on for both |
 | `rustls` | 0.23 | only to install the `ring` provider, once |
-| `rquickjs` | 0.12 | the JS predicate sandbox. `parallel` is required — the runtime has to be `Send` |
 
 **`reqwest/rustls-no-provider` rather than `rustls`.** The latter forces
 `aws-lc-rs`, which needs cmake and turns the two-line musl builder in the

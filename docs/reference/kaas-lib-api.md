@@ -177,9 +177,11 @@ row or a control in the UI. `ScanProgress` carries `records_emitted`,
 `records_scanned`, `malformed_batches`, `offsets_consumed`, `offsets_total`,
 `partitions_active`, `ordering_degraded` and `fraction()`.
 
-`RecordFilter` runs *before* deserialization — offset, timestamp, partition, key
-prefix, headers. Phase 6's JS predicate runs after. Never run the expensive one
-on a record the cheap one could have dropped.
+`RecordFilter` matches raw bytes, which is why kaas-ui does not use it: its
+payload filter is a substring of the *decoded* value and cannot be expressed
+against bytes that are still Avro. What does go in the spec is the selection
+that needs no payload at all — partitions, the start position, the limit — and
+that still bounds what the broker sends.
 
 Two measured behaviours to design against:
 

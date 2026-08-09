@@ -18,7 +18,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use kaas_ui_serde::{
-    Codec, MAX_PAYLOAD_CHARS, NoteKind, RegistryHandle, RegistrySettings, SchemaFormat, decode,
+    Codec, MAX_PAYLOAD_CHARS, NamingStrategy, NoteKind, RegistryHandle, RegistrySettings,
+    SchemaFormat, SubjectNaming, decode,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -440,4 +441,64 @@ async fn the_registry_decides_what_a_schema_id_is() {
     let note = decoded.payload.note.expect("a note");
     assert_eq!(note.kind, NoteKind::OverrideRefused);
     assert!(note.message.contains("avro"), "{}", note.message);
+}
+
+/// The browser's half: what a registered version declares, over real HTTP.
+///
+/// One subject per format and per strategy, because the pairing is the whole
+/// question — the name has to come out of Avro JSON, a `.proto` text and a JSON
+/// Schema title alike, and a subject that reveals no topic under one strategy
+/// reveals one under another. `naming.rs` unit-tests the reading; this is the
+/// fetch, the parse and the reading together, which is where a `schemaType`
+/// mapped to the wrong parser would show up and nowhere else.
+#[tokio::test]
+async fn a_registered_version_carries_the_name_its_subject_was_built_from() {
+    const ORDER: &str = r#"{"subject":"orders-com.acme.Order","version":1,"id":7,"schema":"{\"type\":\"record\",\"name\":\"Order\",\"namespace\":\"com.acme\",\"fields\":[]}"}"#;
+    const READING: &str = r#"{"subject":"com.acme.Reading","version":1,"id":8,"schemaType":"PROTOBUF","schema":"syntax = \"proto3\";\npackage com.acme;\nmessage Reading { double celsius = 1; }\n"}"#;
+    const AUDIT: &str = r#"{"subject":"audit-value","version":1,"id":9,"schemaType":"JSON","schema":"{\"title\":\"com.acme.Audit\",\"type\":\"object\"}"}"#;
+
+    let stub = Stub::serving(&[
+        ("/subjects/orders-com.acme.Order/versions/1", 200, ORDER),
+        ("/subjects/com.acme.Reading/versions/1", 200, READING),
+        ("/subjects/audit-value/versions/1", 200, AUDIT),
+    ])
+    .await;
+    let registry = stub.handle();
+
+    // Avro, `TopicRecordNameStrategy`. The seam is where the declared name
+    // starts, and the topic is everything before it.
+    let order = registry
+        .schema("orders-com.acme.Order", 1)
+        .await
+        .expect("the registry answers");
+    assert_eq!(order.format, SchemaFormat::Avro);
+    assert_eq!(order.record_name.as_deref(), Some("com.acme.Order"));
+    let naming = SubjectNaming::of(&order.subject, order.record_name.as_deref());
+    assert_eq!(naming.strategy, NamingStrategy::TopicRecordName);
+    assert_eq!(naming.topic.as_deref(), Some("orders"));
+
+    // Protobuf, `RecordNameStrategy`. There is no topic in it, and that is the
+    // answer rather than a failure to find one.
+    let reading = registry
+        .schema("com.acme.Reading", 1)
+        .await
+        .expect("the registry answers");
+    assert_eq!(reading.format, SchemaFormat::Protobuf);
+    assert_eq!(reading.record_name.as_deref(), Some("com.acme.Reading"));
+    let naming = SubjectNaming::of(&reading.subject, reading.record_name.as_deref());
+    assert_eq!(naming.strategy, NamingStrategy::RecordName);
+    assert_eq!(naming.topic, None);
+
+    // JSON Schema, `TopicNameStrategy`. A declared name does not make every
+    // subject a record subject: this one still reads by its suffix, and the
+    // name rides along because it is true of the schema either way.
+    let audit = registry
+        .schema("audit-value", 1)
+        .await
+        .expect("the registry answers");
+    assert_eq!(audit.format, SchemaFormat::Json);
+    assert_eq!(audit.record_name.as_deref(), Some("com.acme.Audit"));
+    let naming = SubjectNaming::of(&audit.subject, audit.record_name.as_deref());
+    assert_eq!(naming.strategy, NamingStrategy::TopicName);
+    assert_eq!(naming.topic.as_deref(), Some("audit"));
 }

@@ -576,25 +576,15 @@ export interface ResolvedSeek {
 export interface MessagePage {
   items: StreamRowData[]
   errors: ResourceError[]
+  /**
+   * Whether the read filled its budget — not whether the page is full.
+   *
+   * The payload filter runs after the decode, so a page of three rows may
+   * have read five hundred records with half the topic still to walk.
+   */
   hasMore: boolean
   nextOffset: number | null
   resolved?: ResolvedSeek
-  predicate?: PredicateStats
-}
-
-/**
- * What the JS predicate has done.
- *
- * Rendered because a filter that dropped a thousand records for exceeding its
- * budget looks exactly like a filter that matched nothing.
- */
-export interface PredicateStats {
-  evaluated: number
-  matched: number
-  /** Killed by the per-record budget. Nobody knows whether these matched. */
-  timedOut: number
-  failed: number
-  lastError?: string
 }
 
 // --- the schema registry --------------------------------------------------
@@ -629,7 +619,32 @@ export interface SubjectSchema {
   id: number
   format: SchemaFormat
   schema: string
+  /**
+   * The fully-qualified name the schema declares — an Avro or Protobuf name, a
+   * JSON Schema title. `null` where it declares none, which costs only the
+   * topic link.
+   */
+  recordName: string | null
   references: SchemaReference[]
+}
+
+/**
+ * Which of the three subject naming strategies formed a subject name.
+ *
+ * `unrecognized` is not a failure: a subject registered by hand fits none of
+ * them, and saying so beats splitting it at a guessed `-`.
+ */
+export type NamingStrategy =
+  "topicName" | "topicRecordName" | "recordName" | "unrecognized"
+
+export interface SubjectNaming {
+  strategy: NamingStrategy
+  /**
+   * The topic the subject names, where the strategy carries one — so under
+   * `topicName` and `topicRecordName`, and never under the other two.
+   */
+  topic: string | null
+  recordName: string | null
 }
 
 /**
@@ -646,6 +661,15 @@ export interface SubjectRow {
   compatibility: string | null
   /** True when the mode is the registry's default rather than this subject's own. */
   compatibilityInherited: boolean
+  /**
+   * How the name was formed, and the topic that recovers from it.
+   *
+   * Present without `?details=true` as well, read from the name alone — which
+   * resolves the two suffix strategies and nothing else. With details it is
+   * read from the newest schema, and only then can `{topic}-{record}` be told
+   * from a longer topic's `-value`.
+   */
+  naming: SubjectNaming
 }
 
 export interface SubjectList {
@@ -661,6 +685,8 @@ export interface SubjectList {
 export interface SubjectDetail {
   registry: RegistryCard | null
   subject: string
+  /** Read from the newest version, because the name is the schema's. */
+  naming: SubjectNaming
   compatibility: string | null
   versions: SubjectSchema[]
   errors: ResourceError[]

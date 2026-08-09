@@ -190,7 +190,6 @@ and no handler ever indexes the registry map directly.
 | `resolved` | what a time seek landed on, per partition | the "resolved to nothing" notice |
 | `dropped` | a running count | a banner, never suppressed |
 | `error` | a `ResourceError` | rendered with both version ranges intact |
-| `predicate` | the JS filter's counters | a line when it killed or threw on records |
 
 **Records are batched, not one per event.** One event per record saturates the
 connection and the browser's parser long before the list is the bottleneck.
@@ -253,12 +252,14 @@ causes, different fixes, different rows — and in the wire shape that is a
 `malformed` **row** for the first and a `record` row whose `value.note.kind` is
 `decodeError` for the second. The record is fine; its value is not.
 
-`predicate` is its own event rather than a field on `progress` because a
-backward mode emits no progress at all — `tail` buffers its whole window — and
-a filter's counters are exactly as interesting there. It carries `evaluated`,
-`matched`, `timedOut`, `failed` and the last error, so a filter that dropped a
-thousand records for exceeding its per-record budget does not look like a
-filter that matched nothing.
+`?filter=` is a **literal substring of the decoded value**, matched after the
+payload is decoded and capped at 256 characters — longer is a `400` rather than
+a comparison the server repeats per record. It cannot go into the scan spec,
+which kaas-lib matches against raw bytes, so `limit` is a budget for records
+**read**: a page of three rows may have read five hundred records, and
+`hasMore` reports whether the *read* filled its budget rather than whether the
+page did. Paging off the row count instead would stop at the first window a
+selective filter emptied.
 
 ## The schema browser is rooted at a registry
 

@@ -30,7 +30,7 @@ use axum::Json;
 use axum::extract::{Path, Query, State};
 use futures::StreamExt;
 use kaas_ui_core::dto::RegistryCard;
-use kaas_ui_serde::{SchemaFormat, SubjectSchema};
+use kaas_ui_serde::{SchemaFormat, SubjectNaming, SubjectSchema};
 use serde::Serialize;
 use utoipa::ToSchema;
 
@@ -79,6 +79,16 @@ pub struct SubjectRow {
     /// set it and the other is inheriting it — the second changes when the
     /// registry default does.
     pub compatibility_inherited: bool,
+    /// How the subject name was formed, and the topic that recovers from it.
+    ///
+    /// The same fact [`SubjectDetail`] carries, on every row, because it is
+    /// what answers the question from the other end: a *topic* page asks which
+    /// subjects name it, and a prefix match cannot tell `orders-value` from
+    /// `orders-eu-value`. Free here — `describe` already holds the newest
+    /// schema, so the declared name costs no registry call — and without
+    /// `details` it is read from the name alone, which still resolves the two
+    /// suffix strategies.
+    pub naming: SubjectNaming,
 }
 
 /// How much of the subject table to fill in.
@@ -113,6 +123,13 @@ pub struct SubjectDetail {
     pub registry: Option<RegistryCard>,
     /// The subject that was asked for.
     pub subject: String,
+    /// How the subject name was formed, and the topic that recovers from it.
+    ///
+    /// Read from the newest version, because the name a subject is registered
+    /// under is a property of the schema in force. A subject whose versions
+    /// could not be fetched still gets an answer — the two suffix strategies
+    /// need no schema — and `strategy` says which kind of answer it is.
+    pub naming: SubjectNaming,
     /// The compatibility mode, where the registry reports one.
     pub compatibility: Option<String>,
     /// Every registered version, oldest first, with its text.
@@ -226,6 +243,7 @@ impl SubjectRow {
     /// The name alone, which is all the listing gives.
     fn of(subject: String) -> Self {
         Self {
+            naming: SubjectNaming::of(&subject, None),
             subject,
             id: None,
             format: None,
@@ -259,6 +277,10 @@ impl SubjectRow {
                 // The registry is free to disagree with the version we asked
                 // for; believe what it labelled the answer with.
                 row.version = Some(schema.version);
+                // Re-read now that the declared name is in hand: this is the
+                // only thing that can tell `{topic}-{record}` from a longer
+                // topic's `-value`, and the name alone cannot.
+                row.naming = SubjectNaming::of(&row.subject, schema.record_name.as_deref());
             }
         }
 
@@ -303,6 +325,7 @@ pub async fn versions(
         Err(_) => {
             return Ok(Json(SubjectDetail {
                 registry: Some(RegistryCard::of(registry)),
+                naming: SubjectNaming::of(&subject, None),
                 subject,
                 compatibility: None,
                 versions: Vec::new(),
@@ -328,8 +351,20 @@ pub async fn versions(
         }
     }
 
+    // The newest version that came back, which is the one in force. A subject
+    // whose newest version is among the `errors` reads by the older schema
+    // rather than by nothing — a record is renamed by registering a new
+    // subject, not a new version of this one.
+    let naming = SubjectNaming::of(
+        &subject,
+        versions
+            .last()
+            .and_then(|newest| newest.record_name.as_deref()),
+    );
+
     Ok(Json(SubjectDetail {
         registry: Some(card),
+        naming,
         compatibility: registry.compatibility(&subject).await,
         subject,
         versions,

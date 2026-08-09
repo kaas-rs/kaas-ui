@@ -471,6 +471,9 @@ export function useSubjectDetails(
     queryKey: ["schema-details", env, id, params.toString()],
     queryFn: () =>
       get<SubjectList>(`${schemaRegistry(env, id)}/subjects?${params}`),
+    // A cluster that references no registry has no id to ask under, and the
+    // topic page calls this before it knows whether there is one.
+    enabled: !!id,
     staleTime: 30_000,
     placeholderData: (previous) => previous,
   })

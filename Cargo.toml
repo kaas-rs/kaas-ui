@@ -97,11 +97,6 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "rus
 # Only to install that provider, once, behind a `Once`.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 
-# The sandbox the user filter expression runs in. `parallel` is what makes the
-# runtime `Send`: the message stream owns its interpreter and lives on a
-# spawned task, so a `!Send` one could not be used there at all.
-rquickjs = { version = "0.12", default-features = false, features = ["std", "parallel"] }
-
 # internal
 kaas-ui-auth  = { path = "crates/kaas-ui-auth" }
 kaas-ui-serde = { path = "crates/kaas-ui-serde" }

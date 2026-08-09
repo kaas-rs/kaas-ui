@@ -1334,7 +1334,7 @@ impl Message {
     /// Render a record whose payloads have already been decoded.
     ///
     /// Decoding is separate because it is **async** — it can resolve a schema
-    /// id against a registry — and because a JS predicate runs over the
+    /// id against a registry — and because the payload filter reads the
     /// decoded value before this row is built, or in place of building it.
     pub fn render(record: &Record, decoded: DecodedRecord) -> Self {
         Self {
@@ -1431,8 +1431,8 @@ pub struct MalformedRow {
 impl StreamRow {
     /// A row for a record whose payloads have already been decoded.
     ///
-    /// Split from [`Self::of`] because a JS predicate runs *between* decoding
-    /// and rendering: the predicate sees the decoded value, and a record it
+    /// Split from [`Self::of`] because the payload filter runs *between*
+    /// decoding and rendering: it searches the decoded value, and a record it
     /// rejects never becomes a row at all.
     #[must_use]
     pub fn render(record: &Record, decoded: DecodedRecord) -> Self {

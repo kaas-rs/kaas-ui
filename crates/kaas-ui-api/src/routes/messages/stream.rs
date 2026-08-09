@@ -78,12 +78,6 @@ enum Frame {
     Phase(StreamPhase),
     Resolved(Box<ResolvedSeek>),
     Failed(Box<ResourceError>),
-    /// What the user predicate has done so far.
-    ///
-    /// Its own event rather than a field on `progress`, because a backward
-    /// mode emits no progress at all — it buffers its whole window — and a
-    /// filter's counters are exactly as interesting there.
-    Predicate(Box<kaas_ui_serde::PredicateStats>),
 }
 
 /// `GET /api/clusters/{id}/topics/{topic}/messages/stream`
@@ -109,8 +103,8 @@ enum Frame {
         ("timestamp" = Option<i64>, Query, description = "Epoch millis, for sinceTime and toTime"),
         ("partitions" = Option<String>, Query, description = "Comma-separated partition list"),
         ("visibility" = Option<String>, Query, description = "all | committed"),
-        ("filter" = Option<String>, Query, description = "Substring match on the value"),
-        ("limit" = Option<usize>, Query, description = "Records, ignored by live"),
+        ("filter" = Option<String>, Query, description = "Literal substring of the decoded value"),
+        ("limit" = Option<usize>, Query, description = "Records to read, ignored by live"),
     ),
     responses(
         (status = 200, description = "An event stream of messages", content_type = "text/event-stream"),
@@ -175,11 +169,11 @@ pub async fn stream(
     // Built here, on the request, and moved into the pump: the stream outlives
     // the handler, and the registry client it holds is the shared one rather
     // than a copy.
-    // The predicate is compiled here, on the request, so a syntax error is a
-    // `400` the browser can show beside the editor rather than a stream that
-    // opens and filters nothing.
-    let decoder = PayloadDecoder::new(&handle, &topic, query.codecs())
-        .with_predicate(query.compile_predicate()?);
+    // The filter is taken here too, so a needle the server will not serve is a
+    // `400` the browser can show beside the box rather than a stream that
+    // opens and then closes.
+    let decoder =
+        PayloadDecoder::new(&handle, &topic, query.codecs()).with_filter(query.payload_filter()?);
 
     tokio::spawn(async move {
         // The pump owns the scan. Selecting on the reader going away is what
@@ -235,7 +229,6 @@ pub async fn stream(
                 Frame::Phase(phase) => encode("phase", &PhaseEvent { phase }, None),
                 Frame::Resolved(resolved) => encode("resolved", &resolved, None),
                 Frame::Failed(error) => encode("error", &error, None),
-                Frame::Predicate(stats) => encode("predicate", &stats, None),
             });
         }
     };
@@ -355,9 +348,6 @@ async fn pump(
                     for chunk in rows.chunks(MAX_ROWS_PER_EVENT) {
                         tx.push(Frame::Rows(chunk.to_vec()));
                     }
-                    if let Some(stats) = decoder.predicate_stats() {
-                        tx.push(Frame::Predicate(Box::new(stats)));
-                    }
                 }
                 Err(error) => {
                     tx.push(Frame::Failed(Box::new(ResourceError::new(
@@ -430,7 +420,6 @@ async fn forward(
         tokio::select! {
             _ = ticker.tick() => {
                 flush(&mut batch, tx);
-                push_predicate_stats(decoder, tx);
                 if tx.is_closed() {
                     return;
                 }
@@ -444,10 +433,9 @@ async fn forward(
                     if floor.is_some_and(|floor| record.offset < floor) {
                         continue;
                     }
-                    // The floor above is a cheap filter and runs first, so a
-                    // record below it is never decoded and never reaches the
-                    // predicate. That ordering is the correctness property —
-                    // see `PayloadDecoder::accept`.
+                    // The floor above runs first, so a record below it is
+                    // never decoded and never searched. That ordering is the
+                    // correctness property — see `PayloadDecoder::accept`.
                     if let Some(decoded) =
                         decoder.accept(&record, kaas_ui_serde::PREVIEW_CHARS).await
                     {
@@ -471,7 +459,6 @@ async fn forward(
                 }
                 Some(Ok(ScanEvent::Done(progress))) => {
                     flush(&mut batch, tx);
-                    push_predicate_stats(decoder, tx);
                     widest = widest.max(progress.partitions_active);
                     tx.push(Frame::Progress(render_progress(
                         &progress, budget, widest, limit,
@@ -481,13 +468,11 @@ async fn forward(
                 Some(Ok(ScanEvent::PartitionComplete { .. })) => {}
                 Some(Err(error)) => {
                     flush(&mut batch, tx);
-                    push_predicate_stats(decoder, tx);
                     tx.push(Frame::Failed(Box::new(ResourceError::new("scan", &error))));
                     return;
                 }
                 None => {
                     flush(&mut batch, tx);
-                    push_predicate_stats(decoder, tx);
                     return;
                 }
             },
@@ -500,16 +485,6 @@ fn flush(batch: &mut Vec<StreamRow>, tx: &streaming::Sender<Frame>) {
         return;
     }
     tx.push(Frame::Rows(std::mem::take(batch)));
-}
-
-/// The counters, as they stand. Pushed on every flush tick *and* on every exit
-/// path: a window that completes between ticks — a bounded scan on a fast
-/// broker routinely does — must not lose the very numbers that distinguish "the
-/// filter matched nothing" from "the filter killed everything it touched".
-fn push_predicate_stats(decoder: &PayloadDecoder, tx: &streaming::Sender<Frame>) {
-    if let Some(stats) = decoder.predicate_stats() {
-        tx.push(Frame::Predicate(Box::new(stats)));
-    }
 }
 
 /// Where a resumed stream picks up, if it can pick up at all.
@@ -782,13 +757,14 @@ mod tests {
     }
 
     #[test]
-    fn a_filtered_window_fills_on_the_span_it_walks_instead() {
-        // A filter that drops almost everything runs out of topic long before
-        // it runs out of limit, so the limit ratio would crawl and stall. The
-        // span is the honest finish line here, and taking the larger picks it.
+    fn a_window_that_runs_out_of_topic_fills_on_the_span_it_walked() {
+        // A compacted topic spends far more offsets than it holds records, so
+        // a 500-record window can reach the end of the log having emitted a
+        // dozen rows. The limit ratio would crawl and stall there; the span is
+        // the honest finish line, and taking the larger picks it.
         let progress = ScanProgress {
             records_emitted: 12,
-            records_scanned: 9_181,
+            records_scanned: 12,
             malformed_batches: 0,
             offsets_consumed: 9_181,
             offsets_total: 9_181,
@@ -832,16 +808,17 @@ mod tests {
         assert_eq!(fraction(&progress, Some(0)), Some(0.25));
     }
 
-    /// The property most likely to regress silently, asserted with a counter.
+    /// The floor is checked before the decode, and a record below it is not a
+    /// row whatever the filter would have said about it.
     ///
-    /// The expensive filter must never see a record a cheap one could have
-    /// dropped. Partition selection is in the scan spec — the broker never
-    /// sends those records at all — so the one cheap filter *this* loop
-    /// applies is the offset floor, and that is what this drives: a stream in
-    /// which two of five records are below the floor, and a predicate that
-    /// counts every evaluation.
+    /// The filter reads the decoded value, so it cannot run any earlier than
+    /// the decode; what *can* run earlier is everything that needs no payload.
+    /// Partition selection is in the scan spec — the broker never sends those
+    /// records at all — so the one such check in this loop is the offset
+    /// floor, and this drives it: five records, two of them below the floor,
+    /// and a needle every one of them contains.
     #[tokio::test]
-    async fn the_predicate_is_evaluated_zero_times_for_a_record_a_cheap_filter_dropped() {
+    async fn a_record_below_the_floor_is_never_decoded_and_never_matched() {
         fn record(partition: i32, offset: i64) -> kafka_read::Record {
             kafka_read::Record {
                 topic: "orders".to_owned(),
@@ -860,10 +837,11 @@ mod tests {
 
         // Keep the receiver alive: a closed ring makes `forward` return early
         // and the test would pass for the wrong reason.
-        let (tx, _rx) = streaming::ring::<Frame>(64);
-        let decoder = kaas_ui_core::decode::PayloadDecoder::plain().with_predicate(Some(
-            kaas_ui_serde::Predicate::compile("v => true").unwrap(),
-        ));
+        let (tx, mut rx) = streaming::ring::<Frame>(64);
+        let decoder = kaas_ui_core::decode::PayloadDecoder::plain().with_filter(
+            kaas_ui_core::decode::PayloadFilter::parse(Some("\"n\""))
+                .expect("the needle is short enough"),
+        );
 
         let events = futures::stream::iter(
             [10, 11, 12, 13, 14]
@@ -873,13 +851,22 @@ mod tests {
         );
 
         forward(events, &tx, Some(12), 100, Some(10), 1, &decoder).await;
+        drop(tx);
 
-        let stats = decoder.predicate_stats().expect("a predicate was set");
+        let mut offsets = Vec::new();
+        while let Some(frame) = rx.recv().await {
+            if let Frame::Rows(rows) = frame {
+                offsets.extend(rows.iter().map(|row| match row {
+                    StreamRow::Record(record) => record.offset,
+                    StreamRow::Malformed(row) => row.offset,
+                }));
+            }
+        }
         assert_eq!(
-            stats.evaluated, 3,
-            "the predicate ran on a record the floor had already dropped: {stats:?}"
+            offsets,
+            vec![12, 13, 14],
+            "the needle matches every record, so anything missing or extra here is the floor"
         );
-        assert_eq!(stats.matched, 3);
     }
 
     #[test]

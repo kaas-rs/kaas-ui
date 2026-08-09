@@ -6,7 +6,6 @@
 // file to have no way to.
 
 import type {
-  PredicateStats,
   ResolvedSeek,
   ResourceError,
   StreamPhase,
@@ -18,14 +17,6 @@ import { withIds } from "./rows"
 
 export interface StreamHandlers {
   onProgress(progress: StreamProgress): void
-  /**
-   * What the JS filter has done so far.
-   *
-   * Its own event rather than a field on `progress`, because a backward mode
-   * emits no progress at all and a filter's counters are exactly as
-   * interesting there.
-   */
-  onPredicate(stats: PredicateStats): void
   onResolved(resolved: ResolvedSeek): void
   onError(error: ResourceError): void
   /** The connection itself failed, as opposed to the cluster answering badly. */
@@ -97,11 +88,6 @@ export function openMessageStream(
   source.addEventListener("progress", (event) => {
     const body = parse<StreamProgress>(event.data)
     if (body) handlers.onProgress(body)
-  })
-
-  source.addEventListener("predicate", (event) => {
-    const body = parse<PredicateStats>(event.data)
-    if (body) handlers.onPredicate(body)
   })
 
   source.addEventListener("resolved", (event) => {

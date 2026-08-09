@@ -21,6 +21,14 @@ import { DEFAULT_SEEK_MODE, SEEK_MODE_NAMES, type SeekMode } from "./seek-modes"
 
 const modes = SEEK_MODE_NAMES as [SeekMode, ...SeekMode[]]
 
+/**
+ * The longest needle the server will accept — `MAX_FILTER_CHARS` in
+ * `kaas-ui-core`, kept in step here so a pasted essay is trimmed rather than
+ * sent and refused. An over-long filter on the stream would be a `400` that
+ * `EventSource` reports as a dropped connection and retries forever.
+ */
+export const MAX_FILTER_CHARS = 256
+
 const fields = z.object({
   mode: z.enum(modes).default(DEFAULT_SEEK_MODE),
   offset: z.coerce.number().int().nonnegative().optional(),
@@ -29,14 +37,22 @@ const fields = z.object({
   partitions: z.string().optional(),
   /** Whether records from aborted transactions are shown. */
   visibility: z.enum(["all", "committed"]).default("all"),
+  /**
+   * A literal substring of the decoded value.
+   *
+   * Matched by the server after the payload is decoded, so it searches what
+   * the row shows rather than the bytes underneath it. Capped there at 256
+   * characters — see `MAX_FILTER_CHARS` — and the input says so too, because a
+   * pasted essay should not become a 400.
+   */
   filter: z.string().optional(),
   limit: z.coerce.number().int().positive().max(10_000).optional(),
   /**
    * How to read keys and values, overriding the per-topic configuration.
    *
-   * In the URL because the chip is a *view* decision, exactly like the seek
-   * mode: someone who worked out that a topic reads better as hex should be
-   * able to send that view, not a description of it.
+   * No control sets these any more — the toolbar's two codec selects are
+   * gone — but the URL still carries them and the server still honours them,
+   * so a link shared while the selects existed opens on the view it named.
    *
    * Only the four that need no schema are accepted. `avro` here would be a URL
    * asking the server to invent a schema id, which it refuses — better to keep
@@ -44,8 +60,6 @@ const fields = z.object({
    */
   keyCodec: z.enum(["auto", "string", "hex", "json"]).optional(),
   valueCodec: z.enum(["auto", "string", "hex", "json"]).optional(),
-  /** A JavaScript expression over the decoded value. */
-  predicate: z.string().optional(),
   /** `{partition}-{offset}` — the same id everything else keys on. */
   selected: z.string().optional(),
 })
@@ -56,18 +70,28 @@ type Fields = z.infer<typeof fields>
  * A seek mode without its parameter is not a view, and rendering one anyway
  * means the server rejects the stream and the page shows an error it could
  * have avoided. Falling back to a mode that needs nothing is friendlier than
- * a validation screen for a link someone was sent.
+ * a validation screen for a link someone was sent. An over-long filter is
+ * trimmed here for the same reason.
  */
 function usable(search: Fields): Fields {
+  // By code point rather than by `.length`, which counts UTF-16 units and
+  // would cut an astral character in half — and half a character is not a
+  // substring of anything.
+  const needle = search.filter ? [...search.filter] : []
+  const filter =
+    needle.length > MAX_FILTER_CHARS
+      ? needle.slice(0, MAX_FILTER_CHARS).join("")
+      : search.filter
+
   const needsOffset = search.mode === "fromOffset" || search.mode === "toOffset"
   const needsTime = search.mode === "sinceTime" || search.mode === "toTime"
-  if (needsOffset && search.offset === undefined) {
-    return { ...search, mode: DEFAULT_SEEK_MODE }
+  if (
+    (needsOffset && search.offset === undefined) ||
+    (needsTime && search.timestamp === undefined)
+  ) {
+    return { ...search, filter, mode: DEFAULT_SEEK_MODE }
   }
-  if (needsTime && search.timestamp === undefined) {
-    return { ...search, mode: DEFAULT_SEEK_MODE }
-  }
-  return search
+  return { ...search, filter }
 }
 
 export const messageSearch = fields.transform(usable)

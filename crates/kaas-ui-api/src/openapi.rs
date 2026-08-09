@@ -103,6 +103,7 @@ use utoipa::OpenApi;
         kaas_ui_core::error::UnsupportedApiDetail,
         kaas_ui_core::health::ClusterStatus,
         kaas_ui_serde::Codec,
+        kaas_ui_serde::NamingStrategy,
         kaas_ui_serde::NoteKind,
         kaas_ui_serde::PayloadNote,
         kaas_ui_serde::RawBytes,
@@ -110,8 +111,8 @@ use utoipa::OpenApi;
         kaas_ui_serde::SchemaFormat,
         kaas_ui_serde::SchemaRef,
         kaas_ui_serde::SchemaReference,
+        kaas_ui_serde::SubjectNaming,
         kaas_ui_serde::SubjectSchema,
-        kaas_ui_serde::PredicateStats,
     )),
     tags(
         (name = "health", description = "Liveness. Never consults a cluster."),

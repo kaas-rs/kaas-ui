@@ -38,16 +38,16 @@
 )]
 
 pub mod codec;
-pub mod predicate;
+pub mod naming;
 pub mod proto;
 pub mod registry;
 pub mod subjects;
 
 pub use codec::{
     Codec, DETAIL_PAYLOAD_CHARS, MAX_PAYLOAD_CHARS, NoteKind, PREVIEW_CHARS, Payload, PayloadNote,
-    RawBytes, SchemaFormat, SchemaRef, framed,
+    RawBytes, SchemaFormat, SchemaRef, framed, render_json,
 };
-pub use predicate::{Predicate, PredicateError, PredicateStats};
+pub use naming::{NamingStrategy, SubjectNaming, declared_name};
 pub use registry::{
     Decoded, RegistryAuth, RegistryError, RegistryFault, RegistryHandle, RegistryHealth,
     RegistrySettings, RegistryStatus,
