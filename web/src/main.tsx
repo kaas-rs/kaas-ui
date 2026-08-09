@@ -27,7 +27,8 @@ import {
   ClusterConfigs,
   ClusterOverview,
 } from "@/pages/cluster"
-import { TopicDetail, Topics } from "@/pages/topics"
+import { Topics } from "@/pages/topics"
+import { TopicDetail } from "@/pages/topic-detail"
 import { GroupDetail, Groups } from "@/pages/groups"
 import { SchemaRegistry } from "@/pages/schema-registry"
 import { SchemaDetail } from "@/pages/schema-detail"
