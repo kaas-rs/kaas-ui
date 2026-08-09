@@ -124,6 +124,12 @@ export function useMessageStream(
     // a removed filter's timeouts over a window it never saw.
     setPredicate(null)
 
+    // Armed here rather than in the store's constructor, and stopped rather
+    // than destroyed below: this effect runs more often than the memo that
+    // built the store, so a teardown that ended the object would leave the
+    // next run of *this* effect pushing into a dead one.
+    store.start()
+
     const handle = openMessageStream(url, store, {
       onProgress: setProgress,
       onPredicate: setPredicate,
@@ -138,7 +144,7 @@ export function useMessageStream(
 
     return () => {
       handle.close()
-      store.destroy()
+      store.stop()
     }
   }, [url, store])
 

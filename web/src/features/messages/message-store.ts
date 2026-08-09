@@ -50,7 +50,24 @@ export interface MessageStore {
   setAtEdge(atEdge: boolean): void
   /** Drop everything. A mode change is not a merge. */
   clear(): void
-  destroy(): void
+  /**
+   * Arm the flush timer. Idempotent, and the pair to `stop`.
+   *
+   * Starting and stopping rather than constructing and destroying, because a
+   * store outlives the connections that fill it: React re-runs an effect it
+   * has already cleaned up — StrictMode does exactly that on every mount —
+   * and the store it is holding comes from a `useMemo` that did not re-run in
+   * between. A teardown that ended the object left the second connection
+   * pushing rows into a buffer with no timer to publish them and no listeners
+   * to publish to, which is a stream that receives everything and shows
+   * nothing.
+   */
+  start(): void
+  /**
+   * Stop publishing. Keeps the rows and the listeners: what ended is one
+   * connection, and React owns the subscription, not this.
+   */
+  stop(): void
   subscribe(listener: () => void): () => void
   getSnapshot(): MessageStoreState
 }
@@ -139,7 +156,7 @@ export function createMessageStore(
     publish()
   }
 
-  const timer = setInterval(flush, FLUSH_INTERVAL)
+  let timer: ReturnType<typeof setInterval> | null = null
 
   return {
     push(batch) {
@@ -176,9 +193,13 @@ export function createMessageStore(
       atEdge = true
       publish()
     },
-    destroy() {
+    start() {
+      timer ??= setInterval(flush, FLUSH_INTERVAL)
+    },
+    stop() {
+      if (timer === null) return
       clearInterval(timer)
-      listeners.clear()
+      timer = null
     },
     subscribe(listener) {
       listeners.add(listener)
