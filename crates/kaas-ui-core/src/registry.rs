@@ -25,11 +25,14 @@ use arc_swap::{ArcSwap, ArcSwapOption};
 use kaas_ui_auth::Access;
 use kaas_ui_serde::{Codec, RegistryHandle};
 use kafka_admin::{Admin, ClusterConfig};
-use kafka_conn::{ConnectionConfig, Error, SaslConfig, SaslMechanism, TlsConfig};
+use kafka_conn::{
+    ConnectionConfig, Error, OidcConfig, OidcTokenProvider, SaslConfig, SaslMechanism, TlsConfig,
+};
 use tokio::sync::Notify;
 
 use crate::config::{
-    ClusterEntry, Config, ConfigError, EnvironmentEntry, ResourceEntry, SaslMechanismName,
+    ClusterEntry, Config, ConfigError, EnvironmentEntry, PasswordCredentials, ResourceEntry,
+    SaslSettings,
 };
 use crate::error::ErrorKind;
 use crate::health::ClusterHealth;
@@ -67,6 +70,18 @@ pub struct ClusterHandle {
     /// `None` is a normal path, not a degraded one: a kaas instance with no
     /// registry sits in the same environment as a Strimzi cluster with one.
     registry: Option<Arc<RegistryHandle>>,
+    /// The credentials, prepared once.
+    ///
+    /// Built here rather than per connect, and that is load-bearing for
+    /// `OAUTHBEARER`: the token provider caches a token and refreshes it
+    /// single-flight, so one per handle means every connection to this
+    /// cluster shares one token and one fetch. Rebuilding it on each attempt
+    /// would fetch a token per reconnect and per broker.
+    ///
+    /// Secrets are read from disk here too, which is why this is fallible and
+    /// why a Secret that is not mounted where the config says it is fails at
+    /// startup rather than on the first page that touches the cluster.
+    sasl: Option<SaslConfig>,
     /// `None` until the first successful connect.
     admin: ArcSwapOption<Admin>,
     health: ArcSwap<ClusterHealth>,
@@ -80,19 +95,29 @@ pub struct ClusterHandle {
 }
 
 impl ClusterHandle {
-    fn new(environment: &str, entry: &ClusterEntry, registry: Option<Arc<RegistryHandle>>) -> Self {
-        Self {
+    fn new(
+        environment: &str,
+        entry: &ClusterEntry,
+        registry: Option<Arc<RegistryHandle>>,
+    ) -> Result<Self, ConfigError> {
+        let sasl = entry
+            .sasl
+            .as_ref()
+            .map(|settings| build_sasl(&entry.id, settings))
+            .transpose()?;
+        Ok(Self {
             environment: environment.to_owned(),
             id: entry.id.clone(),
             name: entry.display_name().to_owned(),
             labels: entry.effective_labels(environment),
             entry: entry.clone(),
             registry,
+            sasl,
             admin: ArcSwapOption::empty(),
             health: ArcSwap::from_pointee(ClusterHealth::connecting()),
             retry_now: Notify::new(),
             retired: AtomicBool::new(false),
-        }
+        })
     }
 
     /// The schema registry this cluster's payloads resolve against, if any.
@@ -203,36 +228,11 @@ impl ClusterHandle {
             connection = connection.with_tls(config);
         }
 
-        if let Some(sasl) = &self.entry.sasl {
-            let password = match (&sasl.password, &sasl.password_file) {
-                (Some(inline), _) => inline.clone(),
-                (None, Some(path)) => String::from_utf8(read_pem(path)?)
-                    .map_err(|_| {
-                        Error::InvalidRequest(format!(
-                            "password file {} is not valid UTF-8",
-                            path.display()
-                        ))
-                    })?
-                    .trim()
-                    .to_owned(),
-                // Rejected at load time; unreachable through `Config::load`.
-                (None, None) => {
-                    return Err(Error::InvalidRequest(format!(
-                        "cluster {} configures sasl without a password",
-                        self.entry.id
-                    )));
-                }
-            };
-            let mechanism = match sasl.mechanism {
-                SaslMechanismName::Plain => SaslMechanism::Plain,
-                SaslMechanismName::ScramSha256 => SaslMechanism::ScramSha256,
-                SaslMechanismName::ScramSha512 => SaslMechanism::ScramSha512,
-            };
-            let mut config = SaslConfig::new(mechanism, sasl.username.clone(), password);
-            if sasl.allow_plaintext_password {
-                config = config.allow_plaintext_password();
-            }
-            connection = connection.with_sasl(config);
+        // Cloned, not rebuilt: the `SaslConfig` was prepared once when the
+        // handle was, and for `OAUTHBEARER` it holds the token provider whose
+        // whole value is being shared. `SaslConfig` clones the `Arc` inside.
+        if let Some(sasl) = &self.sasl {
+            connection = connection.with_sasl(sasl.clone());
         }
 
         Ok(ClusterConfig {
@@ -334,6 +334,119 @@ async fn sleep_or_nudge(notify: &Notify, delay: Duration) {
     }
 }
 
+/// Turn one cluster's configured credentials into kaas-lib's.
+///
+/// Called once per cluster, when the registry is built, so everything that
+/// can be wrong about a credential — a Secret that is not mounted, a token
+/// endpoint that is not a url, an `http://` issuer — is wrong at startup with
+/// the cluster id in the message, rather than on the third retry of a
+/// background connector nobody is reading the logs of.
+fn build_sasl(cluster: &str, settings: &SaslSettings) -> Result<SaslConfig, ConfigError> {
+    let invalid = |message: String| ConfigError::Invalid(format!("cluster {cluster:?}: {message}"));
+
+    match settings {
+        SaslSettings::Plain(credentials) => {
+            password_sasl(cluster, SaslMechanism::Plain, credentials)
+        }
+        SaslSettings::ScramSha256(credentials) => {
+            password_sasl(cluster, SaslMechanism::ScramSha256, credentials)
+        }
+        SaslSettings::ScramSha512(credentials) => {
+            password_sasl(cluster, SaslMechanism::ScramSha512, credentials)
+        }
+        SaslSettings::OauthBearer(oauth) => {
+            let secret = match (&oauth.client_secret, &oauth.client_secret_file) {
+                (Some(inline), _) => inline.clone(),
+                (None, Some(path)) => read_secret(cluster, path)?,
+                // Refused by `Config::validate`; unreachable through `load`.
+                (None, None) => {
+                    return Err(invalid(
+                        "oauthbearer needs a client_secret or a client_secret_file".to_owned(),
+                    ));
+                }
+            };
+
+            let mut config = OidcConfig::new(
+                oauth.token_endpoint.clone(),
+                oauth.client_id.clone(),
+                secret,
+            )
+            .with_maybe_scope(oauth.scope.clone())
+            .with_maybe_audience(oauth.audience.clone());
+            if let Some(margin) = oauth.refresh_margin {
+                config = config.with_refresh_margin(margin);
+            }
+            if let Some(timeout) = oauth.timeout {
+                config = config.with_timeout(timeout);
+            }
+            if oauth.credentials_in_body {
+                config = config.with_credentials_in_body();
+            }
+            if oauth.allow_plaintext_endpoint {
+                config = config.with_allow_plaintext_endpoint();
+            }
+
+            // Nothing is fetched here — the first token is fetched when the
+            // first connection authenticates — so this validates the endpoint
+            // and nothing else. Which is the point: a typo in the url should
+            // not wait for a broker to be reachable to be noticed.
+            let provider =
+                OidcTokenProvider::new(config).map_err(|error| invalid(error.to_string()))?;
+
+            let mut sasl = SaslConfig::oauth_bearer(provider);
+            if oauth.allow_plaintext_token {
+                sasl = sasl.allow_plaintext_password();
+            }
+            Ok(sasl)
+        }
+    }
+}
+
+/// The three mechanisms that authenticate with a password.
+fn password_sasl(
+    cluster: &str,
+    mechanism: SaslMechanism,
+    credentials: &PasswordCredentials,
+) -> Result<SaslConfig, ConfigError> {
+    let password = match (&credentials.password, &credentials.password_file) {
+        (Some(inline), _) => inline.clone(),
+        (None, Some(path)) => read_secret(cluster, path)?,
+        // Refused by `Config::validate`; unreachable through `load`.
+        (None, None) => {
+            return Err(ConfigError::Invalid(format!(
+                "cluster {cluster:?}: {mechanism} needs a password or a password_file"
+            )));
+        }
+    };
+    let mut sasl = SaslConfig::new(mechanism, credentials.username.clone(), password);
+    if credentials.allow_plaintext_password {
+        sasl = sasl.allow_plaintext_password();
+    }
+    Ok(sasl)
+}
+
+/// Read a secret out of a mounted file.
+///
+/// Trimmed, because `kubectl create secret --from-file` keeps the trailing
+/// newline your editor put there and a password with `\n` on the end fails
+/// authentication with an error that says nothing about newlines.
+fn read_secret(cluster: &str, path: &std::path::Path) -> Result<String, ConfigError> {
+    let bytes = std::fs::read(path).map_err(|source| {
+        // The path is the whole diagnosis when a Secret is not mounted where
+        // the config says it is.
+        ConfigError::Invalid(format!("cluster {cluster:?}: {}: {source}", path.display()))
+    })?;
+    // The error names the file and never its contents.
+    String::from_utf8(bytes)
+        .map_err(|_| {
+            ConfigError::Invalid(format!(
+                "cluster {cluster:?}: {} is not valid UTF-8",
+                path.display()
+            ))
+        })
+        .map(|text| text.trim().to_owned())
+}
+
 fn read_pem(path: &std::path::Path) -> Result<Vec<u8>, Error> {
     std::fs::read(path).map_err(|source| {
         // The path is the whole diagnosis when a Secret is not mounted where
@@ -379,12 +492,12 @@ impl Registry {
             .clusters()
             .map(|(environment, entry)| {
                 let registry = registry_for(&registries, environment, entry);
-                (
+                Ok((
                     (environment.to_owned(), entry.id.clone()),
-                    Arc::new(ClusterHandle::new(environment, entry, registry)),
-                )
+                    Arc::new(ClusterHandle::new(environment, entry, registry)?),
+                ))
             })
-            .collect();
+            .collect::<Result<_, ConfigError>>()?;
         Ok(Self {
             clusters,
             registries,
@@ -611,12 +724,12 @@ impl Registry {
                 }
                 Some(existing) => {
                     existing.retire();
-                    let handle = Arc::new(ClusterHandle::new(environment, entry, registry));
+                    let handle = Arc::new(ClusterHandle::new(environment, entry, registry)?);
                     tokio::spawn(Arc::clone(&handle).run());
                     clusters.insert(key, handle);
                 }
                 None => {
-                    let handle = Arc::new(ClusterHandle::new(environment, entry, registry));
+                    let handle = Arc::new(ClusterHandle::new(environment, entry, registry)?);
                     tokio::spawn(Arc::clone(&handle).run());
                     clusters.insert(key, handle);
                 }

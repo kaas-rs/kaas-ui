@@ -237,6 +237,13 @@ active nav, focus ring, selected edge. For accent text on light use
   a registry is still not the same claim as decoding against it, so
   `schema_registry:` stays an explicit line and a cross-environment reference
   is a startup error.
+- **A credential is a path, and it is read once.** `password_file` and
+  `client_secret_file` point at mounted Secrets; the inline forms exist for a
+  local run and are wrong for a deployment, because the config is a ConfigMap.
+  Both are read at startup, so rotating one needs a restart. Secrets redact
+  themselves in `Debug` — the leak that happens is `?entry`, not a deliberate
+  print — and a failing OAuth exchange reports the issuer's error, never the
+  credential.
 - **ccompat only.** Apicurio's native `/apis/registry/v3` is not supported, and
   a `url` pointing at it is a **configuration** error reported on first use,
   naming `/apis/ccompat/v7`. The failure to design against is every record on

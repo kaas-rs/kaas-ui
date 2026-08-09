@@ -509,12 +509,96 @@ pub struct TlsSettings {
     pub server_name: Option<String>,
 }
 
-/// SASL settings for one cluster.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+/// SASL settings for one cluster, tagged by mechanism.
+///
+/// Variants rather than one struct with every field optional, for the reason
+/// group kinds are variants: a username means nothing to `OAUTHBEARER`, whose
+/// principal is a claim inside the token, and a token endpoint means nothing
+/// to SCRAM. Flattened into one struct they would all be `Option`, and the
+/// combination that is actually wrong — a client id beside a password — would
+/// parse.
+///
+/// ```yaml
+/// sasl:
+///   mechanism: scram-sha-512
+///   username: kaas-ui
+///   password_file: /etc/kaas-ui/kafka/password
+/// ```
+///
+/// ```yaml
+/// sasl:
+///   mechanism: oauthbearer
+///   token_endpoint: https://login.microsoftonline.com/<tenant>/oauth2/v2.0/token
+///   client_id: <client-id>
+///   client_secret_file: /etc/kaas-ui/oauth/client-secret
+///   scope: <client-id>/.default
+/// ```
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(tag = "mechanism", rename_all = "kebab-case")]
+pub enum SaslSettings {
+    /// `PLAIN`. Sends the password, so it wants TLS.
+    Plain(PasswordCredentials),
+    /// `SCRAM-SHA-256`.
+    ///
+    /// Spelled out rather than left to `rename_all`, which renders this
+    /// `scram-sha256` — no hyphen before the digits, because serde sees
+    /// `Sha256` as one word. Kafka, Strimzi and this file's own
+    /// documentation all write `SCRAM-SHA-256`, so that is what the config
+    /// takes; the derived spelling stays as an alias, since it is what the
+    /// parser accepted before anyone noticed the two disagreed.
+    #[serde(rename = "scram-sha-256", alias = "scram-sha256")]
+    ScramSha256(PasswordCredentials),
+    /// `SCRAM-SHA-512`.
+    #[serde(rename = "scram-sha-512", alias = "scram-sha512")]
+    ScramSha512(PasswordCredentials),
+    /// `OAUTHBEARER`, RFC 7628 — a bearer token from an OIDC issuer.
+    ///
+    /// Spelled as Kafka spells the mechanism rather than as kebab-case would
+    /// have it: `oauthbearer` is the string in every broker config, every
+    /// client property file and the Strimzi listener, and inventing
+    /// `oauth-bearer` beside them would be one more thing to get wrong.
+    #[serde(rename = "oauthbearer")]
+    OauthBearer(OauthCredentials),
+}
+
+impl SaslSettings {
+    /// The mechanism, as the broker names it.
+    #[must_use]
+    pub fn mechanism(&self) -> &'static str {
+        match self {
+            Self::Plain(_) => "PLAIN",
+            Self::ScramSha256(_) => "SCRAM-SHA-256",
+            Self::ScramSha512(_) => "SCRAM-SHA-512",
+            Self::OauthBearer(_) => "OAUTHBEARER",
+        }
+    }
+}
+
+/// Hand-written so a credential cannot reach a log through `?entry`.
+///
+/// The inner types redact themselves, and this exists to make sure the enum
+/// does not undo that by deriving its way around them.
+impl std::fmt::Debug for SaslSettings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Plain(c) | Self::ScramSha256(c) | Self::ScramSha512(c) => f
+                .debug_struct("SaslSettings")
+                .field("mechanism", &self.mechanism())
+                .field("credentials", c)
+                .finish(),
+            Self::OauthBearer(c) => f
+                .debug_struct("SaslSettings")
+                .field("mechanism", &self.mechanism())
+                .field("credentials", c)
+                .finish(),
+        }
+    }
+}
+
+/// A username and a password, for the three mechanisms that take one.
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "snake_case")]
-pub struct SaslSettings {
-    /// `plain`, `scram-sha-256` or `scram-sha-512`.
-    pub mechanism: SaslMechanismName,
+pub struct PasswordCredentials {
     /// Principal.
     pub username: String,
     /// Password, inline. Prefer `password_file`.
@@ -530,16 +614,106 @@ pub struct SaslSettings {
     pub allow_plaintext_password: bool,
 }
 
-/// The SASL mechanisms kaas-lib can negotiate.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum SaslMechanismName {
-    /// `PLAIN`.
-    Plain,
-    /// `SCRAM-SHA-256`.
-    ScramSha256,
-    /// `SCRAM-SHA-512`.
-    ScramSha512,
+impl std::fmt::Debug for PasswordCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PasswordCredentials")
+            .field("username", &self.username)
+            .field("password", &redacted(self.password.is_some()))
+            .field("password_file", &self.password_file)
+            .field("allow_plaintext_password", &self.allow_plaintext_password)
+            .finish()
+    }
+}
+
+/// A `client_credentials` exchange against an OIDC issuer.
+///
+/// kaas-ui fetches its own token and refreshes it, rather than being handed
+/// one: a token is good for an hour, this process runs for weeks, and
+/// kaas-lib asks for a token again on every KIP-368 re-authentication —
+/// which happens on a timer, hours in, with nobody watching. A token pinned
+/// at startup would work all afternoon and then stop.
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "snake_case")]
+pub struct OauthCredentials {
+    /// The token endpoint.
+    ///
+    /// On Entra this is `.../oauth2/**v2.0**/token`, and the version is not a
+    /// detail: the v1 endpoint issues `iss: https://sts.windows.net/{tid}/`,
+    /// which fails a broker pinned to the v2 issuer. The symptom is a SASL
+    /// handshake failure with the reason only in the broker's log.
+    pub token_endpoint: String,
+    /// The OAuth client id.
+    ///
+    /// Not the principal Kafka sees. Under Strimzi's default the principal is
+    /// the token's `sub`, which for an Entra client-credentials token is the
+    /// service principal's **object** id — a different uuid, and the one the
+    /// `KafkaUser` has to be named for.
+    pub client_id: String,
+    /// The client secret, inline. Prefer `client_secret_file`: an inline
+    /// secret is a secret in the config file, and the config file is a
+    /// ConfigMap that every ArgoCD viewer can read.
+    #[serde(default)]
+    pub client_secret: Option<String>,
+    /// The client secret read from a file — a mounted Secret key.
+    ///
+    /// Read once, at startup. Rotating the secret therefore needs a restart:
+    /// the config poller watches the *config* file, and a Secret rewritten
+    /// underneath a running process goes unnoticed until something reconnects.
+    #[serde(default)]
+    pub client_secret_file: Option<PathBuf>,
+    /// `scope` to request. Entra wants `<client-id>/.default` — the bare id,
+    /// not `api://<client-id>/.default`, unless the app registration actually
+    /// has an Application ID URI. Keycloak usually wants nothing.
+    #[serde(default)]
+    pub scope: Option<String>,
+    /// `audience` to request. Auth0 and Keycloak use it; Entra does not.
+    #[serde(default)]
+    pub audience: Option<String>,
+    /// Send the client id and secret in the form body instead of as HTTP
+    /// Basic authentication. Some issuers accept only one of the two.
+    #[serde(default)]
+    pub credentials_in_body: bool,
+    /// Refresh this long before the token expires.
+    #[serde(default, with = "humantime_serde::option")]
+    pub refresh_margin: Option<Duration>,
+    /// Deadline for one token fetch.
+    #[serde(default, with = "humantime_serde::option")]
+    pub timeout: Option<Duration>,
+    /// Permit an `http://` token endpoint — a local issuer in development.
+    /// Off by default: the client secret would be on the wire in the clear.
+    #[serde(default)]
+    pub allow_plaintext_endpoint: bool,
+    /// Permit the *token* over an unencrypted broker socket. Off by default,
+    /// and for the same reason `PLAIN` is: a bearer token on the wire is a
+    /// reusable credential, and nothing about it failing is visible.
+    #[serde(default)]
+    pub allow_plaintext_token: bool,
+}
+
+impl std::fmt::Debug for OauthCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OauthCredentials")
+            .field("token_endpoint", &self.token_endpoint)
+            .field("client_id", &self.client_id)
+            .field("client_secret", &redacted(self.client_secret.is_some()))
+            .field("client_secret_file", &self.client_secret_file)
+            .field("scope", &self.scope)
+            .field("audience", &self.audience)
+            .field("credentials_in_body", &self.credentials_in_body)
+            .field("refresh_margin", &self.refresh_margin)
+            .field("timeout", &self.timeout)
+            .field("allow_plaintext_endpoint", &self.allow_plaintext_endpoint)
+            .field("allow_plaintext_token", &self.allow_plaintext_token)
+            .finish()
+    }
+}
+
+/// What a secret renders as, and whether there is one.
+///
+/// The presence is the half worth printing — it is what a misconfiguration
+/// turns on — and the value is the half that must never be.
+fn redacted(present: bool) -> &'static str {
+    if present { "<redacted>" } else { "<unset>" }
 }
 
 /// Why a configuration was rejected.
@@ -830,14 +1004,44 @@ impl Config {
                         cluster.id
                     )));
                 }
-                if let Some(sasl) = &cluster.sasl
-                    && sasl.password.is_none()
-                    && sasl.password_file.is_none()
-                {
-                    return Err(ConfigError::Invalid(format!(
-                        "cluster {:?} configures sasl without a password or password_file",
-                        cluster.id
-                    )));
+                match &cluster.sasl {
+                    Some(SaslSettings::Plain(credentials))
+                    | Some(SaslSettings::ScramSha256(credentials))
+                    | Some(SaslSettings::ScramSha512(credentials))
+                        if credentials.password.is_none()
+                            && credentials.password_file.is_none() =>
+                    {
+                        return Err(ConfigError::Invalid(format!(
+                            "cluster {:?} configures sasl without a password or password_file",
+                            cluster.id
+                        )));
+                    }
+                    Some(SaslSettings::OauthBearer(oauth)) => {
+                        if oauth.client_secret.is_none() && oauth.client_secret_file.is_none() {
+                            return Err(ConfigError::Invalid(format!(
+                                "cluster {:?} configures oauthbearer without a client_secret or \
+                                 client_secret_file",
+                                cluster.id
+                            )));
+                        }
+                        // Caught here rather than at connect: without TLS the
+                        // bearer token goes over the wire in the clear, and
+                        // kaas-lib refuses it — but it refuses it per
+                        // connection attempt, so the deployment starts, the
+                        // card says unreachable, and the reason is one line
+                        // deep in a retry loop. A startup error names it once.
+                        if cluster.tls.is_none() && !oauth.allow_plaintext_token {
+                            return Err(ConfigError::Invalid(format!(
+                                "cluster {:?} configures oauthbearer with no tls: the bearer \
+                                 token would be readable by anything on the path. Add a `tls:` \
+                                 block — Strimzi's OAUTHBEARER listener is SASL_SSL and needs \
+                                 the cluster CA — or set `allow_plaintext_token: true` if the \
+                                 socket is genuinely private.",
+                                cluster.id
+                            )));
+                        }
+                    }
+                    _ => {}
                 }
                 if let Some(tls) = &cluster.tls
                     && tls.cert_file.is_some() != tls.key_file.is_some()
@@ -1413,6 +1617,223 @@ environments:
         )
         .unwrap_err();
         assert!(format!("{err}").contains("it declares none"), "{err}");
+    }
+
+    /// The shape every existing deployment already writes, unchanged.
+    ///
+    /// `SaslSettings` became an enum tagged by `mechanism` when OAUTHBEARER
+    /// arrived. The three password mechanisms had to keep parsing exactly as
+    /// they did, because a config that stops loading on upgrade is an outage.
+    #[test]
+    fn the_password_mechanisms_parse_as_they_always_did() {
+        let config = Config::from_yaml(
+            r#"
+environments:
+  - id: dev
+    kafka_clusters:
+      - id: strimzi
+        bootstrap: ["a:9093"]
+        tls:
+          ca_file: /etc/ca/ca.crt
+        sasl:
+          mechanism: scram-sha-512
+          username: kaas-ui
+          password: hunter2
+"#,
+        )
+        .unwrap();
+        let cluster = &config.environments[0].kafka_clusters[0];
+        match cluster.sasl.as_ref().unwrap() {
+            SaslSettings::ScramSha512(credentials) => {
+                assert_eq!(credentials.username, "kaas-ui");
+                assert_eq!(credentials.password.as_deref(), Some("hunter2"));
+            }
+            other => panic!("expected scram-sha-512, got {other:?}"),
+        }
+
+        // The spelling the derive used to produce, which is what a config
+        // written against the old parser says. Kept working on purpose.
+        let legacy = Config::from_yaml(
+            r#"
+environments:
+  - id: dev
+    kafka_clusters:
+      - id: strimzi
+        bootstrap: ["a:9093"]
+        sasl:
+          mechanism: scram-sha512
+          username: kaas-ui
+          password: hunter2
+"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            legacy.environments[0].kafka_clusters[0].sasl,
+            Some(SaslSettings::ScramSha512(_))
+        ));
+    }
+
+    #[test]
+    fn oauthbearer_parses_with_the_fields_entra_needs() {
+        let config = Config::from_yaml(
+            r#"
+environments:
+  - id: dev
+    kafka_clusters:
+      - id: strimzi
+        bootstrap: ["a:9094"]
+        tls:
+          ca_file: /etc/ca/ca.crt
+        sasl:
+          mechanism: oauthbearer
+          token_endpoint: https://login.microsoftonline.com/tenant/oauth2/v2.0/token
+          client_id: a-client-id
+          client_secret_file: /etc/oauth/client-secret
+          scope: a-client-id/.default
+          refresh_margin: 90s
+"#,
+        )
+        .unwrap();
+        match config.environments[0].kafka_clusters[0].sasl.as_ref() {
+            Some(SaslSettings::OauthBearer(oauth)) => {
+                assert_eq!(oauth.client_id, "a-client-id");
+                assert_eq!(oauth.scope.as_deref(), Some("a-client-id/.default"));
+                assert_eq!(oauth.refresh_margin, Some(Duration::from_secs(90)));
+                // Never inline in a config anybody deploys.
+                assert!(oauth.client_secret.is_none());
+            }
+            other => panic!("expected oauthbearer, got {other:?}"),
+        }
+    }
+
+    /// A misspelled key inside `sasl:` has to be refused, not ignored.
+    ///
+    /// Worth a test of its own because the tagged enum could have quietly
+    /// lost it: `deny_unknown_fields` lives on the variant's struct now, and
+    /// the tag itself is consumed one level up. A `client_secret_path` that
+    /// parsed as "no secret configured" would be a deployment that starts and
+    /// cannot authenticate.
+    #[test]
+    fn a_misspelled_credential_field_is_refused_rather_than_ignored() {
+        for line in ["client_secret_path: /etc/x", "clientid: x", "passwrod: x"] {
+            let err = Config::from_yaml(&format!(
+                r#"
+environments:
+  - id: dev
+    kafka_clusters:
+      - id: strimzi
+        bootstrap: ["a:9094"]
+        tls: {{ ca_file: /etc/ca/ca.crt }}
+        sasl:
+          mechanism: oauthbearer
+          token_endpoint: https://issuer/token
+          client_id: x
+          client_secret: s
+          {line}
+"#
+            ))
+            .unwrap_err();
+            assert!(
+                format!("{err}").contains("unknown field"),
+                "{line:?} parsed instead of being refused: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn oauthbearer_without_a_secret_is_rejected_at_startup() {
+        let err = Config::from_yaml(
+            r#"
+environments:
+  - id: dev
+    kafka_clusters:
+      - id: strimzi
+        bootstrap: ["a:9094"]
+        tls: { ca_file: /etc/ca/ca.crt }
+        sasl:
+          mechanism: oauthbearer
+          token_endpoint: https://issuer/token
+          client_id: x
+"#,
+        )
+        .unwrap_err();
+        assert!(format!("{err}").contains("client_secret_file"), "{err}");
+    }
+
+    /// The one that costs a credential rather than a page.
+    ///
+    /// Without TLS the bearer token is on the wire in the clear. kaas-lib
+    /// refuses to send it, but it refuses per connection attempt — the
+    /// deployment starts, the card says unreachable, and the reason is a line
+    /// in a retry loop. This says it once, at startup, and names the fix.
+    #[test]
+    fn oauthbearer_without_tls_is_rejected_unless_it_says_so() {
+        let without_tls = r#"
+environments:
+  - id: dev
+    kafka_clusters:
+      - id: strimzi
+        bootstrap: ["a:9094"]
+        sasl:
+          mechanism: oauthbearer
+          token_endpoint: https://issuer/token
+          client_id: x
+          client_secret: s
+"#;
+        let err = Config::from_yaml(without_tls).unwrap_err();
+        assert!(format!("{err}").contains("no tls"), "{err}");
+
+        // And the opt-out is explicit, because sometimes the socket really is
+        // a loopback in a test.
+        let permitted = format!("{without_tls}          allow_plaintext_token: true\n");
+        assert!(Config::from_yaml(&permitted).is_ok());
+    }
+
+    /// Secrets do not reach a log through `?entry`.
+    ///
+    /// `Debug` is the leak that actually happens: nobody prints a password on
+    /// purpose, they print the struct that contains one. Both credential
+    /// types redact, and the enum around them does not undo it.
+    #[test]
+    fn debug_never_prints_a_secret() {
+        let oauth = SaslSettings::OauthBearer(OauthCredentials {
+            token_endpoint: "https://issuer/token".to_owned(),
+            client_id: "a-client-id".to_owned(),
+            client_secret: Some("sup3r-s3cret".to_owned()),
+            client_secret_file: None,
+            scope: None,
+            audience: None,
+            credentials_in_body: false,
+            refresh_margin: None,
+            timeout: None,
+            allow_plaintext_endpoint: false,
+            allow_plaintext_token: false,
+        });
+        let rendered = format!("{oauth:?}");
+        assert!(!rendered.contains("sup3r-s3cret"), "{rendered}");
+        assert!(rendered.contains("<redacted>"), "{rendered}");
+        // The id is not a secret and is the half worth having in a log.
+        assert!(rendered.contains("a-client-id"), "{rendered}");
+
+        let password = SaslSettings::Plain(PasswordCredentials {
+            username: "kaas-ui".to_owned(),
+            password: Some("hunter2".to_owned()),
+            password_file: None,
+            allow_plaintext_password: false,
+        });
+        let rendered = format!("{password:?}");
+        assert!(!rendered.contains("hunter2"), "{rendered}");
+        assert!(rendered.contains("<redacted>"), "{rendered}");
+
+        // Absence reads differently from redaction, so a missing mount is
+        // diagnosable from a log line.
+        let unset = SaslSettings::Plain(PasswordCredentials {
+            username: "kaas-ui".to_owned(),
+            password: None,
+            password_file: Some("/etc/kafka/password".into()),
+            allow_plaintext_password: false,
+        });
+        assert!(format!("{unset:?}").contains("<unset>"));
     }
 
     #[test]

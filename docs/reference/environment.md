@@ -31,7 +31,7 @@ Every phase's acceptance command below runs against them.
 | namespace | `kaas` | `strimzi` |
 | bootstrap (plain) | `kaas.kaas.svc.cluster.local:9092` | `kafka-cluster-kafka-bootstrap.strimzi.svc.cluster.local:9092` |
 | what it is | the `kaas` broker, 3 replicas, under development | Apache Kafka **4.2.0** via Strimzi, 3 dual-role nodes |
-| listeners | plain 9092, authed 9095, tls 9093 | plain 9092, tls 9093 |
+| listeners | plain 9092, authed 9095, tls 9093 | plain 9092, tls 9093, **oauthbearer 9094** |
 | api keys advertised | **37** | **75** |
 | topics | 13 | 17, of which 2 internal |
 | groups | 2, all reporting `group_type: ""` | 16, all `classic` |
@@ -62,6 +62,71 @@ Nothing in kaas-ui resolves credentials automatically. Same rule as kaas-lib's
 `live-cluster` skill: a run that needs SASL is given the credentials
 explicitly, so an unauthenticated run cannot silently pick up a secret it
 happened to be able to read.
+
+### The OAUTHBEARER listener, and what kaas-ui needs to use it
+
+Strimzi's `internal` listener on **9094** is `SASL_SSL` with OAUTHBEARER
+validated against an Entra tenant's JKWS, and `authorization: simple` behind
+it — `StandardAuthorizer`, default-deny. It is a different service from the
+one everything else here dials:
+
+```
+kafka-cluster-kafka-internal-bootstrap.strimzi.svc.cluster.local:9094   ← OAUTHBEARER
+kafka-cluster-kafka-bootstrap.strimzi.svc.cluster.local:9092            ← plaintext, anonymous
+```
+
+Note the `-internal-` segment. `kafka-cluster-kafka-bootstrap` serves
+9091/9092/9093 and nothing on 9094, so getting the service name wrong reads as
+"connection refused" rather than as an auth problem.
+
+```yaml
+kafka_clusters:
+  - id: strimzi
+    bootstrap: ["kafka-cluster-kafka-internal-bootstrap.strimzi.svc.cluster.local:9094"]
+    tls:
+      # `kafka-cluster-cluster-ca-cert`, key `ca.crt` — the *cluster* CA, not
+      # the clients CA. Hostname verification stays on: the listener
+      # advertises names Strimzi puts in the broker cert SANs.
+      ca_file: /etc/kaas-ui/kafka-ca/ca.crt
+    sasl:
+      mechanism: oauthbearer
+      token_endpoint: https://login.microsoftonline.com/<tenant>/oauth2/v2.0/token
+      client_id: <client-id>
+      client_secret_file: /etc/kaas-ui/oauth/client-secret
+      scope: <client-id>/.default
+```
+
+Four things about that block are load-bearing, and each has cost somebody an
+afternoon:
+
+- **`client_secret_file`, not `client_secret`.** The config is a ConfigMap;
+  the secret is a Secret. Inline is supported for a local run and is the wrong
+  answer for anything deployed. The file is read **once, at startup**, so
+  rotating the secret needs a restart — the config poller watches the config
+  file, and a Secret rewritten underneath a running process goes unnoticed.
+- **`/oauth2/v2.0/token`, not v1.** The v1 endpoint issues
+  `iss: https://sts.windows.net/{tid}/`, which fails a broker pinned to the v2
+  issuer. The symptom is a SASL failure whose reason is only in the *broker's*
+  log.
+- **`scope: <client-id>/.default`, bare.** `api://<client-id>/.default` fails
+  with `AADSTS500011` unless the app registration has an Application ID URI.
+- **The principal is not the client id.** With no `oauth.username.claim` set,
+  Strimzi takes the principal from the token's `sub`, which for an Entra
+  client-credentials token is the service principal's **object** id. That is
+  what the `KafkaUser` must be named for, and why the CR in
+  `apps/strimzi/kafka-users/` is a uuid rather than `kaas-ui`.
+
+Measured, 2026-08-09, against this listener: 3 brokers, 17 topics — exactly
+what the broker holds — 16 capability features available, 28 groups described
+and an Avro record read. All of those need an ACL under default-deny, so they
+are the proof that the token authenticated as the principal the ACLs name
+rather than as anything more permissive. A wrong client secret renders as an
+unreachable card carrying the issuer's own `AADSTS7000215`, with the secret
+nowhere in the message.
+
+The full CLI walkthrough this was built against, including how to mint a token
+by hand, is `docs/strimzi-oauth-cli.md` in the cluster repo. **That file holds a
+live client secret; nothing in kaas-ui does, and nothing in kaas-ui should.**
 
 ## Measured facts, not assumed ones
 

@@ -14,7 +14,7 @@ sequenced entirely on its own merits.
 | 2 | batched `FindCoordinator` (KIP-699) | Phase 5 | high at scale |
 | 3 | multi-group `OffsetFetch` | Phase 5 | pairs with 2 |
 | 4 | `DescribeTopicPartitions` cursor pagination | Phase 2 | medium |
-| 5 | SASL OAUTHBEARER | — | the likely hard blocker |
+| 5 | SASL OAUTHBEARER | — | **landed in 0.6.1, in use** |
 | 6 | `DescribeQuorum` (51) | Phase 7 | nice to have |
 | 7 | pool and connection introspection | Phase 1/3 | medium |
 | 8 | `ListConfigResources` (70) | Phase 1 | low |
@@ -112,23 +112,40 @@ not, expose it.
 Note this only helps on clusters that implement api key 75 — `kaas` does not, so
 the `Metadata` path stays the fallback and stays unpaginated.
 
-## 5. SASL OAUTHBEARER
+## 5. SASL OAUTHBEARER — **landed**
 
-**The largest item and the one most likely to be a hard blocker for a real
-user.** Strimzi with Keycloak is a mainstream deployment and cannot connect
-today. Also unlocks Confluent Cloud OAuth and, with a token provider hook, MSK
-IAM later.
+Called the largest item here and the one most likely to be a hard blocker.
+kaas-lib 0.6.1 shipped it, and kaas-ui speaks it as of 0.10.3: `SaslConfig::oauth_bearer`
+takes a `TokenProvider`, and the `oidc` feature brings `OidcTokenProvider`, a
+`client_credentials` exchange that caches the token, refreshes it ahead of
+expiry and single-flights the refresh across connections.
 
-Token acquisition, refresh, and the interaction with KIP-368 re-authentication
-are all in scope, which is why it is large.
+Everything the ask asked for is in it. Token acquisition, refresh and the
+KIP-368 interaction are all handled below kaas-ui: the provider is asked again
+on every re-authentication, which is a timer kaas-lib owns, so the thing that
+had to be got right — a token captured once and presented hours later — cannot
+be got wrong from up here.
 
-Not urgent for *this* deployment: both dev clusters offer plaintext and TLS
-listeners, and `kaas` additionally has a SASL listener on 9095 with
-SCRAM-SHA-512 users, all of which kaas-lib already speaks. It becomes urgent the
-moment someone points kaas-ui at a Keycloak-fronted Strimzi.
+What kaas-ui had to add was configuration and one lifetime decision: the
+provider is built **once per cluster handle**, not per connect, because that is
+what keeps every connection to a cluster on one token and one fetch. The rest
+is a config block — see `sasl: {mechanism: oauthbearer, …}` in
+[environment.md](environment.md).
 
-Note the symmetry if it lands: Dex terminates OIDC for *users*, OAUTHBEARER
-terminates OAuth for *clusters*, and the same Keycloak can serve both.
+Two things are deliberately still absent, and neither blocks anything:
+
+- **A pre-fetched token.** `SaslConfig::oauth_bearer_token` exists and is right
+  for a CLI; kaas-ui runs for weeks, so the fetching provider is the only mode
+  worth carrying. A `token_file:` variant is a small addition if a sidecar ever
+  wants to own refresh.
+- **A private CA for the *issuer*.** `OidcConfig::with_tls` is there for a
+  Keycloak behind an internal CA. Entra is public, so the system trust store
+  is right today, and a second TLS block nobody needs is surface nobody
+  should have to read.
+
+The symmetry the original note predicted holds: Dex terminates OIDC for
+*users*, OAUTHBEARER terminates OAuth for *clusters*, and one issuer can serve
+both.
 
 ## 6. `DescribeQuorum` (51)
 
