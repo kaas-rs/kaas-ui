@@ -235,7 +235,12 @@ export function Settings() {
           {/* A separate question from the zone, and not a redundant one: a
               laptop in Amsterdam set to `en-US` is `Europe/Amsterdam` at
               `8/9/2026, 09:05:03`. Shown rather than chosen, like the zone. */}
-
+          <Setting
+            label="Notation"
+            note="from this browser — it decides the separators, the digits and the decimal mark. The clock is not its call: 24 hours everywhere"
+          >
+            <Mono>{locale}</Mono>
+          </Setting>
           <Setting
             label="Date order"
             note="which of the three fields leads — the one thing a notation decides that changes what a date means"
