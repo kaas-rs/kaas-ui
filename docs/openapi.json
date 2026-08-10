@@ -5187,7 +5187,8 @@
         "description": "The subjects one registry holds, and which registry that is.",
         "required": [
           "subjects",
-          "total"
+          "total",
+          "topics"
         ],
         "properties": {
           "compatibility": {
@@ -5196,6 +5197,14 @@
               "null"
             ],
             "description": "The registry-wide compatibility mode, when `details` was asked for.\n\nWhat every row without an override of its own is governed by, so the\ntable can say `BACKWARD` on a registry where nobody has set a\nper-subject rule instead of a column of blanks."
+          },
+          "dangling": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "How many matched subjects name a topic that is on no cluster reading\nthis registry.\n\nA schema outlives the topic it described: deleting a topic does not\ntouch the registry, so `orders-value` stays registered and stays a\nperfectly well-formed name. That is the difference this counts and\n`topics` cannot — one is about the *name*, this is about the world.\n\n**Subjects, not topics**: a deleted topic with a key schema and a value\nschema is two dangling subjects, which is what a number sitting beside\n`subjects` has to mean.\n\n`None` where the question cannot be answered rather than a zero that\nwould read as \"all fine\":\n\n* no cluster here references this registry, so there is nothing to\n  check against;\n* one that does is not connected — its topics are unknown, and calling\n  every subject of a cluster that is merely *down* dangling is exactly\n  the alarm a fleet view must not raise.\n\nCosts nothing to compute: the topic list is the metadata snapshot each\ncluster already holds, so this dials nobody and cannot be slow.",
+            "minimum": 0
           },
           "registry": {
             "oneOf": [
@@ -5214,6 +5223,11 @@
               "$ref": "#/components/schemas/SubjectRow"
             },
             "description": "The page of subjects, filtered and ordered as asked."
+          },
+          "topics": {
+            "type": "integer",
+            "description": "How many distinct topics those subjects name.\n\nRead off the names alone — no registry call and no schema — so this is\n`TopicNameStrategy` and nothing else: `{topic}-{record}` needs the\nrecord name to find its seam, and a record-named subject never had a\ntopic in it. Neither is a failure, and neither is counted here.\n\nCounted over the same set `total` counts, so a `search` narrows them\ntogether. Here rather than in the browser because the alternative was\nthe fleet card downloading every subject name in the registry in order\nto count them — the summary is a property of the whole listing and the\npage is not, so `?limit=0` is a legitimate and cheap question.",
+            "minimum": 0
           },
           "total": {
             "type": "integer",

@@ -1215,6 +1215,100 @@ async fn assertions() -> Result<Acceptance, String> {
         },
     );
 
+    // What the fleet card asks for: the counts, and not one row of the thing
+    // being counted. It is the whole reason `topics` is computed on the server
+    // — a card that had to download every subject name to count them would put
+    // the size of the biggest registry on the fleet page.
+    let summary = get(
+        &client,
+        &format!("/api/environments/{ENV}/schema-registries/{registry_id}/subjects?limit=0"),
+    )
+    .await;
+    // `topicName` only, which is the summary's own definition: it reads the
+    // names and never a schema, so a `{topic}-{record}` subject carries no
+    // topic there however the detailed listing beside it resolved the seam.
+    let named: Vec<&str> = rows
+        .iter()
+        .filter(|row| row["naming"]["strategy"] == "topicName")
+        .filter_map(|row| row["naming"]["topic"].as_str())
+        .collect();
+    acceptance.check(
+        "the registry summarises itself without sending a subject",
+        match &summary {
+            Ok(body) => {
+                let distinct = named.iter().collect::<std::collections::BTreeSet<_>>();
+                let sent = body["subjects"].as_array().map_or(usize::MAX, Vec::len);
+                let total = body["total"].as_u64() == Some(rows.len() as u64);
+                let topics = body["topics"].as_u64() == Some(distinct.len() as u64);
+                if sent == 0 && total && topics {
+                    Ok(format!(
+                        "{} subject(s) over {} topic(s), 0 rows sent",
+                        body["total"], body["topics"]
+                    ))
+                } else {
+                    Err(format!("{body} against {} listed subject(s)", rows.len()))
+                }
+            }
+            Err(error) => Err(error.clone()),
+        },
+    );
+
+    // A schema outlives the topic it described — deleting a topic does not
+    // touch the registry — and the summary is where that shows. Checked
+    // against the topic lists of the clusters that read this registry rather
+    // than against a number written down here, because which topics exist is
+    // the one thing about this fleet that changes between runs.
+    let mut live: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut complete = true;
+    for (cluster, _) in referenced.iter().filter(|(_, id)| *id == registry_id) {
+        match get(
+            &client,
+            &format!("/api/environments/{ENV}/clusters/{cluster}/topics?internal=true"),
+        )
+        .await
+        {
+            Ok(body) => live.extend(
+                body["items"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|topic| topic["name"].as_str())
+                    .map(str::to_owned),
+            ),
+            // A cluster that would not answer is exactly the case the server
+            // reports as `null`, so the expectation becomes "says it does not
+            // know" rather than a count.
+            Err(_) => complete = false,
+        }
+    }
+    let expected = complete.then(|| named.iter().filter(|topic| !live.contains(**topic)).count());
+    acceptance.check(
+        "a subject whose topic is gone is counted, and a disconnected cluster is not a count",
+        match &summary {
+            Ok(body) => {
+                let reported = body["dangling"].as_u64().map(|n| n as usize);
+                let reported = if body["dangling"].is_null() {
+                    None
+                } else {
+                    reported
+                };
+                if reported == expected {
+                    Ok(match expected {
+                        Some(0) => "0 dangling: every subject names a live topic".to_owned(),
+                        Some(n) => format!(
+                            "{n} of {} subject(s) name a topic on neither cluster",
+                            rows.len()
+                        ),
+                        None => "a cluster is not answering, so the count is null".to_owned(),
+                    })
+                } else {
+                    Err(format!("reported {reported:?}, expected {expected:?}"))
+                }
+            }
+            Err(error) => Err(error.clone()),
+        },
+    );
+
     if let Some(subject) = rows.first().and_then(|row| row["subject"].as_str()) {
         let versions = get(
             &client,

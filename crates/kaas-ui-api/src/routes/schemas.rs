@@ -46,6 +46,43 @@ pub struct SubjectList {
     pub subjects: Vec<SubjectRow>,
     /// How many subjects matched before paging.
     pub total: usize,
+    /// How many distinct topics those subjects name.
+    ///
+    /// Read off the names alone — no registry call and no schema — so this is
+    /// `TopicNameStrategy` and nothing else: `{topic}-{record}` needs the
+    /// record name to find its seam, and a record-named subject never had a
+    /// topic in it. Neither is a failure, and neither is counted here.
+    ///
+    /// Counted over the same set `total` counts, so a `search` narrows them
+    /// together. Here rather than in the browser because the alternative was
+    /// the fleet card downloading every subject name in the registry in order
+    /// to count them — the summary is a property of the whole listing and the
+    /// page is not, so `?limit=0` is a legitimate and cheap question.
+    pub topics: usize,
+    /// How many matched subjects name a topic that is on no cluster reading
+    /// this registry.
+    ///
+    /// A schema outlives the topic it described: deleting a topic does not
+    /// touch the registry, so `orders-value` stays registered and stays a
+    /// perfectly well-formed name. That is the difference this counts and
+    /// `topics` cannot — one is about the *name*, this is about the world.
+    ///
+    /// **Subjects, not topics**: a deleted topic with a key schema and a value
+    /// schema is two dangling subjects, which is what a number sitting beside
+    /// `subjects` has to mean.
+    ///
+    /// `None` where the question cannot be answered rather than a zero that
+    /// would read as "all fine":
+    ///
+    /// * no cluster here references this registry, so there is nothing to
+    ///   check against;
+    /// * one that does is not connected — its topics are unknown, and calling
+    ///   every subject of a cluster that is merely *down* dangling is exactly
+    ///   the alarm a fleet view must not raise.
+    ///
+    /// Costs nothing to compute: the topic list is the metadata snapshot each
+    /// cluster already holds, so this dials nobody and cannot be slow.
+    pub dangling: Option<usize>,
     /// The registry-wide compatibility mode, when `details` was asked for.
     ///
     /// What every row without an override of its own is governed by, so the
@@ -167,8 +204,8 @@ pub async fn list(
     // caller who can see a cluster in this environment that references this
     // registry — so there is no second guard to forget here. Absence is a 404,
     // never a 403, exactly as for a cluster.
-    let registry = state.schema_registry(&env, &id, &caller)?;
-    let registry = registry.as_ref();
+    let handle = state.schema_registry(&env, &id, &caller)?;
+    let registry = handle.as_ref();
 
     // A fault is rendered, never raised: the card carries the state and the
     // list is empty, which is the same shape a healthy empty registry has and
@@ -191,6 +228,26 @@ pub async fn list(
     }
 
     let total = names.len();
+    // Before paging, and from the names: this describes the registry, not the
+    // fifty rows about to be returned. One topic per *subject* is kept as well
+    // as the distinct set, because the two numbers below count different
+    // things — `orders-key` and `orders-value` are one topic and two subjects.
+    let mut distinct = std::collections::BTreeSet::new();
+    let mut named: Vec<String> = Vec::new();
+    for name in &names {
+        if let Some(topic) = SubjectNaming::of(name, None).topic {
+            distinct.insert(topic.clone());
+            named.push(topic);
+        }
+    }
+    let topics = distinct.len();
+    let dangling = live_topics(&state, &env, &handle, &caller).map(|live| {
+        named
+            .iter()
+            .filter(|topic| !live.contains(topic.as_str()))
+            .count()
+    });
+
     let offset = query.offset.unwrap_or(0).min(total);
     let limit = query.limit.unwrap_or(total);
     let page: Vec<String> = names
@@ -205,6 +262,8 @@ pub async fn list(
             registry: Some(RegistryCard::of(registry)),
             subjects: page.into_iter().map(SubjectRow::of).collect(),
             total,
+            topics,
+            dangling,
             compatibility: None,
         }));
     }
@@ -228,8 +287,66 @@ pub async fn list(
         registry: Some(RegistryCard::of(registry)),
         subjects: rows,
         total,
+        topics,
+        dangling,
         compatibility: global,
     }))
+}
+
+/// Every topic held by a cluster here that decodes against this registry, or
+/// `None` where that set is not knowable.
+///
+/// **Never dials anything.** The topics come from the metadata snapshot each
+/// connected cluster already holds — the same snapshot the fleet card's
+/// `topicCount` is read from — so this is a lookup, not a request, and it
+/// cannot put a Kafka round trip on a schema page.
+///
+/// `None` in two cases, and neither is a zero:
+///
+/// * **nobody references this registry** — there is no cluster whose topics
+///   would settle the question, so "0 dangling" would be an answer about an
+///   empty set dressed up as an answer about the subjects;
+/// * **a referencing cluster is not connected** — its topics are unknown, and
+///   a union missing one cluster's half would call that cluster's every
+///   subject dangling the moment it went down.
+///
+/// The union, not an intersection: a subject is dangling when *no* cluster
+/// reading this registry has the topic. Two clusters sharing a registry need
+/// not hold the same topics — that they can resolve the same schema id is the
+/// point of sharing one — so a topic on either is a topic this schema
+/// describes.
+///
+/// Visibility rides on [`Registry::readers_of`], which is the topic-view
+/// permission and not merely "can see the cluster": a count of what a caller
+/// may not read is still a disclosure of it.
+fn live_topics(
+    state: &AppState,
+    env: &str,
+    registry: &std::sync::Arc<kaas_ui_serde::RegistryHandle>,
+    caller: &Caller,
+) -> Option<std::collections::BTreeSet<String>> {
+    let clusters = state.registry();
+    let mut readers = clusters
+        .readers_of(env, registry, caller.access())
+        .peekable();
+    readers.peek()?;
+
+    let mut topics = std::collections::BTreeSet::new();
+    for cluster in readers {
+        // Not connected: unknown, and unknown is the whole answer. Nudging it
+        // to retry is the fleet card's job — a page that made a schema listing
+        // wait on a broker would have put a cluster back on this path.
+        let admin = cluster.admin()?;
+        topics.extend(
+            admin
+                .cluster()
+                .snapshot()
+                .topics()
+                .iter()
+                .map(|topic| topic.name.clone()),
+        );
+    }
+    Some(topics)
 }
 
 /// How many subjects to describe at once.

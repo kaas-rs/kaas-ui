@@ -611,6 +611,31 @@ impl Registry {
         }
     }
 
+    /// The clusters here that decode against this registry, for a caller who
+    /// may read topic names on them.
+    ///
+    /// The referencing half of [`Registry::schema_registry`]'s rule, exposed:
+    /// that decides whether a registry may be *seen*, and this answers who is
+    /// reading it. Both go through [`Registry::readers_in`], so a caller who
+    /// may not read topics on a cluster cannot learn what it holds by asking
+    /// the registry beside it instead.
+    ///
+    /// Empty is a real answer — a registry nobody references — and a caller
+    /// that turns it into a count has to decide what nothing to check against
+    /// means before it can report one.
+    pub fn readers_of<'a>(
+        &'a self,
+        environment: &'a str,
+        registry: &'a Arc<RegistryHandle>,
+        who: &'a Access,
+    ) -> impl Iterator<Item = &'a Arc<ClusterHandle>> {
+        self.readers_in(environment, who).filter(move |cluster| {
+            cluster
+                .schema_registry()
+                .is_some_and(|held| Arc::ptr_eq(held, registry))
+        })
+    }
+
     /// The clusters this caller can see in one environment.
     fn visible_in<'a>(
         &'a self,

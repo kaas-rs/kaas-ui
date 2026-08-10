@@ -678,6 +678,29 @@ export interface SubjectList {
   subjects: SubjectRow[]
   /** How many subjects matched before paging. */
   total: number
+  /**
+   * How many distinct topics they name, read off the names alone.
+   *
+   * So `TopicNameStrategy` and nothing else — `{topic}-{record}` needs the
+   * record name to find its seam, and a record-named subject never had a topic
+   * in it. Describes the whole listing rather than the page, which is what
+   * makes `?limit=0` a cheap way to ask what a registry holds.
+   */
+  topics: number
+  /**
+   * How many matched subjects name a topic that is on no cluster reading this
+   * registry.
+   *
+   * A schema outlives the topic it described: deleting a topic does not touch
+   * the registry, so the subject stays registered and stays a well-formed
+   * name. Counted in *subjects*, so a deleted topic with a key and a value
+   * schema is two.
+   *
+   * `null` where the question has no answer — no cluster here references the
+   * registry, or one that does is disconnected and its topics are unknown.
+   * Not `0`, which would read as "all fine" while a cluster is down.
+   */
+  dangling: number | null
   /** The registry-wide default, when details were asked for. */
   compatibility: string | null
 }
