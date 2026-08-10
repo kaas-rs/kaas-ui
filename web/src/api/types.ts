@@ -301,6 +301,12 @@ export interface Partition {
   latestOffset: number | null
   /** Every non-future copy summed. Null until `?size=true` answers. */
   replicatedBytes: number | null
+  /**
+   * The worst follower's offset lag. Null until `?size=true` answers, and on
+   * a partition with no followers; 0 is a claim that every follower is
+   * caught up.
+   */
+  maxFollowerLag: number | null
 }
 
 export interface TopicDetail {
@@ -309,6 +315,12 @@ export interface TopicDetail {
   internal: boolean
   partitions: Partition[]
   brokerIds: number[]
+  /** The smallest replica count across partitions — the same rule the list uses. */
+  replicationFactor: number
+  offlinePartitionCount: number
+  underReplicatedPartitionCount: number
+  /** Retained records. Null when any partition is missing an offset end — absent, not smaller. */
+  messageCount: number | null
   /** Bytes on disk for one copy. Null until `?size=true` answers. */
   logicalBytes: number | null
   /** Bytes on disk across replicas. Null is "not asked, or not answered" — never zero. */

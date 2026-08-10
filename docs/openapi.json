@@ -3073,6 +3073,14 @@
                   "format": "int32",
                   "description": "Leader epoch."
                 },
+                "maxFollowerLag": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int64",
+                  "description": "The worst follower's offset lag, when `?size=true` asked for log dirs.\n\n`None` when sizes were not fetched *and* on a partition with no\nfollowers — a single-copy partition has nobody to lag. `Some(0)` is a\nclaim: every follower is caught up."
+                },
                 "offlineReplicas": {
                   "type": "array",
                   "items": {
@@ -3153,7 +3161,10 @@
                 "name",
                 "internal",
                 "partitions",
-                "brokerIds"
+                "brokerIds",
+                "replicationFactor",
+                "offlinePartitionCount",
+                "underReplicatedPartitionCount"
               ],
               "properties": {
                 "brokerIds": {
@@ -3184,9 +3195,22 @@
                   "format": "int64",
                   "description": "Bytes on disk for one copy, when `?size=true` asked for them."
                 },
+                "messageCount": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int64",
+                  "description": "Records retained across every partition, when offsets were fetched.\n\n`latest - earliest` summed — and absent, not smaller, when any\npartition is missing an end: a sum short one partition is an unmarked\nwrong number. The same rule `TopicSummary` applies, in the same place."
+                },
                 "name": {
                   "type": "string",
                   "description": "Topic name."
+                },
+                "offlinePartitionCount": {
+                  "type": "integer",
+                  "description": "Partitions with no leader or an offline replica.",
+                  "minimum": 0
                 },
                 "partitions": {
                   "type": "array",
@@ -3203,12 +3227,22 @@
                   "format": "int64",
                   "description": "Bytes on disk across replicas.\n\n`None` means the caller did not ask, or `DescribeLogDirs` did not\nanswer for this topic — never that the topic is empty. A zero would be\na claim, and this is the absence of one."
                 },
+                "replicationFactor": {
+                  "type": "integer",
+                  "description": "The smallest replica count across partitions — the same rule, and the\nsame implementation, as [`TopicSummary::replication_factor`].\n\nCarried here so the overview card does not re-derive it in TypeScript:\nthe minimum-across-partitions rule is a decision, and a decision that\nexists twice in two languages drifts.",
+                  "minimum": 0
+                },
                 "topicId": {
                   "type": [
                     "string",
                     "null"
                   ],
                   "description": "The topic uuid, where reported."
+                },
+                "underReplicatedPartitionCount": {
+                  "type": "integer",
+                  "description": "Partitions whose ISR is short.",
+                  "minimum": 0
                 }
               }
             },
@@ -4456,6 +4490,14 @@
             "format": "int32",
             "description": "Leader epoch."
           },
+          "maxFollowerLag": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The worst follower's offset lag, when `?size=true` asked for log dirs.\n\n`None` when sizes were not fetched *and* on a partition with no\nfollowers — a single-copy partition has nobody to lag. `Some(0)` is a\nclaim: every follower is caught up."
+          },
           "offlineReplicas": {
             "type": "array",
             "items": {
@@ -5381,7 +5423,10 @@
           "name",
           "internal",
           "partitions",
-          "brokerIds"
+          "brokerIds",
+          "replicationFactor",
+          "offlinePartitionCount",
+          "underReplicatedPartitionCount"
         ],
         "properties": {
           "brokerIds": {
@@ -5412,9 +5457,22 @@
             "format": "int64",
             "description": "Bytes on disk for one copy, when `?size=true` asked for them."
           },
+          "messageCount": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Records retained across every partition, when offsets were fetched.\n\n`latest - earliest` summed — and absent, not smaller, when any\npartition is missing an end: a sum short one partition is an unmarked\nwrong number. The same rule `TopicSummary` applies, in the same place."
+          },
           "name": {
             "type": "string",
             "description": "Topic name."
+          },
+          "offlinePartitionCount": {
+            "type": "integer",
+            "description": "Partitions with no leader or an offline replica.",
+            "minimum": 0
           },
           "partitions": {
             "type": "array",
@@ -5431,12 +5489,22 @@
             "format": "int64",
             "description": "Bytes on disk across replicas.\n\n`None` means the caller did not ask, or `DescribeLogDirs` did not\nanswer for this topic — never that the topic is empty. A zero would be\na claim, and this is the absence of one."
           },
+          "replicationFactor": {
+            "type": "integer",
+            "description": "The smallest replica count across partitions — the same rule, and the\nsame implementation, as [`TopicSummary::replication_factor`].\n\nCarried here so the overview card does not re-derive it in TypeScript:\nthe minimum-across-partitions rule is a decision, and a decision that\nexists twice in two languages drifts.",
+            "minimum": 0
+          },
           "topicId": {
             "type": [
               "string",
               "null"
             ],
             "description": "The topic uuid, where reported."
+          },
+          "underReplicatedPartitionCount": {
+            "type": "integer",
+            "description": "Partitions whose ISR is short.",
+            "minimum": 0
           }
         }
       },

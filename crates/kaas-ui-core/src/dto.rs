@@ -683,6 +683,41 @@ pub struct TopicSummary {
     pub replicated_bytes: Option<i64>,
 }
 
+/// The smallest replica count across partitions, which is what anyone means
+/// by "replication factor".
+///
+/// The minimum and not the first partition's or the maximum — a topic
+/// mid-reassignment has partitions at different counts, and the honest single
+/// number is the guarantee every partition actually meets. One implementation,
+/// because [`TopicSummary`] and [`TopicDetail`] both carry the answer and two
+/// copies of a *decision* drift apart in a way two copies of arithmetic do not.
+fn replication_factor(topic: &TopicInfo) -> usize {
+    topic
+        .partitions
+        .iter()
+        .map(|p| p.replicas.len())
+        .min()
+        .unwrap_or(0)
+}
+
+/// Partitions with no leader or an offline replica.
+fn offline_partition_count(topic: &TopicInfo) -> usize {
+    topic
+        .partitions
+        .iter()
+        .filter(|p| p.leader.is_none() || !p.offline_replicas.is_empty())
+        .count()
+}
+
+/// Partitions whose ISR is short.
+fn under_replicated_partition_count(topic: &TopicInfo) -> usize {
+    topic
+        .partitions
+        .iter()
+        .filter(|p| p.under_replicated())
+        .count()
+}
+
 impl TopicSummary {
     /// Build from the snapshot's view of a topic.
     pub fn of(topic: &TopicInfo) -> Self {
@@ -691,22 +726,9 @@ impl TopicSummary {
             topic_id: render_topic_id(&topic.topic_id),
             internal: topic.internal,
             partition_count: topic.partitions.len(),
-            replication_factor: topic
-                .partitions
-                .iter()
-                .map(|p| p.replicas.len())
-                .min()
-                .unwrap_or(0),
-            offline_partition_count: topic
-                .partitions
-                .iter()
-                .filter(|p| p.leader.is_none() || !p.offline_replicas.is_empty())
-                .count(),
-            under_replicated_partition_count: topic
-                .partitions
-                .iter()
-                .filter(|p| p.under_replicated())
-                .count(),
+            replication_factor: replication_factor(topic),
+            offline_partition_count: offline_partition_count(topic),
+            under_replicated_partition_count: under_replicated_partition_count(topic),
             message_count: None,
             logical_bytes: None,
             replicated_bytes: None,
@@ -744,6 +766,23 @@ pub struct TopicDetail {
     pub partitions: Vec<Partition>,
     /// The brokers holding replicas, for the placement grid's columns.
     pub broker_ids: Vec<i32>,
+    /// The smallest replica count across partitions — the same rule, and the
+    /// same implementation, as [`TopicSummary::replication_factor`].
+    ///
+    /// Carried here so the overview card does not re-derive it in TypeScript:
+    /// the minimum-across-partitions rule is a decision, and a decision that
+    /// exists twice in two languages drifts.
+    pub replication_factor: usize,
+    /// Partitions with no leader or an offline replica.
+    pub offline_partition_count: usize,
+    /// Partitions whose ISR is short.
+    pub under_replicated_partition_count: usize,
+    /// Records retained across every partition, when offsets were fetched.
+    ///
+    /// `latest - earliest` summed — and absent, not smaller, when any
+    /// partition is missing an end: a sum short one partition is an unmarked
+    /// wrong number. The same rule `TopicSummary` applies, in the same place.
+    pub message_count: Option<i64>,
     /// Bytes on disk for one copy, when `?size=true` asked for them.
     pub logical_bytes: Option<i64>,
     /// Bytes on disk across replicas.
@@ -779,10 +818,33 @@ impl TopicDetail {
             internal: topic.internal,
             partitions: topic.partitions.iter().map(Partition::of).collect(),
             broker_ids,
+            replication_factor: replication_factor(topic),
+            offline_partition_count: offline_partition_count(topic),
+            under_replicated_partition_count: under_replicated_partition_count(topic),
+            message_count: None,
             logical_bytes: None,
             replicated_bytes: None,
             log_dir_entry_count: None,
         }
+    }
+
+    /// Derive the retained record count from the offsets already attached.
+    ///
+    /// Called after `set_offsets` has run over the partitions; before that,
+    /// every partition is missing both ends and the answer is rightly `None`.
+    /// A partition missing either end makes the whole number absent rather
+    /// than smaller — see the field's own doc for why.
+    pub fn set_message_count_from_offsets(&mut self) {
+        let mut total: i64 = 0;
+        for partition in &self.partitions {
+            match (partition.earliest_offset, partition.latest_offset) {
+                (Some(low), Some(high)) => {
+                    total = total.saturating_add(high.saturating_sub(low));
+                }
+                _ => return,
+            }
+        }
+        self.message_count = Some(total);
     }
 
     /// Attach sizes from `topic_sizes()`.
@@ -806,6 +868,27 @@ impl TopicDetail {
         for partition in &mut self.partitions {
             if let Some(bytes) = by_index.get(&partition.partition) {
                 partition.set_size(*bytes);
+            }
+        }
+
+        // The worst follower per partition, from rows the same describe
+        // already paid for. `offset_lag` was fetched per broker and rendered
+        // nowhere against a topic, and it is the direct answer to "how far
+        // behind is this replica" — which the table otherwise only implies
+        // via ISR membership. Leaders lag nothing by definition, and a future
+        // replica's lag describes a directory move rather than replication.
+        let mut worst: HashMap<i32, i64> = HashMap::new();
+        for replica in size
+            .replicas
+            .iter()
+            .filter(|r| !r.is_leader && !r.is_future)
+        {
+            let entry = worst.entry(replica.partition).or_insert(0);
+            *entry = (*entry).max(replica.offset_lag);
+        }
+        for partition in &mut self.partitions {
+            if let Some(lag) = worst.get(&partition.partition) {
+                partition.max_follower_lag = Some(*lag);
             }
         }
     }
@@ -843,6 +926,12 @@ pub struct Partition {
     /// and because the leader's copy reads `0` on a leaderless partition
     /// rather than declining to answer.
     pub replicated_bytes: Option<i64>,
+    /// The worst follower's offset lag, when `?size=true` asked for log dirs.
+    ///
+    /// `None` when sizes were not fetched *and* on a partition with no
+    /// followers — a single-copy partition has nobody to lag. `Some(0)` is a
+    /// claim: every follower is caught up.
+    pub max_follower_lag: Option<i64>,
 }
 
 impl Partition {
@@ -862,6 +951,7 @@ impl Partition {
             earliest_offset: None,
             latest_offset: None,
             replicated_bytes: None,
+            max_follower_lag: None,
         }
     }
 
@@ -1656,6 +1746,82 @@ mod tests {
     use super::*;
 
     use crate::config::Config;
+
+    fn partition_info(index: i32, replicas: Vec<i32>, isr: Vec<i32>) -> PartitionInfo {
+        PartitionInfo {
+            partition: index,
+            leader: replicas.first().copied(),
+            leader_epoch: 0,
+            replicas,
+            isr,
+            offline_replicas: Vec::new(),
+            error: None,
+        }
+    }
+
+    fn topic_info(partitions: Vec<PartitionInfo>) -> TopicInfo {
+        TopicInfo {
+            name: "orders".to_owned(),
+            topic_id: TopicId::ZERO,
+            internal: false,
+            partitions,
+            error: None,
+        }
+    }
+
+    /// The rule that used to exist twice, in two languages.
+    ///
+    /// The overview card derived these in TypeScript from the partition list
+    /// while `TopicSummary::of` derived them in Rust for the topic list, and
+    /// nothing kept the two in step. Now `TopicDetail` carries them from the
+    /// same three functions the summary uses — this pins that they agree.
+    #[test]
+    fn the_detail_and_the_summary_answer_replication_identically() {
+        // Mid-reassignment: partition 0 at three replicas, partition 1 at two
+        // and short one in-sync. The factor is the minimum, not the first or
+        // the largest.
+        let info = topic_info(vec![
+            partition_info(0, vec![1, 2, 3], vec![1, 2, 3]),
+            partition_info(1, vec![1, 2], vec![1]),
+        ]);
+        let summary = TopicSummary::of(&info);
+        let detail = TopicDetail::of(&info);
+        assert_eq!(summary.replication_factor, 2);
+        assert_eq!(detail.replication_factor, summary.replication_factor);
+        assert_eq!(detail.under_replicated_partition_count, 1);
+        assert_eq!(
+            detail.under_replicated_partition_count,
+            summary.under_replicated_partition_count
+        );
+        assert_eq!(
+            detail.offline_partition_count,
+            summary.offline_partition_count
+        );
+    }
+
+    #[test]
+    fn a_message_count_missing_a_partition_is_absent_not_smaller() {
+        let info = topic_info(vec![
+            partition_info(0, vec![1], vec![1]),
+            partition_info(1, vec![1], vec![1]),
+        ]);
+        let mut detail = TopicDetail::of(&info);
+
+        // Nothing attached yet: no claim.
+        detail.set_message_count_from_offsets();
+        assert_eq!(detail.message_count, None);
+
+        // One partition answered, one did not — the sum would be short by an
+        // unknowable amount, and a smaller number carries no mark saying so.
+        detail.partitions[0].set_offsets(Some(100), Some(400));
+        detail.set_message_count_from_offsets();
+        assert_eq!(detail.message_count, None);
+
+        // Both answered: the retained count, `latest - earliest` summed.
+        detail.partitions[1].set_offsets(Some(0), Some(50));
+        detail.set_message_count_from_offsets();
+        assert_eq!(detail.message_count, Some(350));
+    }
 
     /// A fleet with one empty environment, one holding clusters and
     /// inventory, and one holding inventory alone.

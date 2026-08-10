@@ -280,6 +280,21 @@ offset on any of its 16 partitions" beside the empty window.
 The consequence for anyone reading `kaas`: **seek by offset, not by time.** The
 offset modes are exact on both clusters.
 
+### "Segment count" is not obtainable, and is not worth obtaining
+
+kafbat-ui's topic overview shows a "Segment Count", and kaas-ui deliberately
+does not match it. `DescribeLogDirs` — the only call either UI has here —
+reports no segment *files* at all: it returns one entry per **replica copy per
+log directory**, carrying `size_bytes` and `offset_lag`. kafbat's number is
+that entry count, which is the replica count under a borrowed name; on both
+development clusters it reads exactly `partitions × replication factor` unless
+a directory move is in flight.
+
+kaas-ui carries the same number as `logDirEntryCount`, named for what it
+counts, on the topic overview card. A true segment-file count would need a
+protocol surface Kafka does not offer remote clients, so it is not filed as an
+upstream ask either — there is nothing upstream could call.
+
 ## Reusing kaas-lib's `livetest`
 
 kaas-lib ships a `livetest` binary and a `live-cluster` skill built for exactly

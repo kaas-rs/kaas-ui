@@ -223,11 +223,10 @@ export function TopicDetail({
  * makes, and a `DescribeLogDirs` fan-out that is its own request so the card
  * paints before it lands.
  *
- * Message count is summed here rather than fetched, and by the same rule the
- * server uses for the topic list: `latest - earliest` per partition, and a
- * partition that answered neither end makes the whole number absent rather
- * than smaller. A sum missing a partition is not a marked number, and nothing
- * in a card that size could say so.
+ * Message count, replication factor and the under-replicated count come off
+ * `TopicDetail` — the server derives them with the same functions the topic
+ * list uses, so the rules that are decisions (minimum across partitions;
+ * absent, not smaller) exist exactly once.
  *
  * Replication is three of the eight and it is all one question, so on a topic
  * with one replica per partition all three go. `replication factor: 1` next to
@@ -250,16 +249,16 @@ function TopicFacts({
   const configs = useTopicConfigs(envId, clusterId, topic)
 
   const partitions = info.partitions
-  // The smallest replica count across partitions, which is what anyone means
-  // by "replication factor" — and what the server means by it in the list.
-  const replicationFactor = partitions.length
-    ? Math.min(...partitions.map((partition) => partition.replicas.length))
-    : 0
+  // The four counters come from the server now — `TopicDetail` carries them,
+  // derived by the same functions the topic list uses, so the minimum-across-
+  // partitions rule and the absent-not-smaller rule exist exactly once.
+  const replicationFactor = info.replicationFactor
   const replicated = replicationFactor > 1
+  const underReplicated = info.underReplicatedPartitionCount
+  const messages = info.messageCount
 
-  const underReplicated = partitions.filter(
-    (partition) => partition.underReplicated
-  ).length
+  // Sums, not rules: how many in-sync of how many replicas is arithmetic the
+  // table below already shows per row.
   const inSync = partitions.reduce(
     (total, partition) => total + partition.isr.length,
     0
@@ -269,20 +268,11 @@ function TopicFacts({
     0
   )
 
-  const complete = partitions.every(
-    (partition) =>
-      partition.earliestOffset !== null && partition.latestOffset !== null
-  )
-  const messages = complete
-    ? partitions.reduce(
-        (total, partition) =>
-          total +
-          ((partition.latestOffset ?? 0) - (partition.earliestOffset ?? 0)),
-        0
-      )
-    : null
-
   const onDisk = size.data?.items[0]?.replicatedBytes ?? null
+  // The one-copy figure beside the all-replicas one: they differ by the
+  // replication factor, and a topic whose two numbers do not differ by it is
+  // itself worth seeing.
+  const oneCopy = size.data?.items[0]?.logicalBytes ?? null
   // What kafbat-ui labels a "segment count". `DescribeLogDirs` reports no
   // segment files at all, so the number is one per replica copy per log
   // directory, and it is named for what it counts rather than for what the
@@ -321,7 +311,13 @@ function TopicFacts({
           <Stat
             label="segment size"
             value={pending(onDisk, bytes, size.isFetching)}
-            note={onDisk === null ? undefined : "on disk, all replicas"}
+            note={
+              onDisk === null
+                ? undefined
+                : oneCopy === null
+                  ? "on disk, all replicas"
+                  : `all replicas · ${bytes(oneCopy)} one copy`
+            }
           />
           <Stat
             label="log-dir entries"
@@ -335,7 +331,7 @@ function TopicFacts({
           <Stat
             label="messages"
             value={pending(messages, count, false)}
-            note={complete ? "retained" : undefined}
+            note={messages === null ? undefined : "retained"}
           />
         </dl>
       </CardContent>
@@ -563,6 +559,18 @@ function Partitions({
       partition.replicatedBytes,
     ])
   )
+  const lags = new Map(
+    (size.data?.items[0]?.partitions ?? []).map((partition) => [
+      partition.partition,
+      partition.maxFollowerLag,
+    ])
+  )
+  // From the describe, not the size answer, so the column does not pop in
+  // when the sizes arrive. A topic with no followers has nobody to lag, and
+  // a column of dashes would only say so repeatedly.
+  const hasFollowers = partitions.some(
+    (partition) => partition.replicas.length > 1
+  )
 
   return (
     <div className="space-y-3">
@@ -610,6 +618,13 @@ function Partitions({
                 hint="bytes on disk for every non-future copy of this partition"
                 right
               />
+              {hasFollowers ? (
+                <Head
+                  label="lag"
+                  hint="the worst follower's offset lag — 0 is every follower caught up"
+                  right
+                />
+              ) : null}
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -680,6 +695,20 @@ function Partitions({
                       size.isFetching
                     )}
                   </TableCell>
+                  {hasFollowers ? (
+                    <TableCell
+                      className={cn(
+                        "text-right font-mono",
+                        (lags.get(partition.partition) ?? 0) > 0 && "text-warn-ink"
+                      )}
+                    >
+                      {pending(
+                        lags.get(partition.partition) ?? null,
+                        count,
+                        size.isFetching
+                      )}
+                    </TableCell>
+                  ) : null}
                 </TableRow>
               )
             })}

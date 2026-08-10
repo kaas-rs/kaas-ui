@@ -303,6 +303,10 @@ pub async fn detail(
                     latest.get(&key).copied().flatten(),
                 );
             }
+            // After the offsets, because it is derived from them — the
+            // absent-if-incomplete rule lives in the DTO, once, instead of
+            // here and again in the overview card's TypeScript.
+            detail.set_message_count_from_offsets();
         }
     }
 
