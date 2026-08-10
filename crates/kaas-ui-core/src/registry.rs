@@ -355,20 +355,13 @@ fn build_sasl(cluster: &str, settings: &SaslSettings) -> Result<SaslConfig, Conf
             password_sasl(cluster, SaslMechanism::ScramSha512, credentials)
         }
         SaslSettings::OauthBearer(oauth) => {
-            let secret = match (
-                &oauth.client_secret,
-                &oauth.client_secret_file,
-                &oauth.client_secret_env,
-            ) {
-                (Some(inline), _, _) => inline.clone(),
-                (None, Some(path), _) => read_secret(cluster, path)?,
-                (None, None, Some(variable)) => read_secret_env(cluster, variable)?,
+            let secret = match (&oauth.client_secret, &oauth.client_secret_env) {
+                (Some(inline), _) => inline.clone(),
+                (None, Some(variable)) => read_secret_env(cluster, variable)?,
                 // Refused by `Config::validate`; unreachable through `load`.
-                (None, None, None) => {
+                (None, None) => {
                     return Err(invalid(
-                        "oauthbearer needs a client_secret, a client_secret_file or a \
-                         client_secret_env"
-                            .to_owned(),
+                        "oauthbearer needs a client_secret or a client_secret_env".to_owned(),
                     ));
                 }
             };

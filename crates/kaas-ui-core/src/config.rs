@@ -530,7 +530,7 @@ pub struct TlsSettings {
 ///   mechanism: oauthbearer
 ///   token_endpoint: https://login.microsoftonline.com/<tenant>/oauth2/v2.0/token
 ///   client_id: <client-id>
-///   client_secret_file: /etc/kaas-ui/oauth/client-secret
+///   client_secret_env: KAFKA_OAUTH_CLIENT_SECRET
 ///   scope: <client-id>/.default
 /// ```
 #[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -649,31 +649,28 @@ pub struct OauthCredentials {
     /// service principal's **object** id — a different uuid, and the one the
     /// `KafkaUser` has to be named for.
     pub client_id: String,
-    /// The client secret, inline. Prefer `client_secret_file`: an inline
+    /// The client secret, inline. Prefer `client_secret_env`: an inline
     /// secret is a secret in the config file, and the config file is a
     /// ConfigMap that every ArgoCD viewer can read.
     #[serde(default)]
     pub client_secret: Option<String>,
-    /// The client secret read from a file — a mounted Secret key.
-    ///
-    /// Read once, at startup. Rotating the secret therefore needs a restart:
-    /// the config poller watches the *config* file, and a Secret rewritten
-    /// underneath a running process goes unnoticed until something reconnects.
-    #[serde(default)]
-    pub client_secret_file: Option<PathBuf>,
     /// The **name of** an environment variable holding the client secret.
     ///
     /// The name, not the value — `client_secret_env: KAFKA_OAUTH_CLIENT_SECRET`,
     /// with the value arriving from a `secretKeyRef`. It is the shape Dex uses
-    /// for the same credential one container over, and it saves a volume: the
-    /// Secret is already in the namespace, and this reads it without mounting
-    /// it.
+    /// for the same credential one container over, and it needs no volume:
+    /// the Secret is already in the namespace, and this reads it without
+    /// mounting it.
     ///
-    /// Neither better nor worse than `client_secret_file` for secrecy — both
-    /// are readable by anything that can already read the process — so the
-    /// choice is about the deployment. A file survives `env` in a crash dump
-    /// and can be rotated under a running process; a variable needs no volume
-    /// and matches what everything else in this namespace does.
+    /// There was a `client_secret_file` beside this, pointing at a mounted
+    /// key, and it is gone. Two ways to say the same thing is two things to
+    /// document, test and choose between, and the deployment uses this one —
+    /// the file bought nothing that a `secretKeyRef` does not, since both are
+    /// readable by anything that can already read the process.
+    ///
+    /// Read once, at startup. Rotating the secret therefore needs a restart:
+    /// the config poller watches the *config* file, and a Secret rewritten
+    /// underneath a running process goes unnoticed until something reconnects.
     #[serde(default)]
     pub client_secret_env: Option<String>,
     /// `scope` to request. Entra wants `<client-id>/.default` — the bare id,
@@ -711,7 +708,6 @@ impl std::fmt::Debug for OauthCredentials {
             .field("token_endpoint", &self.token_endpoint)
             .field("client_id", &self.client_id)
             .field("client_secret", &redacted(self.client_secret.is_some()))
-            .field("client_secret_file", &self.client_secret_file)
             // The variable's *name* is not a secret and is the whole
             // diagnosis when it is the thing that is unset.
             .field("client_secret_env", &self.client_secret_env)
@@ -1036,12 +1032,11 @@ impl Config {
                     }
                     Some(SaslSettings::OauthBearer(oauth)) => {
                         let sources = usize::from(oauth.client_secret.is_some())
-                            + usize::from(oauth.client_secret_file.is_some())
                             + usize::from(oauth.client_secret_env.is_some());
                         if sources == 0 {
                             return Err(ConfigError::Invalid(format!(
-                                "cluster {:?} configures oauthbearer without a client_secret, \
-                                 client_secret_file or client_secret_env",
+                                "cluster {:?} configures oauthbearer without a client_secret or \
+                                 client_secret_env",
                                 cluster.id
                             )));
                         }
@@ -1051,9 +1046,8 @@ impl Config {
                         // class of "I rotated it and nothing changed".
                         if sources > 1 {
                             return Err(ConfigError::Invalid(format!(
-                                "cluster {:?} configures more than one client secret source; \
-                                 client_secret, client_secret_file and client_secret_env are \
-                                 alternatives, not an order of preference",
+                                "cluster {:?} sets both client_secret and client_secret_env; \
+                                 they are alternatives, not an order of preference",
                                 cluster.id
                             )));
                         }
@@ -1721,7 +1715,7 @@ environments:
           mechanism: oauthbearer
           token_endpoint: https://login.microsoftonline.com/tenant/oauth2/v2.0/token
           client_id: a-client-id
-          client_secret_file: /etc/oauth/client-secret
+          client_secret_env: KAFKA_OAUTH_CLIENT_SECRET
           scope: a-client-id/.default
           refresh_margin: 90s
 "#,
@@ -1798,7 +1792,7 @@ environments:
                     oauth.client_secret_env.as_deref(),
                     Some("KAFKA_OAUTH_CLIENT_SECRET")
                 );
-                assert!(oauth.client_secret.is_none() && oauth.client_secret_file.is_none());
+                assert!(oauth.client_secret.is_none());
             }
             other => panic!("expected oauthbearer, got {other:?}"),
         }
@@ -1830,7 +1824,7 @@ environments:
         )
         .unwrap_err();
         assert!(
-            format!("{err}").contains("more than one client secret source"),
+            format!("{err}").contains("alternatives, not an order of preference"),
             "{err}"
         );
     }
@@ -1895,7 +1889,6 @@ environments:
             token_endpoint: "https://issuer/token".to_owned(),
             client_id: "a-client-id".to_owned(),
             client_secret: Some("sup3r-s3cret".to_owned()),
-            client_secret_file: None,
             client_secret_env: None,
             scope: None,
             audience: None,
