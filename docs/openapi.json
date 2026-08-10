@@ -640,6 +640,65 @@
         }
       }
     },
+    "/api/environments/{env}/clusters/{id}/topics/{topic}/analysis": {
+      "get": {
+        "tags": [
+          "analysis"
+        ],
+        "summary": "`GET /api/environments/{env}/clusters/{id}/topics/{topic}/analysis`",
+        "description": "Events are `progress` (throttled to one a second), `result` (terminal,\nonce), `error` (the same `ResourceError` shape as everywhere else) and\n`phase` (`seeking` → `streaming` → `done`). Closing the response cancels\nthe scan; there is no other cancellation and none is needed.",
+        "operationId": "analysis",
+        "parameters": [
+          {
+            "name": "env",
+            "in": "path",
+            "description": "Environment id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Cluster id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "topic",
+            "in": "path",
+            "description": "Topic name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "visibility",
+            "in": "query",
+            "description": "all | committed",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An event stream: progress frames, then one result",
+            "content": {
+              "text/event-stream": {}
+            }
+          },
+          "429": {
+            "description": "An analysis is already running on this cluster, or too many streams are open"
+          }
+        }
+      }
+    },
     "/api/environments/{env}/clusters/{id}/topics/{topic}/configs": {
       "get": {
         "tags": [
@@ -1382,6 +1441,200 @@
           "messages_read",
           "all"
         ]
+      },
+      "AnalysisProgress": {
+        "type": "object",
+        "description": "One analysis progress frame.",
+        "required": [
+          "startedAt",
+          "msgsScanned",
+          "bytesScanned",
+          "offsetsConsumed",
+          "offsetsTotal",
+          "malformedBatches",
+          "elapsedMs"
+        ],
+        "properties": {
+          "bytesScanned": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Key plus value bytes folded so far.",
+            "minimum": 0
+          },
+          "elapsedMs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Milliseconds since the scan started.",
+            "minimum": 0
+          },
+          "fraction": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Completion as a fraction in `0.0..=1.0`, where the offset range is\nknown. Compaction makes it an upper bound on work left, not a record\ncount."
+          },
+          "malformedBatches": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Batches that would not decode, so far.",
+            "minimum": 0
+          },
+          "msgsScanned": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Records folded so far.",
+            "minimum": 0
+          },
+          "offsetsConsumed": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Offsets consumed, across every partition."
+          },
+          "offsetsTotal": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Offsets the scan set out to consume."
+          },
+          "startedAt": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When the scan started, epoch milliseconds."
+          }
+        }
+      },
+      "AnalysisStats": {
+        "type": "object",
+        "description": "One accumulator's numbers: the topic's, or one partition's.",
+        "required": [
+          "totalMsgs",
+          "missingTimestamps",
+          "nullKeys",
+          "nullValues",
+          "approxUniqKeys",
+          "approxUniqValues",
+          "hourlyMsgCounts",
+          "hourlyTruncated",
+          "malformedBatches"
+        ],
+        "properties": {
+          "approxUniqKeys": {
+            "type": "integer",
+            "format": "int64",
+            "description": "**Estimated** distinct keys, from a cardinality sketch (±~1.6%).",
+            "minimum": 0
+          },
+          "approxUniqValues": {
+            "type": "integer",
+            "format": "int64",
+            "description": "**Estimated** distinct values.",
+            "minimum": 0
+          },
+          "hourlyMsgCounts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HourCount"
+            },
+            "description": "Records per hour, keyed by the hour's start in epoch milliseconds."
+          },
+          "hourlyTruncated": {
+            "type": "boolean",
+            "description": "Whether the hour map hit its bucket ceiling and stopped opening new\nhours. The chart is then a view, not the whole story."
+          },
+          "keySize": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SizeStats",
+                "description": "Key size statistics, over records that have a key."
+              }
+            ]
+          },
+          "malformedBatches": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Batches that would not decode. The scan continues past them; they are\nan explanation, not a failure.",
+            "minimum": 0
+          },
+          "maxOffset": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The highest offset scanned."
+          },
+          "maxTimestamp": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The newest timestamp seen."
+          },
+          "minOffset": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The lowest offset scanned."
+          },
+          "minTimestamp": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The oldest timestamp seen, epoch milliseconds. Records with no\ntimestamp are excluded and counted in `missingTimestamps`."
+          },
+          "missingTimestamps": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Records whose producer set no timestamp.",
+            "minimum": 0
+          },
+          "nullKeys": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Records with no key.",
+            "minimum": 0
+          },
+          "nullValues": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Records with no value. On a compacted topic this is the tombstone\ncount — `None` is a tombstone, not an empty value.",
+            "minimum": 0
+          },
+          "partition": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The partition, or `None` on the totals row."
+          },
+          "totalMsgs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Records scanned. On a compacted or transactional topic this is\nlegitimately below the offset range.",
+            "minimum": 0
+          },
+          "valueSize": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SizeStats",
+                "description": "Value size statistics, over records that have a value."
+              }
+            ]
+          }
+        }
       },
       "ApiErrorBody": {
         "type": "object",
@@ -3941,6 +4194,27 @@
           }
         }
       },
+      "HourCount": {
+        "type": "object",
+        "description": "One bar of the hourly chart.",
+        "required": [
+          "hourStart",
+          "count"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Records stamped within it.",
+            "minimum": 0
+          },
+          "hourStart": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The hour's start, epoch milliseconds."
+          }
+        }
+      },
       "Identity": {
         "type": "object",
         "description": "The caller, for the header and for deciding what to offer them.\n\nNot \"what may I do\" — that is per cluster and rides on [`ClusterCard`] as\n`grants`. This is who the request is from, which the UI needs to render a\n\"signed in as\" line and to know whether signing in is even a thing this\ndeployment does.",
@@ -5000,6 +5274,86 @@
           "toTime"
         ]
       },
+      "SizeStats": {
+        "type": "object",
+        "description": "Size statistics for one side of the record.\n\n`sum`, `min`, `max` and `avg` are exact; **the percentiles are sketch\nestimates** with a bounded relative error of ~±4%, and the UI must label\nthem so — a p99 read as exact gets used to justify a partitioning decision.",
+        "required": [
+          "sum",
+          "min",
+          "max",
+          "avg"
+        ],
+        "properties": {
+          "avg": {
+            "type": "number",
+            "format": "double",
+            "description": "Mean, exact."
+          },
+          "max": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Largest, exact.",
+            "minimum": 0
+          },
+          "min": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Smallest, exact.",
+            "minimum": 0
+          },
+          "p50": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Median, estimated.",
+            "minimum": 0
+          },
+          "p75": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "75th percentile, estimated.",
+            "minimum": 0
+          },
+          "p95": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "95th percentile, estimated.",
+            "minimum": 0
+          },
+          "p99": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "99th percentile, estimated.",
+            "minimum": 0
+          },
+          "p999": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "99.9th percentile, estimated.",
+            "minimum": 0
+          },
+          "sum": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Total bytes, exact.",
+            "minimum": 0
+          }
+        }
+      },
       "StreamPhase": {
         "type": "string",
         "description": "Where a stream is in its life.\n\nA backward window emits `seeking` and nothing else until the whole walk\nfinishes, because [`kafka_read::tail`] returns a `Vec` — there are no\npartial results to show, and a spinner that never changes looks identical\nto a hang.",
@@ -5413,6 +5767,67 @@
             "format": "int32",
             "description": "The version within that subject.",
             "minimum": 0
+          }
+        }
+      },
+      "TopicAnalysis": {
+        "type": "object",
+        "description": "The terminal value of one analysis.",
+        "required": [
+          "startedAt",
+          "finishedAt",
+          "complete",
+          "totalStats",
+          "partitionStats",
+          "errors"
+        ],
+        "properties": {
+          "clock": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Which clock stamped the timestamps: `createTime`, `logAppendTime`, or\n`mixed`. `None` on a topic with no records. The hourly chart plots\nwhichever this names, and should say so."
+          },
+          "complete": {
+            "type": "boolean",
+            "description": "Whether the whole planned window was read. **A partial result is\nflagged, never silently presented as the topic's numbers** — statistics\nthat look complete and are wrong are worse than an error."
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResourceError"
+            },
+            "description": "Whatever failed while reading — the same envelope shape the rest of\nthe API uses, so a partition lost mid-scan is a named entry rather\nthan a discarded result."
+          },
+          "finishedAt": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When it finished — or when it stopped, if `complete` is false."
+          },
+          "partitionStats": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AnalysisStats"
+            },
+            "description": "Per partition, in index order."
+          },
+          "scannedFraction": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "How much of the planned offset range was consumed, where known."
+          },
+          "startedAt": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When the scan started, epoch milliseconds."
+          },
+          "totalStats": {
+            "$ref": "#/components/schemas/AnalysisStats",
+            "description": "The whole topic's numbers."
           }
         }
       },

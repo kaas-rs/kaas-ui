@@ -78,6 +78,15 @@ pub struct AppState {
     /// *browser*, which never saw it stripped. Everything that redirects into
     /// the application builds its target from [`Self::app_root`].
     base_prefix: String,
+    /// Which clusters have an analysis running, keyed `(environment, id)`.
+    ///
+    /// One per cluster, and the ceiling is about **everyone else's latency**
+    /// rather than memory: kaas-lib keeps one connection per broker, Kafka
+    /// answers a connection in order, and an analysis fetches continuously
+    /// for minutes — so a second one would sit behind the first in the same
+    /// queue and every `ListOffsets` behind both. See upstream ask 11; until
+    /// it lands, this is the honest bound.
+    analyses: Arc<std::sync::Mutex<std::collections::HashSet<(String, String)>>>,
 }
 
 impl AppState {
@@ -94,7 +103,33 @@ impl AppState {
             stopping: Arc::new(stopping),
             shutdown,
             base_prefix: String::new(),
+            analyses: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         }
+    }
+
+    /// Claim the one analysis slot a cluster has, or say who is in it.
+    ///
+    /// The slot is released by dropping the permit — the same shape as the
+    /// stream governor, and for the same reason: an analysis that ends by the
+    /// client vanishing runs no teardown of its own.
+    pub fn begin_analysis(&self, env: &str, id: &str) -> Result<AnalysisPermit, ApiError> {
+        let key = (env.to_owned(), id.to_owned());
+        let mut running = self
+            .analyses
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !running.insert(key.clone()) {
+            // 429 and not 409: nothing about the request conflicts, the
+            // resource is busy and retrying later is the right response.
+            return Err(ApiError::too_many_requests(format!(
+                "an analysis is already running on cluster {id:?}; a full-topic read \
+                 occupies the shared broker connections, so one runs at a time"
+            )));
+        }
+        Ok(AnalysisPermit {
+            analyses: Arc::clone(&self.analyses),
+            key,
+        })
     }
 
     /// Serve under a path prefix.
@@ -273,6 +308,22 @@ impl AppState {
     }
 }
 
+/// One cluster's held analysis slot. Dropping it releases the cluster.
+#[derive(Debug)]
+pub struct AnalysisPermit {
+    analyses: Arc<std::sync::Mutex<std::collections::HashSet<(String, String)>>>,
+    key: (String, String),
+}
+
+impl Drop for AnalysisPermit {
+    fn drop(&mut self) {
+        self.analyses
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&self.key);
+    }
+}
+
 /// So `PrivateCookieJar` can be extracted in a handler.
 impl FromRef<AppState> for Key {
     fn from_ref(state: &AppState) -> Self {
@@ -315,7 +366,9 @@ pub fn router(state: AppState) -> Router {
 }
 
 fn api_router() -> Router<AppState> {
-    use routes::{capabilities, clusters, configs, groups, me, messages, schemas, spec, topics};
+    use routes::{
+        analysis, capabilities, clusters, configs, groups, me, messages, schemas, spec, topics,
+    };
 
     Router::new()
         // The document that describes everything below it, including itself.
@@ -383,6 +436,13 @@ fn api_router() -> Router<AppState> {
         .route(
             "/environments/{env}/clusters/{id}/topics/{topic}/messages/{partition}/{offset}",
             get(messages::one),
+        )
+        // The statistics tab: a full-topic scan folded into an aggregate,
+        // over SSE. One GET — cancellation is closing the response, so the
+        // no-mutating-route invariant needs no exception for it.
+        .route(
+            "/environments/{env}/clusters/{id}/topics/{topic}/analysis",
+            get(analysis::analysis),
         )
         .route(
             "/environments/{env}/clusters/{id}/groups",

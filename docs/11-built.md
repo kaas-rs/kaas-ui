@@ -749,6 +749,46 @@ longer exists. 61 assertions, green.
   matters most — `prod` declares no registry of that id, and the reply is
   indistinguishable from "not yours".
 
+## The statistics tab (issue #1, after Phase 6)
+
+An on-demand full-topic analysis in the shape of kafbat's, landed as a
+follow-on to Phase 3 rather than a phase of its own — the issue's design held
+almost unchanged, and the streaming infrastructure carried its second consumer
+without modification. What was decided at the point of building:
+
+- **No sketch crates.** HyperLogLog (2^12 registers, ±~1.6%) and a
+  log-bucketed size histogram (8 buckets per octave, ±~4% on percentiles) are
+  ~150 lines in `kaas-ui-core/src/analysis.rs`, panic-free under the workspace
+  lints without an `allow` — which was the selection criterion the issue set
+  for choosing a crate, met by not needing one.
+- **A partial result is flagged, never dressed as complete.** The lifetime
+  ceiling (30 minutes), a mid-scan error, and shutdown all emit a `result`
+  with `complete: false`, the scanned fraction, and the error named. Until
+  upstream ask 13 lands, one partition's failure costs the *rest* of the scan;
+  the fold up to that point still leaves, labelled.
+- **One analysis per cluster**, enforced by a permit in `AppState` beside the
+  stream governor's budget, with the refusal naming why: a full-topic read
+  occupies the shared per-broker connection (ask 11), so the ceiling is about
+  everyone else's latency rather than memory.
+- **The result lives in the browser's query cache.** The stream-not-in-cache
+  rule holds — a *result* is a terminal value, so revisiting the tab is
+  instant with no server-side store. Two people analysing one topic scan it
+  twice; sharing would cost an in-memory store and per-replica amnesia.
+- **The hour map is capped** at 10,000 buckets, so a producer writing garbage
+  timestamps costs bounded memory; the result carries `hourlyTruncated`
+  rather than a silently narrowed chart. Records with no timestamp are
+  counted, not plotted as 1970.
+- Cancellation is closing the stream, exactly as designed: the pump selects on
+  the reader going away, Radix unmounting the hidden tab panel closes the
+  `EventSource`, and `no_mutating_route` needed no exception.
+
+Measured against both clusters (`cargo xtask live`, 72 assertions): totals
+agree with offset spans exactly on both; the hourly histogram populates on
+`kaas` despite its missing timestamp index — the histogram reads timestamps
+off records rather than seeking by time; fractions are monotonic and capped;
+a second analysis on a busy cluster answers 429 and the slot frees when the
+response drops.
+
 ## Upstream asks these phases raised
 
 Filed in [reference/upstream-asks.md](reference/upstream-asks.md), open against

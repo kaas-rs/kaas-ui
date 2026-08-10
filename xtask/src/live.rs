@@ -838,6 +838,178 @@ async fn assertions() -> Result<Acceptance, String> {
         );
     }
 
+    // --- analysis: the statistics tab's full-topic scan ----------------------
+    //
+    // `kaas-canary-v1` exists on both clusters and scans in seconds. The
+    // assertions are internal-consistency properties rather than absolute
+    // counts, because the canary producer is writing while this runs. The
+    // histogram check is the acceptance criterion for `kaas` specifically:
+    // that broker holds no timestamp index, but the histogram reads
+    // timestamps off records rather than seeking by time, so the degradation
+    // that breaks `sinceTime` there must not touch this view.
+    for id in &ids {
+        let base = format!("/api/environments/{ENV}/clusters/{id}/topics/kaas-canary-v1");
+        let response = client
+            .get(url(&format!("{base}/analysis")))
+            .timeout(Duration::from_secs(180))
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        if !response.status().is_success() {
+            acceptance.check(
+                &format!("{id}: an analysis opens"),
+                Err(format!("got {}", response.status())),
+            );
+            continue;
+        }
+        let body = response.text().await.map_err(|e| e.to_string())?;
+
+        let mut result: Option<Value> = None;
+        let mut fractions: Vec<f64> = Vec::new();
+        let mut lines = body.lines().peekable();
+        while let Some(line) = lines.next() {
+            let Some(event) = line.strip_prefix("event: ") else {
+                continue;
+            };
+            let Some(data) = lines.next().and_then(|next| next.strip_prefix("data: ")) else {
+                continue;
+            };
+            match event {
+                "result" => result = serde_json::from_str(data).ok(),
+                "progress" => {
+                    if let Ok(frame) = serde_json::from_str::<Value>(data)
+                        && let Some(fraction) = frame["fraction"].as_f64()
+                    {
+                        fractions.push(fraction);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let Some(result) = result else {
+            acceptance.check(
+                &format!("{id}: an analysis ends in a result"),
+                Err("the stream closed with no result event".to_owned()),
+            );
+            continue;
+        };
+
+        // On a non-compacted topic every partition's count is exactly its
+        // scanned offset span — the property `livetest probe` is the oracle
+        // for, checked here through the analysis's own numbers.
+        let consistent = result["partitionStats"]
+            .as_array()
+            .is_some_and(|partitions| {
+                !partitions.is_empty()
+                    && partitions.iter().all(|p| {
+                        match (
+                            p["totalMsgs"].as_i64(),
+                            p["minOffset"].as_i64(),
+                            p["maxOffset"].as_i64(),
+                        ) {
+                            (Some(msgs), Some(low), Some(high)) => msgs == high - low + 1,
+                            _ => false,
+                        }
+                    })
+            });
+        acceptance.check(
+            &format!("{id}: an analysis completes and its counts match its offsets"),
+            if result["complete"].as_bool() == Some(true) && consistent {
+                Ok(format!("{} records", result["totalStats"]["totalMsgs"]))
+            } else {
+                Err(format!(
+                    "complete={}, counts-match-offsets={consistent}",
+                    result["complete"]
+                ))
+            },
+        );
+
+        let hours = result["totalStats"]["hourlyMsgCounts"]
+            .as_array()
+            .map_or(0, Vec::len);
+        acceptance.check(
+            &format!("{id}: the hourly histogram is populated"),
+            if hours > 0 {
+                Ok(format!("{hours} hour(s)"))
+            } else {
+                Err("no hourly buckets — timestamps were not read off records".to_owned())
+            },
+        );
+
+        acceptance.check(
+            &format!("{id}: analysis progress is monotonic and capped at 1"),
+            if fractions.windows(2).all(|pair| pair[0] <= pair[1])
+                && fractions.iter().all(|fraction| *fraction <= 1.0)
+            {
+                Ok(format!("{} frame(s)", fractions.len()))
+            } else {
+                Err(format!("{fractions:?}"))
+            },
+        );
+    }
+
+    // --- one analysis per cluster --------------------------------------------
+    //
+    // The ceiling is about everyone else's latency, not memory: an analysis
+    // fetches continuously on the shared per-broker connection, so a second
+    // one would queue behind the first — see upstream ask 11. Holding an open
+    // response on kperf-bench (146M records: it will not finish under this
+    // test) and asking for a second must refuse with 429, and dropping the
+    // first must free the slot, because dropping the response is the only
+    // cancellation there is.
+    {
+        let target = ids.first().cloned().unwrap_or_default();
+        let held = client
+            .get(url(&format!(
+                "/api/environments/{ENV}/clusters/{target}/topics/kperf-bench/analysis"
+            )))
+            .timeout(Duration::from_secs(120))
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        let second = client
+            .get(url(&format!(
+                "/api/environments/{ENV}/clusters/{target}/topics/kaas-canary-v1/analysis"
+            )))
+            .timeout(Duration::from_secs(10))
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        acceptance.check(
+            "a second analysis on a busy cluster is refused with 429",
+            if second.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                Ok(String::new())
+            } else {
+                Err(format!("got {}", second.status()))
+            },
+        );
+        drop(second);
+        drop(held);
+
+        // The slot frees when the reader goes away — the same release the
+        // stream governor's permit has, asserted the same way: by using it.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let after = client
+            .get(url(&format!(
+                "/api/environments/{ENV}/clusters/{target}/topics/kaas-canary-v1/analysis"
+            )))
+            .timeout(Duration::from_secs(10))
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        acceptance.check(
+            "dropping an analysis response frees the cluster's slot",
+            if after.status().is_success() {
+                Ok(String::new())
+            } else {
+                Err(format!("got {}", after.status()))
+            },
+        );
+    }
+
     // --- streams are bounded, and the bound releases -------------------------
     {
         let target = ids.first().cloned().unwrap_or_default();

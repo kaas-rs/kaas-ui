@@ -329,6 +329,76 @@ export interface TopicDetail {
   logDirEntryCount: number | null
 }
 
+/** One analysis progress frame, off the `progress` SSE event. */
+export interface AnalysisProgress {
+  startedAt: number
+  /** 0..1 where the offset range is known; an upper bound under compaction. */
+  fraction?: number
+  msgsScanned: number
+  bytesScanned: number
+  offsetsConsumed: number
+  offsetsTotal: number
+  malformedBatches: number
+  elapsedMs: number
+}
+
+/**
+ * Size statistics for one side of the record. `sum`/`min`/`max`/`avg` are
+ * exact; the percentiles are sketch estimates (±~4%) and must be labelled so.
+ */
+export interface SizeStats {
+  sum: number
+  min: number
+  max: number
+  avg: number
+  p50?: number
+  p75?: number
+  p95?: number
+  p99?: number
+  p999?: number
+}
+
+export interface HourCount {
+  hourStart: number
+  count: number
+}
+
+/** One accumulator's numbers: the topic's (partition null) or one partition's. */
+export interface AnalysisStats {
+  partition?: number
+  totalMsgs: number
+  minOffset?: number
+  maxOffset?: number
+  minTimestamp?: number
+  maxTimestamp?: number
+  missingTimestamps: number
+  nullKeys: number
+  /** On a compacted topic this is the tombstone count. */
+  nullValues: number
+  /** Estimated (cardinality sketch, ±~1.6%). */
+  approxUniqKeys: number
+  approxUniqValues: number
+  keySize?: SizeStats
+  valueSize?: SizeStats
+  hourlyMsgCounts: HourCount[]
+  hourlyTruncated: boolean
+  malformedBatches: number
+}
+
+/** The terminal `result` event of one analysis. */
+export interface TopicAnalysis {
+  startedAt: number
+  finishedAt: number
+  /** False when the scan was cut short — the numbers cover what was read. */
+  complete: boolean
+  scannedFraction?: number
+  /** Which clock stamped the timestamps: createTime, logAppendTime or mixed. */
+  clock?: string
+  totalStats: AnalysisStats
+  partitionStats: AnalysisStats[]
+  errors: ResourceError[]
+}
+
 export interface ConfigEntry {
   name: string
   value: string | null

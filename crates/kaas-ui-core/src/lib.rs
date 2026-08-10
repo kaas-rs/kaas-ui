@@ -20,6 +20,7 @@
     )
 )]
 
+pub mod analysis;
 pub mod capabilities;
 pub mod config;
 pub mod decode;

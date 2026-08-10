@@ -5,6 +5,7 @@
 //! way an architecture stays true is that breaking it does not compile — or,
 //! failing that, does not merge.
 
+pub mod analysis;
 pub mod auth;
 pub mod capabilities;
 pub mod clusters;

@@ -107,7 +107,12 @@ export type MessageSearch = Fields
  * below onto `overview`, which is where that content now lives, so links
  * shared under either name still open on the view they were pointing at.
  */
-export const TOPIC_TABS = ["overview", "configs", "messages"] as const
+export const TOPIC_TABS = [
+  "overview",
+  "configs",
+  "messages",
+  "statistics",
+] as const
 
 export type TopicTab = (typeof TOPIC_TABS)[number]
 

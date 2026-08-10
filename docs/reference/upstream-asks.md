@@ -314,6 +314,89 @@ records and is not reachable from `ScanSpec`. A window smaller than that emits
 no `Progress` event at all — only the `Done` one — so kaas-ui's default
 500-record window has a bar with exactly one frame. It reads in ~40 ms, so
 nothing is visibly wrong today, but the cadence should be the caller's to pick.
+The other end of the same hardcoding: on megabyte records a thousand of them
+is a long silence, and on a firehose it is several events a millisecond. The
+analysis route throttles to one frame a second on its own side, which fixes
+the flood and cannot fix the silence — a record count is simply the wrong unit
+for a progress bar, and elapsed time is the right one.
+
+---
+
+## 13. A partition-level failure must not fail the whole scan
+
+**The ask the statistics tab is most exposed to.** `scan.rs` — any error out
+of `refill()` latches `done` and yields `Some(Err(error))`, ending the stream:
+
+```rust
+Err(error) => {
+    self.done = true;
+    return Some(Err(error));
+}
+```
+
+One partition's leader election, one `NotLeaderOrFollower`, one transient
+disconnect discards an entire analysis. On a large topic that is potentially
+an hour of reading thrown away because one partition of sixteen hiccuped at
+95%, and the retry starts from `Earliest` again.
+
+This is kaas-ui's rule 5 — *partial failure is a result* — pushed down one
+level, exactly as rule 4 is kaas-lib's rule 1 pushed up one:
+
+- a `ScanEvent::PartitionFailed { partition, error }` variant, after which the
+  scan **continues with its remaining partitions**
+- `Done` reporting which partitions failed, so a caller can label the result
+- `Err` on the stream reserved for what it genuinely means today: the scan
+  could not be *planned* — topic gone, no metadata, no leader for anything
+
+Every consumer benefits, but the analysis is the one that structurally needs
+it: it is the longest-running read in the product, so it is the most exposed
+to a transient fault, and it is the only one whose output is an aggregate a
+missing partition silently corrupts. A browse that lost a partition still
+shows records; a `totalMsgs` that quietly omits partition 7 is *wrong*, not
+partial. kaas-ui ships around it today by flagging the whole result
+`complete: false` with the error named — honest, and strictly worse than 15
+good partition rows and one error row, which is what the rest of the API
+already does with `PerItem`.
+
+---
+
+## 14. `ScanProgress::fraction` saturates at `u32`
+
+`scan.rs`:
+
+```rust
+let consumed = u32::try_from(self.offsets_consumed.max(0)).unwrap_or(u32::MAX);
+let total = u32::try_from(self.offsets_total.max(1)).unwrap_or(u32::MAX);
+Some((f64::from(consumed) / f64::from(total)).clamp(0.0, 1.0))
+```
+
+Past ~4.29e9 offsets `total` saturates while `consumed` is still real, so the
+fraction **overstates** progress; once `consumed` saturates too it pins at
+`1.0` for the rest of the scan. Both are offset ranges rather than record
+counts, so a long-retention topic gets there well before it holds that many
+records.
+
+The `u32` is clearly there to keep `f64::from` lossless under the workspace
+lints, which is the right instinct — the fix is arithmetic that stays exact
+without the ceiling: scale the ratio in `i64`/`i128` before converting, or
+convert with one explicit, commented allow. Today it distorts a progress bar;
+with ask 13's `Done` accounting it would distort a number people read.
+
+---
+
+## 15. Surface skipped control batches and aborted records
+
+`batch.rs` already counts `control_batches_skipped` and
+`aborted_records_skipped` on the decode result, and `scan.rs` reads them —
+but only to decide whether to advance the cursor. They never reach
+`ScanProgress`, so they are computed and thrown away.
+
+For the analysis they are the explanation of an otherwise alarming number. On
+a transactional topic `totalMsgs` is legitimately far below the offset range,
+and without these counters the UI cannot tell the reader whether that gap is
+compaction, transaction markers, or aborted records — three very different
+facts about their topic. Two `u64`s on `ScanProgress` turn "your numbers don't
+add up" into an explanation.
 
 ---
 
@@ -325,3 +408,14 @@ never wants any of them.
 This is worth stating positively rather than as an omission: **kaas-lib having
 no producer stops being a gap to work around and becomes alignment with the
 product.**
+
+Also not asked for, so it is not proposed again: **a payload-free "stats only"
+scan** for the analysis. `RecordBatchDecoder` decodes a whole batch into a
+`Vec<Record>` — decoding is batch-level — and kaas-lib explicitly refuses to
+vendor the record loop rather than keep a second implementation of a wire
+schema in step with upstream. A payload-free path would need exactly that. And
+the cost it would avoid is smaller than it looks: `Record::key`/`value` are
+`Bytes`, refcounted slices of the fetch buffer rather than copies, and
+`payload_len()` is already key-plus-value for free. The remaining per-record
+cost is the `topic: String` clone and the headers `Vec`, which is not worth a
+second decoder.

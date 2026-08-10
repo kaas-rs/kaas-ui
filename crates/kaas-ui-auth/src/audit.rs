@@ -49,6 +49,11 @@ pub enum Kind {
     /// A stream opened. Rows are not counted: the entry is written when the
     /// stream starts, because that is when disclosure begins.
     Stream,
+    /// A full-topic analysis started — every record read from the beginning.
+    /// Written when the scan opens, like `Stream`, because that is when
+    /// disclosure begins; the aggregate that leaves discloses no payloads,
+    /// but the scan reads all of them.
+    Analysis,
 }
 
 /// One disclosure.

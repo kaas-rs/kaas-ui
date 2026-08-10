@@ -27,6 +27,7 @@ import type {
 } from "@/api/types"
 import { MessageBrowser } from "@/features/messages/browser"
 import type { TopicSearch, TopicTab } from "@/features/messages/search"
+import { TopicStatistics } from "@/features/statistics"
 import {
   Empty,
   ErrorChips,
@@ -166,6 +167,11 @@ export function TopicDetail({
           {mayReadMessages ? (
             <TabsTrigger value="messages">messages</TabsTrigger>
           ) : null}
+          {/* Gated like messages: an analysis reads every payload, so it
+              spends the same grant. */}
+          {mayReadMessages ? (
+            <TabsTrigger value="statistics">statistics</TabsTrigger>
+          ) : null}
         </TabsList>
 
         <TabsContent value="overview" className="mt-4 space-y-6">
@@ -193,6 +199,17 @@ export function TopicDetail({
         </TabsContent>
         <TabsContent value="configs" className="mt-4">
           <TopicConfigs envId={envId} clusterId={clusterId} topic={topic} />
+        </TabsContent>
+        {/* Radix unmounts the hidden panel, and the statistics component
+            closes its stream on unmount — so leaving this tab cancels a
+            running analysis, which is the whole cancellation story. */}
+        <TabsContent value="statistics" className="mt-4">
+          <TopicStatistics
+            envId={envId}
+            clusterId={clusterId}
+            topic={topic}
+            info={info}
+          />
         </TabsContent>
         {/* The panel is given a height rather than left to grow: the list is
             virtualized and the split pane is a flex box, and neither can work
@@ -699,7 +716,8 @@ function Partitions({
                     <TableCell
                       className={cn(
                         "text-right font-mono",
-                        (lags.get(partition.partition) ?? 0) > 0 && "text-warn-ink"
+                        (lags.get(partition.partition) ?? 0) > 0 &&
+                          "text-warn-ink"
                       )}
                     >
                       {pending(
