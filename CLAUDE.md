@@ -213,7 +213,13 @@ active nav, focus ring, selected edge. For accent text on light use
   upstream ask 1 lands, read from an explicitly named broker and say so in the
   UI.
 - **`TailSpec::limit` is spread across partitions with `div_ceil`** — `limit=20`
-  on 16 partitions returns 32. The HTTP layer merges and truncates.
+  on 16 partitions returns 32. The HTTP layer merges and truncates. The same
+  rule *under-fills* on a topic with idle partitions — ⌈500/3⌉ = 167 when one
+  partition of three holds records — so backward reads first ask `ListOffsets`
+  which partitions are non-empty, restrict the spec to those, and compute
+  `hasMore` from the log-start bounds rather than from the budget
+  (`backward_bounds` in `routes/messages/mod.rs`). Unwound when
+  kaas-rs/kaas-lib#17 lands.
 - **Streams do not go in the TanStack Query cache.** SSE feeds a capped ring
   buffer in its own hook.
 - **Group kinds are four variants, not one struct with optional fields.**

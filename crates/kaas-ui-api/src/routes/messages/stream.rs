@@ -322,7 +322,15 @@ async fn pump(
     match plan {
         // A backward walk has nothing to stream: it buffers its whole window
         // before returning. Everything arrives at once, or an error does.
-        Plan::Backward { spec } => {
+        Plan::Backward { mut spec } => {
+            // Same mitigation as the page route: `tail` spreads its limit
+            // across partitions before knowing which hold anything, so on an
+            // unevenly-filled topic the window under-fills — restrict it to
+            // the partitions that can contribute. See `backward_bounds`.
+            let bounds = super::backward_bounds(&admin, &topic, spec.partitions.as_deref()).await;
+            if let Some(contributors) = bounds.contributors {
+                spec.partitions = Some(contributors);
+            }
             match kafka_read::tail(&cluster, &spec).await {
                 Ok(tails) => {
                     let mut rows: Vec<StreamRow> = Vec::new();

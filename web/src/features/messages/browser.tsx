@@ -538,7 +538,7 @@ function Terminal({
         {rows.length === 1 ? "" : "s"}
       </span>
       {exhausted ? (
-        <span>nothing further in this direction</span>
+        <span>no further records found in this direction</span>
       ) : (
         <Button
           size="sm"
