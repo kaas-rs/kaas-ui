@@ -661,6 +661,21 @@ pub struct OauthCredentials {
     /// underneath a running process goes unnoticed until something reconnects.
     #[serde(default)]
     pub client_secret_file: Option<PathBuf>,
+    /// The **name of** an environment variable holding the client secret.
+    ///
+    /// The name, not the value — `client_secret_env: KAFKA_OAUTH_CLIENT_SECRET`,
+    /// with the value arriving from a `secretKeyRef`. It is the shape Dex uses
+    /// for the same credential one container over, and it saves a volume: the
+    /// Secret is already in the namespace, and this reads it without mounting
+    /// it.
+    ///
+    /// Neither better nor worse than `client_secret_file` for secrecy — both
+    /// are readable by anything that can already read the process — so the
+    /// choice is about the deployment. A file survives `env` in a crash dump
+    /// and can be rotated under a running process; a variable needs no volume
+    /// and matches what everything else in this namespace does.
+    #[serde(default)]
+    pub client_secret_env: Option<String>,
     /// `scope` to request. Entra wants `<client-id>/.default` — the bare id,
     /// not `api://<client-id>/.default`, unless the app registration actually
     /// has an Application ID URI. Keycloak usually wants nothing.
@@ -697,6 +712,9 @@ impl std::fmt::Debug for OauthCredentials {
             .field("client_id", &self.client_id)
             .field("client_secret", &redacted(self.client_secret.is_some()))
             .field("client_secret_file", &self.client_secret_file)
+            // The variable's *name* is not a secret and is the whole
+            // diagnosis when it is the thing that is unset.
+            .field("client_secret_env", &self.client_secret_env)
             .field("scope", &self.scope)
             .field("audience", &self.audience)
             .field("credentials_in_body", &self.credentials_in_body)
@@ -1017,10 +1035,25 @@ impl Config {
                         )));
                     }
                     Some(SaslSettings::OauthBearer(oauth)) => {
-                        if oauth.client_secret.is_none() && oauth.client_secret_file.is_none() {
+                        let sources = usize::from(oauth.client_secret.is_some())
+                            + usize::from(oauth.client_secret_file.is_some())
+                            + usize::from(oauth.client_secret_env.is_some());
+                        if sources == 0 {
                             return Err(ConfigError::Invalid(format!(
-                                "cluster {:?} configures oauthbearer without a client_secret or \
-                                 client_secret_file",
+                                "cluster {:?} configures oauthbearer without a client_secret, \
+                                 client_secret_file or client_secret_env",
+                                cluster.id
+                            )));
+                        }
+                        // Two sources is not a fallback chain, it is a
+                        // question nobody can answer from the outside: which
+                        // one is live? Refusing costs one edit and removes a
+                        // class of "I rotated it and nothing changed".
+                        if sources > 1 {
+                            return Err(ConfigError::Invalid(format!(
+                                "cluster {:?} configures more than one client secret source; \
+                                 client_secret, client_secret_file and client_secret_env are \
+                                 alternatives, not an order of preference",
                                 cluster.id
                             )));
                         }
@@ -1740,6 +1773,68 @@ environments:
         }
     }
 
+    /// The deployment shape: the config names a variable, not a value.
+    #[test]
+    fn a_client_secret_can_come_from_a_named_environment_variable() {
+        let config = Config::from_yaml(
+            r#"
+environments:
+  - id: dev
+    kafka_clusters:
+      - id: strimzi
+        bootstrap: ["a:9094"]
+        tls: { ca_file: /etc/ca/ca.crt }
+        sasl:
+          mechanism: oauthbearer
+          token_endpoint: https://issuer/token
+          client_id: x
+          client_secret_env: KAFKA_OAUTH_CLIENT_SECRET
+"#,
+        )
+        .unwrap();
+        match config.environments[0].kafka_clusters[0].sasl.as_ref() {
+            Some(SaslSettings::OauthBearer(oauth)) => {
+                assert_eq!(
+                    oauth.client_secret_env.as_deref(),
+                    Some("KAFKA_OAUTH_CLIENT_SECRET")
+                );
+                assert!(oauth.client_secret.is_none() && oauth.client_secret_file.is_none());
+            }
+            other => panic!("expected oauthbearer, got {other:?}"),
+        }
+    }
+
+    /// Two sources is a question nobody can answer from the outside.
+    ///
+    /// A fallback chain would mean "I rotated the Secret and nothing changed"
+    /// is a thing that can happen quietly, with the inline value still
+    /// winning. There is no precedence to learn because there is no
+    /// precedence.
+    #[test]
+    fn two_client_secret_sources_are_refused_rather_than_ordered() {
+        let err = Config::from_yaml(
+            r#"
+environments:
+  - id: dev
+    kafka_clusters:
+      - id: strimzi
+        bootstrap: ["a:9094"]
+        tls: { ca_file: /etc/ca/ca.crt }
+        sasl:
+          mechanism: oauthbearer
+          token_endpoint: https://issuer/token
+          client_id: x
+          client_secret: inline
+          client_secret_env: KAFKA_OAUTH_CLIENT_SECRET
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            format!("{err}").contains("more than one client secret source"),
+            "{err}"
+        );
+    }
+
     #[test]
     fn oauthbearer_without_a_secret_is_rejected_at_startup() {
         let err = Config::from_yaml(
@@ -1757,7 +1852,7 @@ environments:
 "#,
         )
         .unwrap_err();
-        assert!(format!("{err}").contains("client_secret_file"), "{err}");
+        assert!(format!("{err}").contains("client_secret_env"), "{err}");
     }
 
     /// The one that costs a credential rather than a page.
@@ -1801,6 +1896,7 @@ environments:
             client_id: "a-client-id".to_owned(),
             client_secret: Some("sup3r-s3cret".to_owned()),
             client_secret_file: None,
+            client_secret_env: None,
             scope: None,
             audience: None,
             credentials_in_body: false,

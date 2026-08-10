@@ -92,18 +92,24 @@ kafka_clusters:
       mechanism: oauthbearer
       token_endpoint: https://login.microsoftonline.com/<tenant>/oauth2/v2.0/token
       client_id: <client-id>
-      client_secret_file: /etc/kaas-ui/oauth/client-secret
+      client_secret_env: KAFKA_OAUTH_CLIENT_SECRET   # or client_secret_file:
       scope: <client-id>/.default
 ```
 
 Four things about that block are load-bearing, and each has cost somebody an
 afternoon:
 
-- **`client_secret_file`, not `client_secret`.** The config is a ConfigMap;
-  the secret is a Secret. Inline is supported for a local run and is the wrong
-  answer for anything deployed. The file is read **once, at startup**, so
-  rotating the secret needs a restart — the config poller watches the config
-  file, and a Secret rewritten underneath a running process goes unnoticed.
+- **Not `client_secret`.** The config is a ConfigMap; the secret is a Secret.
+  Inline is supported for a local run and is the wrong answer for anything
+  deployed. The two that are not inline are `client_secret_file`, a mounted
+  key, and `client_secret_env`, the **name** of a variable the deployment
+  fills from a `secretKeyRef` — which is what the deployed config uses, since
+  it needs no volume and is the shape Dex already uses for the same credential
+  one container over. Setting more than one is refused rather than ordered:
+  a fallback chain makes "I rotated it and nothing changed" a thing that can
+  happen quietly. Either way it is read **once, at startup**, so a rotation
+  needs a pod restart — the config poller watches the config file, and a
+  Secret rewritten underneath a running process goes unnoticed.
 - **`/oauth2/v2.0/token`, not v1.** The v1 endpoint issues
   `iss: https://sts.windows.net/{tid}/`, which fails a broker pinned to the v2
   issuer. The symptom is a SASL failure whose reason is only in the *broker's*

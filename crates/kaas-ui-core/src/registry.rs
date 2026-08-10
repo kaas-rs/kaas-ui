@@ -355,13 +355,20 @@ fn build_sasl(cluster: &str, settings: &SaslSettings) -> Result<SaslConfig, Conf
             password_sasl(cluster, SaslMechanism::ScramSha512, credentials)
         }
         SaslSettings::OauthBearer(oauth) => {
-            let secret = match (&oauth.client_secret, &oauth.client_secret_file) {
-                (Some(inline), _) => inline.clone(),
-                (None, Some(path)) => read_secret(cluster, path)?,
+            let secret = match (
+                &oauth.client_secret,
+                &oauth.client_secret_file,
+                &oauth.client_secret_env,
+            ) {
+                (Some(inline), _, _) => inline.clone(),
+                (None, Some(path), _) => read_secret(cluster, path)?,
+                (None, None, Some(variable)) => read_secret_env(cluster, variable)?,
                 // Refused by `Config::validate`; unreachable through `load`.
-                (None, None) => {
+                (None, None, None) => {
                     return Err(invalid(
-                        "oauthbearer needs a client_secret or a client_secret_file".to_owned(),
+                        "oauthbearer needs a client_secret, a client_secret_file or a \
+                         client_secret_env"
+                            .to_owned(),
                     ));
                 }
             };
@@ -423,6 +430,27 @@ fn password_sasl(
         sasl = sasl.allow_plaintext_password();
     }
     Ok(sasl)
+}
+
+/// Read a secret out of a named environment variable.
+///
+/// The config names the variable and the deployment fills it — from a
+/// `secretKeyRef`, in the shape everything else in the namespace uses. An
+/// empty value counts as unset: a `secretKeyRef` to a key that does not exist
+/// fails the pod outright, but an *empty* key succeeds and would otherwise
+/// reach the issuer as a blank secret, which comes back as `invalid_client`
+/// and reads like the wrong secret rather than a missing one.
+fn read_secret_env(cluster: &str, variable: &str) -> Result<String, ConfigError> {
+    // The name, never the value.
+    match std::env::var(variable) {
+        Ok(value) if !value.trim().is_empty() => Ok(value.trim().to_owned()),
+        Ok(_) => Err(ConfigError::Invalid(format!(
+            "cluster {cluster:?}: ${variable} is set but empty"
+        ))),
+        Err(_) => Err(ConfigError::Invalid(format!(
+            "cluster {cluster:?}: ${variable} is not set"
+        ))),
+    }
 }
 
 /// Read a secret out of a mounted file.
