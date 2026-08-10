@@ -16,10 +16,11 @@ import { AlertTriangle } from "lucide-react"
 
 import { useEnvironment, useSubjectDetails, useSubjects } from "@/api/client"
 import type { RegistryCard, SubjectRow } from "@/api/types"
-import { Empty, Mono, Spinner } from "@/components/domain"
+import { Empty, Mono, RegistryCounts, Spinner } from "@/components/domain"
 import { PageTitle } from "@/components/page-title"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import {
   Table,
@@ -56,6 +57,16 @@ export function SchemaRegistry({
   // so they arrive into a table that is already on screen.
   const subjects = useSubjects(envId, registryId, query)
   const details = useSubjectDetails(envId, registryId, query)
+  // The registry's own numbers, which are not this table's. A third request
+  // only in name: `{limit: 0}` is the key the fleet card already asked under,
+  // so arriving here from the fleet finds it in the cache and it is one server
+  // -side summary of a listing that is itself cached.
+  //
+  // Deliberately without `search`. Everything else on this page narrows as you
+  // type — the subtitle, the table, the pager — and a card doing the same
+  // directly above the filter would leave nothing on screen still saying how
+  // big the registry is. This is the frame; the table is the query.
+  const summary = useSubjects(envId, registryId, { limit: 0 })
   // Who reads these. A registry serves the *environment*, so every subject
   // below is resolvable on every cluster that decodes against it — which is a
   // fact about the whole table and belongs above it, not repeated per row.
@@ -162,6 +173,20 @@ export function SchemaRegistry({
           and the wrong one. Nothing is said while everything is fine: the
           endpoint and the id are on the nav row's tooltip. */}
       <RegistryFault registry={registry} />
+
+      {/* The same three numbers the fleet card carries, from the same
+          summary, so arriving here confirms what sent you rather than
+          restating it differently. Above the filter because it describes what
+          is being filtered — and it is the one thing on the page that does
+          not move while you type. */}
+      <Card className="mb-4 py-4">
+        <CardContent className="px-5">
+          <RegistryCounts
+            summary={summary.data ?? null}
+            pending={summary.isPending}
+          />
+        </CardContent>
+      </Card>
 
       <div className="mb-4 flex flex-wrap items-center gap-4">
         <Input
