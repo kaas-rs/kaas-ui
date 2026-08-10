@@ -196,7 +196,10 @@ async fn serve(config_path: PathBuf, config: Config) -> Result<(), Box<dyn std::
         tracing::warn!("{warning}");
     }
 
-    let mut state = AppState::new(Arc::clone(&registry), policy);
+    // The API needs the prefix too, but only for one thing: a redirect's
+    // `Location` is consumed by the browser, which — unlike the router — never
+    // saw the proxy strip it.
+    let mut state = AppState::new(Arc::clone(&registry), policy).with_base_prefix(base.clone());
 
     // Discovery happens here, at startup, so a wrong issuer is a failure to
     // boot rather than a failure at somebody's first login. Sessions are

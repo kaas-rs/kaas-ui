@@ -110,7 +110,7 @@ pub async fn callback(
         // Either the browser arrived here without having started a login, or
         // the pending cookie expired underneath it. Both are "start again",
         // and neither is worth an error page with a stack of jargon.
-        return (jar, Redirect::to("/")).into_response();
+        return (jar, Redirect::to(&state.app_root())).into_response();
     };
 
     match provider
@@ -164,7 +164,7 @@ pub async fn callback(
                 roles,
                 provider.session_ttl(),
             );
-            (jar, Redirect::to("/")).into_response()
+            (jar, Redirect::to(&state.app_root())).into_response()
         }
         Err(error) => {
             // Deliberately loud in the log and vague in the response: which of
@@ -182,10 +182,13 @@ pub async fn callback(
 /// somebody out by being loaded — `SameSite=Lax` sends the cookie on a
 /// top-level `GET` navigation, which is exactly the case a logout link would
 /// be abused through.
-pub async fn logout(jar: PrivateCookieJar) -> Response {
+pub async fn logout(State(state): State<AppState>, jar: PrivateCookieJar) -> Response {
     (
         session::clear(jar, session::SESSION_COOKIE),
-        Redirect::to("/"),
+        // To the *application* root, which is the domain root only when no
+        // proxy mounts kaas-ui under a prefix. The router never sees the
+        // prefix, but this header is consumed by the browser, which does.
+        Redirect::to(&state.app_root()),
     )
         .into_response()
 }
@@ -196,4 +199,64 @@ pub async fn logout(jar: PrivateCookieJar) -> Response {
 /// not conceptually exist, and the frontend never offers them.
 fn no_provider() -> Response {
     ApiError::not_found("this deployment has no identity provider configured").into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::http::header::LOCATION;
+    use axum_extra::extract::cookie::Key;
+
+    use super::*;
+
+    fn state() -> AppState {
+        let config = kaas_ui_core::Config::from_yaml(
+            r#"
+environments:
+  - id: dev
+    kafka_clusters:
+      - id: kaas
+        bootstrap: ["kaas.kaas.svc.cluster.local:9092"]
+"#,
+        )
+        .expect("a valid fixture config");
+        AppState::new(
+            std::sync::Arc::new(arc_swap::ArcSwap::from_pointee(
+                kaas_ui_core::Registry::from_config(&config).expect("a valid fixture registry"),
+            )),
+            kaas_ui_auth::Policy::open(),
+        )
+    }
+
+    fn location(response: &Response) -> String {
+        response
+            .headers()
+            .get(LOCATION)
+            .and_then(|value| value.to_str().ok())
+            .expect("a redirect")
+            .to_owned()
+    }
+
+    /// The bug this pins: every redirect here used to say `Location: /`, which
+    /// is the *domain* root. Under a stripping proxy the router is right to
+    /// think it lives at `/` — the prefix is gone before routing — but this
+    /// header is consumed by the browser, which watched nothing get stripped.
+    /// So signing out at `https://host/proxy/8099/` landed on `https://host/`.
+    ///
+    /// Asserted on the `Location` header rather than on the return type, for
+    /// the same reason the logout-cookie fix is asserted on `Set-Cookie`: the
+    /// response is perfectly correct in every other respect.
+    #[tokio::test]
+    async fn logout_redirects_to_the_application_root_not_the_domain_root() {
+        let prefixed = state().with_base_prefix("/proxy/8099".to_owned());
+        let response = logout(State(prefixed), PrivateCookieJar::new(Key::generate())).await;
+        // The trailing slash is load-bearing: `/proxy/8099` is a different
+        // resource to code-server than `/proxy/8099/`.
+        assert_eq!(location(&response), "/proxy/8099/");
+    }
+
+    #[tokio::test]
+    async fn logout_at_the_root_still_redirects_to_the_root() {
+        let response = logout(State(state()), PrivateCookieJar::new(Key::generate())).await;
+        assert_eq!(location(&response), "/");
+    }
 }

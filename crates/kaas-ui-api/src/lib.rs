@@ -71,6 +71,13 @@ pub struct AppState {
     streams: Arc<streaming::StreamGovernor>,
     stopping: Arc<streaming::ShutdownSignal>,
     shutdown: streaming::Shutdown,
+    /// The path prefix a reverse proxy mounts kaas-ui under. Empty at the root.
+    ///
+    /// The router never needs it — a stripping proxy removed the prefix before
+    /// the request was routed — but a `Location` header is consumed by the
+    /// *browser*, which never saw it stripped. Everything that redirects into
+    /// the application builds its target from [`Self::app_root`].
+    base_prefix: String,
 }
 
 impl AppState {
@@ -86,6 +93,33 @@ impl AppState {
             streams: Arc::new(streaming::StreamGovernor::default()),
             stopping: Arc::new(stopping),
             shutdown,
+            base_prefix: String::new(),
+        }
+    }
+
+    /// Serve under a path prefix.
+    ///
+    /// Takes the [`ServerConfig::base_prefix`] shape — leading slash, no
+    /// trailing slash, empty for the root — so there is exactly one place that
+    /// normalises what an operator typed.
+    ///
+    /// [`ServerConfig::base_prefix`]: kaas_ui_core::config::ServerConfig::base_prefix
+    #[must_use]
+    pub fn with_base_prefix(mut self, prefix: String) -> Self {
+        self.base_prefix = prefix;
+        self
+    }
+
+    /// Where the application lives, as a redirect target.
+    ///
+    /// `/` on a deployment at the root; `{prefix}/` under one — the trailing
+    /// slash matters, because `Location: /proxy/8099` asks code-server for a
+    /// directory listing where `Location: /proxy/8099/` asks it for the app.
+    pub fn app_root(&self) -> String {
+        if self.base_prefix.is_empty() {
+            "/".to_owned()
+        } else {
+            format!("{}/", self.base_prefix)
         }
     }
 
