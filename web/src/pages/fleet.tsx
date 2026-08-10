@@ -1,7 +1,7 @@
 import { Link } from "@tanstack/react-router"
 import { ArrowRight, RefreshCw } from "lucide-react"
 
-import { useFleet } from "@/api/client"
+import { useFleet, useSubjects } from "@/api/client"
 import type {
   ClusterCard as ClusterCardData,
   EnvironmentRegistry,
@@ -13,6 +13,8 @@ import {
   ClusterCounts,
   Empty,
   RESOURCE_KINDS,
+  RegistryCounts,
+  RegistryStatusBadge,
   byResourceKind,
   SnapshotAge,
   Spinner,
@@ -21,7 +23,6 @@ import {
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardFooter, CardHeader } from "@/components/ui/card"
 import { PageTitle } from "@/components/page-title"
-import { cn } from "@/lib/utils"
 
 /**
  * The fleet, one section per environment.
@@ -139,8 +140,20 @@ export function Environment({ section }: { section: EnvironmentSection }) {
         hold a 320px track on a 300px viewport and push the page into a
         horizontal scroll. Below that width it is one column, above it as many
         as fit, with no breakpoint to keep in sync.
+
+        `auto-rows-fr` is what makes every card in the section one height rather
+        than every card in a *row*. Stretching alone equalises siblings that
+        happen to share a row, so a registry that wrapped onto the second row
+        went back to being shorter than the clusters above it — the one place
+        the difference is most visible, and the one it least means anything.
+        With equal rows the grid is a grid, and what varies between cards is
+        what they say.
+
+        From `sm` up, because below it there is one column: equal heights buy
+        nothing when every row holds one card, and would cost a phone a screen
+        of blank space under each short one.
       */}
-      <div className="grid gap-4 grid-cols-[repeat(auto-fill,minmax(min(20rem,100%),1fr))]">
+      <div className="grid gap-4 grid-cols-[repeat(auto-fill,minmax(min(20rem,100%),1fr))] sm:auto-rows-fr">
         {section.clusters.map((card) => (
           <FleetCard key={card.id} card={card} />
         ))}
@@ -224,7 +237,11 @@ function FleetCard({ card }: { card: ClusterCardData }) {
         )}
       </CardContent>
 
-      <CardFooter className="border-t px-4 pt-3 [.border-t]:pt-3">
+      {/* `mt-auto` is what makes equal heights readable rather than merely
+          equal: the card stretches to its row, and the slack goes above this
+          line instead of below it, so the footers of a row sit on one
+          baseline whatever each card had to say. */}
+      <CardFooter className="mt-auto border-t px-4 pt-3 [.border-t]:pt-3">
         <SnapshotAge
           ageMs={card.snapshotAgeMs}
           asOfMs={fleet.dataUpdatedAt}
@@ -245,20 +262,25 @@ function FleetCard({ card }: { card: ClusterCardData }) {
 }
 
 /**
- * Something in this environment that is not a Kafka cluster.
- *
- * Inventory, not monitoring. kaas-ui dials none of these, so the card carries
- * no status badge and says so — a green dot earned by a correctly typed URL
- * would be worse than no dot at all. `self-start` keeps it its own height
- * rather than stretching to match a cluster card three times as tall.
- */
-/**
  * A schema registry, which is the one non-cluster kaas-ui actually dials.
  *
- * So unlike [`ResourceTile`] it has a status worth rendering and a page worth
- * opening. `usedBy` empty is a real answer — declared, and nothing decodes
- * against it — and saying so is the whole reason a registry nobody references
- * is listed at all.
+ * So unlike [`ResourceTile`] it has a status worth rendering, numbers worth
+ * counting and a page worth opening — which is why it is built like
+ * [`FleetCard`] and not like the inventory tiles below it: same header, same
+ * badge shape, same stat grid, same footer with the link out. A reader
+ * scanning the row should be able to tell what a card *is* from its icon and
+ * its stats, not from its layout.
+ *
+ * The numbers are the subject listing's summary, fetched here rather than
+ * ridden along on `/api/fleet`. Two reasons, and both are why clusters connect
+ * lazily: the fleet response must not wait on a registry that is not
+ * answering, and one registry's outage must degrade one card. So this card
+ * probes, and a registry nobody had decoded against yet stops reading
+ * `unprobed` the moment somebody looks at the fleet — that is the honest
+ * outcome of having asked, not a state being papered over.
+ *
+ * `usedBy` empty is a real answer — declared, and nothing decodes against it —
+ * and saying so is the whole reason a registry nobody references is listed.
  */
 function RegistryTile({
   envId,
@@ -269,11 +291,30 @@ function RegistryTile({
 }) {
   const { registry, usedBy } = entry
   const Icon = RESOURCE_KINDS.schema_registry.icon
+  // `limit: 0` — the counts, and not one row of the thing being counted. They
+  // are computed over the whole listing server-side, which is where the names
+  // already are; asking for them by downloading every subject name onto a card
+  // would make the fleet page cost the size of the biggest registry on it.
+  const subjects = useSubjects(envId, registry.id, { limit: 0 })
+
+  // The card the *registry* just answered with beats the one the fleet was
+  // assembled from: this component has since asked it a question, and a badge
+  // saying `unprobed` beside a subject count would be reporting a state that
+  // this very render disproved. It falls back while the listing is in flight,
+  // and on a listing that failed — where the fleet's view is all there is.
+  const live = subjects.data?.registry ?? registry
   const broken =
-    registry.status === "unreachable" || registry.status === "misconfigured"
+    live.status === "unreachable" || live.status === "misconfigured"
+  // A 404 or a 5xx from our own API, which is not the registry being down —
+  // that arrives as a `200` with an empty list and a card that says so.
+  const error = subjects.error
+    ? (subjects.error as Error).message
+    : broken
+      ? (live.error ?? live.status)
+      : null
 
   return (
-    <Card className="gap-3 self-start py-4">
+    <Card className="gap-3 py-4">
       <CardHeader className="gap-2 px-4">
         <div className="flex items-start justify-between gap-3">
           <Link
@@ -284,69 +325,127 @@ function RegistryTile({
           >
             {registry.name}
           </Link>
-          <span
-            className={cn(
-              "shrink-0 rounded-sm border px-1.5 py-0.5 text-[11px]",
-              registry.status === "ready" && "border-ok/50 text-ok-ink",
-              registry.status === "unreachable" &&
-                "border-warn-ink/50 text-warn-ink",
-              registry.status === "misconfigured" &&
-                "border-danger/50 text-danger",
-              registry.status === "unprobed" && "border-dashed text-ink-faint"
-            )}
-            title={registry.error ?? undefined}
-          >
-            {registry.status}
-          </span>
+          <RegistryStatusBadge
+            status={live.status}
+            title={live.error ?? undefined}
+          />
         </div>
         <div className="flex items-center gap-1.5 text-[12px] text-ink-muted">
           <Icon aria-hidden className="size-3.5" />
           schema registry
-          <span className="font-mono text-[11px] text-ink-faint">
+          <span
+            className="truncate font-mono text-[11px] text-ink-faint"
+            title={registry.url}
+          >
             {registry.id}
           </span>
         </div>
       </CardHeader>
 
       <CardContent className="px-4">
-        <p className="break-all font-mono text-[12px] text-ink-muted">
+        {error ? (
+          // The same panel a cluster that will not answer gets, in the tone
+          // the fault deserves: an outage is warm and heals on its own, a url
+          // pointing at the wrong API is red and will still be wrong after
+          // every retry.
+          <div
+            className="rounded-sm border p-3 text-[12px]"
+            style={{
+              background:
+                live.status === "misconfigured"
+                  ? "var(--danger-soft)"
+                  : "var(--warn-soft)",
+              borderColor:
+                live.status === "misconfigured"
+                  ? "var(--danger)"
+                  : "var(--warn-ink)",
+            }}
+          >
+            <p className="break-words font-mono">{error}</p>
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
+              <span className="text-ink-muted">
+                {live.status === "misconfigured"
+                  ? "check the url"
+                  : "nothing decodes here until it answers"}
+              </span>
+              {/* Asking again is a GET, and the listing is what re-probes:
+                  `subjects()` refetches once its TTL is out, so this is a
+                  real attempt rather than a rerender. */}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void subjects.refetch()}
+              >
+                <RefreshCw aria-hidden />
+                retry now
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <RegistryCounts
+            summary={subjects.data ?? null}
+            pending={subjects.isPending}
+          />
+        )}
+        <p
+          className="mt-3 truncate font-mono text-[12px] text-ink-faint"
+          title={registry.url}
+        >
           {registry.url}
         </p>
-        <p className="mt-2 text-[12px] text-ink-muted">
+      </CardContent>
+
+      {/* `mt-auto` is what makes equal heights readable rather than merely
+          equal: the card stretches to its row, and the slack goes above this
+          line instead of below it, so the footers of a row sit on one
+          baseline whatever each card had to say. */}
+      <CardFooter className="mt-auto border-t px-4 pt-3 [.border-t]:pt-3">
+        {/* Where the snapshot age sits on a cluster card, and answering the
+            question that is this card's equivalent: not how fresh it is, but
+            who is reading it. A registry serves the environment, so this is
+            the line that stops it reading as one cluster's. */}
+        <span className="min-w-0 truncate text-[12px] text-ink-faint">
           {usedBy.length > 0 ? (
             <>
-              decoded against by{" "}
-              <span className="font-mono">{usedBy.join(", ")}</span>
+              read by <span className="font-mono">{usedBy.join(", ")}</span>
             </>
           ) : (
-            <span className="text-ink-faint">
-              no cluster here references it
-            </span>
+            "no cluster here references it"
           )}
-        </p>
-        {broken && registry.error ? (
-          <p
-            className={cn(
-              "mt-2 text-[11px]",
-              registry.status === "misconfigured"
-                ? "text-danger"
-                : "text-warn-ink"
-            )}
+        </span>
+        <Button variant="link" size="sm" asChild className="ml-auto h-auto p-0">
+          <Link
+            to="/environments/$envId/schema-registries/$registryId"
+            params={{ envId, registryId: registry.id }}
           >
-            {registry.error}
-          </p>
-        ) : null}
-      </CardContent>
+            subjects
+            <ArrowRight aria-hidden />
+          </Link>
+        </Button>
+      </CardFooter>
     </Card>
   )
 }
 
+/**
+ * Something in this environment that is not a Kafka cluster.
+ *
+ * Inventory, not monitoring. kaas-ui dials none of these, so the card carries
+ * no status badge and says so — a green dot earned by a correctly typed URL
+ * would be worse than no dot at all.
+ *
+ * It used to be `self-start`, its own height rather than a cluster card's. It
+ * is not any more: a row of cards that each stop where their content does is a
+ * ragged bottom edge, and the reader reads that as one card being *less*
+ * rather than as one card having less to say. Every tile stretches now, and
+ * what fills the difference is the space above the footer.
+ */
 function ResourceTile({ card }: { card: ResourceCardData }) {
   const kind = RESOURCE_KINDS[card.kind]
   const Icon = kind.icon
 
   return (
-    <Card className="gap-3 self-start py-4">
+    <Card className="gap-3 py-4">
       <CardHeader className="gap-2 px-4">
         <div className="flex items-start justify-between gap-3">
           <span className="font-semibold">{card.name}</span>
