@@ -99,16 +99,19 @@ kafka_clusters:
 Four things about that block are load-bearing, and each has cost somebody an
 afternoon:
 
-- **No `client_secret` at all.** The config is a ConfigMap; the secret is a
-  Secret. Omitting the key is what makes the credential come from the
-  environment, under a name derived from the cluster's address —
-  `dev`/`strimzi` reads `KAAS_UI_CLIENT_SECRET_DEV_STRIMZI` — which the
-  deployment fills from a `secretKeyRef`. Setting the key **overrides** the
-  variable, which is the way round a local run wants and the wrong way round
-  for a deployment, so the deployed ConfigMap simply does not set it. Two
-  clusters whose ids flatten to the same variable are refused at startup
-  rather than left sharing a credential. It is read **once, at startup**, so
-  a rotation needs a pod restart — the config poller watches the config file,
+- **No `client_secret` at all**, and that is the general rule rather than an
+  OAuth quirk. Every credential kaas-ui takes — a SASL `password`, an OAuth
+  `client_secret`, a registry's `password` or `bearer_token` — reads the same
+  way: write the key and it wins, omit it and it comes from
+  `KAAS_UI_<CREDENTIAL>_<ENVIRONMENT>_<ID>`, which the deployment fills from a
+  `secretKeyRef`. So `dev`/`strimzi` reads `KAAS_UI_CLIENT_SECRET_DEV_STRIMZI`
+  here and would read `KAAS_UI_PASSWORD_DEV_STRIMZI` for SASL. The config is a
+  ConfigMap and the secret is a Secret, so the deployed file sets neither.
+  Overriding from the file is for a local run. Two things whose ids flatten to
+  one variable are refused at startup rather than left sharing a credential —
+  including a cluster and a registry with the same id, since the name comes
+  from the `(environment, id)` they share. It is read **once, at startup**, so
+  a rotation needs a pod restart: the config poller watches the config file,
   and a Secret rewritten underneath a running process goes unnoticed.
 - **`/oauth2/v2.0/token`, not v1.** The v1 endpoint issues
   `iss: https://sts.windows.net/{tid}/`, which fails a broker pinned to the v2

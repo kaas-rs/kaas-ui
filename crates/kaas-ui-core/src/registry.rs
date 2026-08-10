@@ -32,7 +32,7 @@ use tokio::sync::Notify;
 
 use crate::config::{
     ClusterEntry, Config, ConfigError, EnvironmentEntry, PasswordCredentials, ResourceEntry,
-    SaslSettings, oauth_secret_var,
+    SaslSettings, secret_from_env, secret_var,
 };
 use crate::error::ErrorKind;
 use crate::health::ClusterHealth;
@@ -350,21 +350,30 @@ fn build_sasl(
 
     match settings {
         SaslSettings::Plain(credentials) => {
-            password_sasl(cluster, SaslMechanism::Plain, credentials)
+            password_sasl(environment, cluster, SaslMechanism::Plain, credentials)
         }
-        SaslSettings::ScramSha256(credentials) => {
-            password_sasl(cluster, SaslMechanism::ScramSha256, credentials)
-        }
-        SaslSettings::ScramSha512(credentials) => {
-            password_sasl(cluster, SaslMechanism::ScramSha512, credentials)
-        }
+        SaslSettings::ScramSha256(credentials) => password_sasl(
+            environment,
+            cluster,
+            SaslMechanism::ScramSha256,
+            credentials,
+        ),
+        SaslSettings::ScramSha512(credentials) => password_sasl(
+            environment,
+            cluster,
+            SaslMechanism::ScramSha512,
+            credentials,
+        ),
         SaslSettings::OauthBearer(oauth) => {
             // The file wins where it says anything, and says nothing in the
             // deployment — which is the point: the config carries a credential
             // nowhere and the environment supplies it.
             let secret = match &oauth.client_secret {
                 Some(inline) => inline.clone(),
-                None => read_secret_env(cluster, &oauth_secret_var(environment, cluster))?,
+                None => secret_from_env(
+                    &format!("cluster {cluster:?}"),
+                    &secret_var("client_secret", environment, cluster),
+                )?,
             };
 
             let mut config = OidcConfig::new(
@@ -405,19 +414,19 @@ fn build_sasl(
 
 /// The three mechanisms that authenticate with a password.
 fn password_sasl(
+    environment: &str,
     cluster: &str,
     mechanism: SaslMechanism,
     credentials: &PasswordCredentials,
 ) -> Result<SaslConfig, ConfigError> {
-    let password = match (&credentials.password, &credentials.password_file) {
-        (Some(inline), _) => inline.clone(),
-        (None, Some(path)) => read_secret(cluster, path)?,
-        // Refused by `Config::validate`; unreachable through `load`.
-        (None, None) => {
-            return Err(ConfigError::Invalid(format!(
-                "cluster {cluster:?}: {mechanism} needs a password or a password_file"
-            )));
-        }
+    // Same rule as the OAuth secret one function up: written here it wins,
+    // omitted it comes from the environment under a derived name.
+    let password = match &credentials.password {
+        Some(inline) => inline.clone(),
+        None => secret_from_env(
+            &format!("cluster {cluster:?} ({mechanism})"),
+            &secret_var("password", environment, cluster),
+        )?,
     };
     let mut sasl = SaslConfig::new(mechanism, credentials.username.clone(), password);
     if credentials.allow_plaintext_password {
@@ -426,50 +435,12 @@ fn password_sasl(
     Ok(sasl)
 }
 
-/// Read a secret out of a named environment variable.
+/// Read a PEM file — a CA bundle, a client certificate, a key.
 ///
-/// The name is derived from the cluster's address and the deployment fills it
-/// — from a `secretKeyRef`, in the shape everything else in the namespace
-/// uses. An
-/// empty value counts as unset: a `secretKeyRef` to a key that does not exist
-/// fails the pod outright, but an *empty* key succeeds and would otherwise
-/// reach the issuer as a blank secret, which comes back as `invalid_client`
-/// and reads like the wrong secret rather than a missing one.
-fn read_secret_env(cluster: &str, variable: &str) -> Result<String, ConfigError> {
-    // The name, never the value.
-    match std::env::var(variable) {
-        Ok(value) if !value.trim().is_empty() => Ok(value.trim().to_owned()),
-        Ok(_) => Err(ConfigError::Invalid(format!(
-            "cluster {cluster:?}: ${variable} is set but empty"
-        ))),
-        Err(_) => Err(ConfigError::Invalid(format!(
-            "cluster {cluster:?}: ${variable} is not set"
-        ))),
-    }
-}
-
-/// Read a secret out of a mounted file.
-///
-/// Trimmed, because `kubectl create secret --from-file` keeps the trailing
-/// newline your editor put there and a password with `\n` on the end fails
-/// authentication with an error that says nothing about newlines.
-fn read_secret(cluster: &str, path: &std::path::Path) -> Result<String, ConfigError> {
-    let bytes = std::fs::read(path).map_err(|source| {
-        // The path is the whole diagnosis when a Secret is not mounted where
-        // the config says it is.
-        ConfigError::Invalid(format!("cluster {cluster:?}: {}: {source}", path.display()))
-    })?;
-    // The error names the file and never its contents.
-    String::from_utf8(bytes)
-        .map_err(|_| {
-            ConfigError::Invalid(format!(
-                "cluster {cluster:?}: {} is not valid UTF-8",
-                path.display()
-            ))
-        })
-        .map(|text| text.trim().to_owned())
-}
-
+/// The one credential-adjacent thing that stays a *file*, and deliberately:
+/// PEM is multi-line, and an environment variable holding a certificate chain
+/// is a quoting problem waiting to happen. Single-line secrets go through
+/// `secret_var`; this does not.
 fn read_pem(path: &std::path::Path) -> Result<Vec<u8>, Error> {
     std::fs::read(path).map_err(|source| {
         // The path is the whole diagnosis when a Secret is not mounted where
@@ -805,7 +776,7 @@ fn build_registries(
     let mut registries = BTreeMap::new();
     for (environment, entry) in config.schema_registries() {
         let key = (environment.to_owned(), entry.id.clone());
-        let settings = entry.to_settings()?;
+        let settings = entry.to_settings(environment)?;
         if let Some(handle) = existing.get(&key)
             && *handle.settings() == settings
         {

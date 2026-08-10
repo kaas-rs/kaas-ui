@@ -237,18 +237,21 @@ active nav, focus ring, selected edge. For accent text on light use
   a registry is still not the same claim as decoding against it, so
   `schema_registry:` stays an explicit line and a cross-environment reference
   is a startup error.
-- **An absent credential is where the credential comes from.** An OAuth
-  cluster with no `client_secret` reads `KAAS_UI_CLIENT_SECRET_<ENV>_<ID>`
-  from the environment, which the deployment fills from a `secretKeyRef`;
-  writing the key in the config **overrides** it, which is right for a local
-  run and wrong for a deployment, because the config is a ConfigMap. One key,
-  one rule — there were three (`client_secret`, `_file`, `_env`) and each
-  extra one was a decision at the point of writing a config rather than a
-  capability. SASL passwords still use `password_file`, which is the
-  asymmetry to fix next. Everything is read at startup, so rotating needs a
-  restart. Secrets redact themselves in `Debug` — the leak that happens is
-  `?entry`, not a deliberate print — and a failing OAuth exchange reports the
-  issuer's error, never the credential.
+- **An absent credential is where the credential comes from.** One rule for
+  all four — SASL `password`, OAuth `client_secret`, a registry's `password`
+  and its `bearer_token`: write the key and it wins, omit it and it is read
+  from `KAAS_UI_<CREDENTIAL>_<ENVIRONMENT>_<ID>`, which the deployment fills
+  from a `secretKeyRef`. Overriding from the file is right for a local run and
+  wrong for a deployment, which is why the deployed ConfigMap sets no secret
+  at all. There were three keys per credential once (`x`, `x_file`, `x_env`)
+  and the extra two were a decision at the point of writing a config rather
+  than a capability. Two things whose ids flatten to one variable — including
+  a cluster and a registry sharing an id — are a startup error, not a shared
+  credential. **PEM stays a file**: `ca_file`, `cert_file` and `key_file` are
+  multi-line and belong in a mount. Everything is read at startup, so rotating
+  needs a restart. Secrets redact themselves in `Debug` — the leak that
+  happens is `?entry`, not a deliberate print — and a failing exchange reports
+  the far end's error, never the credential.
 - **ccompat only.** Apicurio's native `/apis/registry/v3` is not supported, and
   a `url` pointing at it is a **configuration** error reported on first use,
   naming `/apis/ccompat/v7`. The failure to design against is every record on

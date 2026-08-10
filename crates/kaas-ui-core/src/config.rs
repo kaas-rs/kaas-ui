@@ -245,18 +245,20 @@ pub struct SchemaRegistryEntry {
     /// Basic-auth principal. On Confluent Cloud this is the API key.
     #[serde(default)]
     pub username: Option<String>,
-    /// Basic-auth secret, inline. Prefer `password_file`.
+    /// Basic-auth secret.
+    ///
+    /// Omit it and it is read from `KAAS_UI_PASSWORD_<ENVIRONMENT>_<ID>` —
+    /// see [`secret_var`]. Setting it here overrides the variable.
     #[serde(default)]
     pub password: Option<String>,
-    /// Basic-auth secret read from a file — a mounted Secret key, usually.
-    #[serde(default)]
-    pub password_file: Option<PathBuf>,
     /// A bearer token, sent verbatim. Mutually exclusive with basic auth.
+    ///
+    /// Omit it and it is read from `KAAS_UI_BEARER_TOKEN_<ENVIRONMENT>_<ID>`,
+    /// but **only when `username` is unset**: a registry configures one or the
+    /// other, and looking for a bearer token beside a username would turn a
+    /// stray variable into an auth mode nobody asked for.
     #[serde(default)]
     pub bearer_token: Option<String>,
-    /// A bearer token read from a file.
-    #[serde(default)]
-    pub bearer_token_file: Option<PathBuf>,
     /// Per-call timeout. A schema fetch sits on a request path.
     #[serde(default, with = "humantime_serde::option")]
     pub request_timeout: Option<Duration>,
@@ -280,7 +282,7 @@ impl SchemaRegistryEntry {
     /// Reads whatever was pointed at a file. A Secret that is not mounted
     /// where the config says it is fails here, at startup, rather than on the
     /// first record of the first Avro topic somebody opens.
-    pub fn to_settings(&self) -> Result<RegistrySettings, ConfigError> {
+    pub fn to_settings(&self, environment: &str) -> Result<RegistrySettings, ConfigError> {
         let mut settings = RegistrySettings::new(self.id.clone(), self.url.clone())
             .with_name(self.display_name().to_owned());
 
@@ -291,34 +293,33 @@ impl SchemaRegistryEntry {
             settings = settings.with_subjects_ttl(ttl);
         }
 
-        let read = |path: &PathBuf| -> Result<String, ConfigError> {
-            std::fs::read_to_string(path)
-                .map(|text| text.trim().to_owned())
-                // The path is the whole diagnosis when a Secret is not mounted
-                // where the config says it is.
-                .map_err(|source| {
-                    ConfigError::Invalid(format!(
-                        "schema registry {:?}: {}: {source}",
-                        self.id,
-                        path.display()
-                    ))
-                })
-        };
+        let what = format!("schema registry {:?}", self.id);
 
+        // A username is what says "basic auth", so a password is looked for
+        // only beside one, and a bearer token only where there is none.
+        // Otherwise a stray variable would become an auth mode nobody
+        // configured.
         if let Some(username) = &self.username {
-            let password = match (&self.password, &self.password_file) {
-                (Some(inline), _) => Some(inline.clone()),
-                (None, Some(path)) => Some(read(path)?),
-                (None, None) => None,
+            let password = match &self.password {
+                Some(inline) => inline.clone(),
+                None => secret_from_env(&what, &secret_var("password", environment, &self.id))?,
             };
             settings = settings.with_auth(RegistryAuth::Basic {
                 username: username.clone(),
-                password,
+                password: Some(password),
             });
         } else if let Some(token) = &self.bearer_token {
             settings = settings.with_auth(RegistryAuth::Bearer(token.clone()));
-        } else if let Some(path) = &self.bearer_token_file {
-            settings = settings.with_auth(RegistryAuth::Bearer(read(path)?));
+        } else {
+            // Unlike a password beside a username, absence is the common case
+            // here — most registries need no auth at all — so this asks the
+            // environment rather than demanding of it.
+            let variable = secret_var("bearer_token", environment, &self.id);
+            if let Ok(token) = std::env::var(&variable)
+                && !token.trim().is_empty()
+            {
+                settings = settings.with_auth(RegistryAuth::Bearer(token.trim().to_owned()));
+            }
         }
 
         Ok(settings)
@@ -522,7 +523,7 @@ pub struct TlsSettings {
 /// sasl:
 ///   mechanism: scram-sha-512
 ///   username: kaas-ui
-///   password_file: /etc/kaas-ui/kafka/password
+///   # password comes from $KAAS_UI_PASSWORD_DEV_STRIMZI
 /// ```
 ///
 /// ```yaml
@@ -601,12 +602,12 @@ impl std::fmt::Debug for SaslSettings {
 pub struct PasswordCredentials {
     /// Principal.
     pub username: String,
-    /// Password, inline. Prefer `password_file`.
+    /// Password.
+    ///
+    /// Omit it and it is read from `KAAS_UI_PASSWORD_<ENVIRONMENT>_<CLUSTER>`
+    /// — see [`secret_var`]. Setting it here overrides the variable.
     #[serde(default)]
     pub password: Option<String>,
-    /// Password read from a file — a mounted Secret key, usually.
-    #[serde(default)]
-    pub password_file: Option<PathBuf>,
     /// Permit `PLAIN` over an unencrypted socket. Off by default, because the
     /// failure mode of getting it wrong is a recoverable password on the wire
     /// and no error anywhere.
@@ -619,7 +620,6 @@ impl std::fmt::Debug for PasswordCredentials {
         f.debug_struct("PasswordCredentials")
             .field("username", &self.username)
             .field("password", &redacted(self.password.is_some()))
-            .field("password_file", &self.password_file)
             .field("allow_plaintext_password", &self.allow_plaintext_password)
             .finish()
     }
@@ -653,7 +653,7 @@ pub struct OauthCredentials {
     ///
     /// **Omit it and it comes from the environment**, under a name derived
     /// from the cluster's address — `dev`/`strimzi` reads
-    /// `KAAS_UI_CLIENT_SECRET_DEV_STRIMZI`. See [`oauth_secret_var`]. That is
+    /// `KAAS_UI_CLIENT_SECRET_DEV_STRIMZI`. See [`secret_var`]. That is
     /// how the deployment supplies it: the ConfigMap names no secret, and the
     /// value arrives from a `secretKeyRef`, so the config carries a credential
     /// nowhere and the pod spec carries a key name.
@@ -742,26 +742,39 @@ pub enum ConfigError {
     Invalid(String),
 }
 
-/// The environment variable an OAuth client secret comes from, when the config
-/// does not spell it out.
+/// The environment variable a credential comes from, when the config does not
+/// spell it out.
 ///
-/// Derived from the cluster's address rather than configured, because that is
-/// the address everything else about a cluster uses: `dev`/`strimzi` reads
-/// `KAAS_UI_CLIENT_SECRET_DEV_STRIMZI`. Ids are already restricted to
-/// `[A-Za-z0-9_-]`, so the only transformation is uppercasing and turning `-`
-/// into `_`.
+/// One rule for every secret kaas-ui takes: **write the key and it wins; omit
+/// it and it is read from `KAAS_UI_<CREDENTIAL>_<ENVIRONMENT>_<ID>`.** So
+/// `dev`/`strimzi` reads `KAAS_UI_CLIENT_SECRET_DEV_STRIMZI` for its OAuth
+/// secret and `KAAS_UI_PASSWORD_DEV_STRIMZI` for a SASL one, and the
+/// `apicurio` registry in `dev` reads `KAAS_UI_PASSWORD_DEV_APICURIO`.
 ///
-/// Two clusters can still flatten to one name — `a-b`/`c` and `a`/`b-c` both
-/// give `A_B_C` — which [`Config::validate`] refuses rather than leaves as a
-/// shared credential.
+/// Derived from the address rather than configured, because `(environment,
+/// id)` is the address everything else about a cluster or a registry already
+/// uses. Ids are restricted to `[A-Za-z0-9_-]`, so the only transformation is
+/// uppercasing and turning `-` into `_`.
 ///
-/// It sits under the `KAAS_UI_` prefix the figment overlay also reads, and is
-/// invisible to it: the overlay only accepts keys rooted at `server` or
-/// `environments`, and this is neither. `an_oauth_secret_variable_is_not_a_config_override`
-/// holds that, because the day it stops being true this variable would be
-/// parsed as configuration and refuse to start.
+/// Two things can still flatten to one name — `a-b`/`c` and `a`/`b-c` both
+/// give `A_B_C`, and so do a cluster and a registry sharing an id in one
+/// environment. [`Config::validate`] refuses that rather than leaving them
+/// sharing a credential.
+///
+/// **PEM material is deliberately not in this scheme.** `ca_file`,
+/// `cert_file` and `key_file` stay files: a certificate chain is multi-line
+/// and belongs in a mounted Secret, and an environment variable holding one
+/// is a quoting problem waiting to happen. The rule is for single-line
+/// secrets, which is what all four of these are.
+///
+/// These sit under the `KAAS_UI_` prefix the figment overlay also reads, and
+/// are invisible to it: the overlay only accepts keys rooted at `server` or
+/// `environments`, and none of these is either.
+/// `a_credential_variable_is_not_a_config_override` holds that, because the
+/// day it stops being true these variables are parsed as configuration and the
+/// process refuses to start.
 #[must_use]
-pub fn oauth_secret_var(environment: &str, cluster: &str) -> String {
+pub fn secret_var(credential: &str, environment: &str, id: &str) -> String {
     fn flatten(id: &str) -> String {
         id.chars()
             .map(|c| {
@@ -774,10 +787,59 @@ pub fn oauth_secret_var(environment: &str, cluster: &str) -> String {
             .collect()
     }
     format!(
-        "KAAS_UI_CLIENT_SECRET_{}_{}",
+        "KAAS_UI_{}_{}_{}",
+        flatten(credential),
         flatten(environment),
-        flatten(cluster)
+        flatten(id)
     )
+}
+
+/// Read a credential the config left out, from the environment.
+///
+/// An empty value counts as unset: a `secretKeyRef` to a key that does not
+/// exist fails the pod outright, but an *empty* key succeeds, and a blank
+/// credential reaches the far end as an authentication failure — which reads
+/// like the wrong secret rather than a missing one.
+pub fn secret_from_env(what: &str, variable: &str) -> Result<String, ConfigError> {
+    // The name, never the value.
+    match std::env::var(variable) {
+        Ok(value) if !value.trim().is_empty() => Ok(value.trim().to_owned()),
+        Ok(_) => Err(ConfigError::Invalid(format!(
+            "{what}: ${variable} is set but empty"
+        ))),
+        Err(_) => Err(ConfigError::Invalid(format!(
+            "{what}: ${variable} is not set"
+        ))),
+    }
+}
+
+/// Claim a derived variable for one cluster or registry, or say who has it.
+///
+/// Clusters and registries share the namespace, because they share the
+/// `(environment, id)` the name is derived from — so an `apicurio` registry
+/// beside an `apicurio` cluster in one environment is caught here rather than
+/// discovered as one of them authenticating with the other's password.
+fn claim(
+    taken: &mut BTreeMap<String, String>,
+    credential: &str,
+    environment: &str,
+    kind: &str,
+    id: &str,
+) -> Result<(), ConfigError> {
+    let variable = secret_var(credential, environment, id);
+    // The *kind* is part of the owner, not just the id: a cluster and a
+    // registry may legitimately share an id — they are addressed separately
+    // everywhere else — and comparing ids alone would let exactly that pair
+    // through, which is the one case the shared namespace creates.
+    let owner = format!("{kind} {id:?}");
+    match taken.insert(variable.clone(), owner.clone()) {
+        Some(other) if other != owner => Err(ConfigError::Invalid(format!(
+            "{other} and {owner} both take a credential from ${variable}: the name is derived \
+             from the environment and the id, and these two flatten to the same one. Rename one \
+             of them, or set the credential explicitly on it."
+        ))),
+        _ => Ok(()),
+    }
 }
 
 /// Whether an id can be a path segment verbatim.
@@ -996,21 +1058,33 @@ impl Config {
                         registry.id, registry.url
                     )));
                 }
+                // The derived names a registry may read, claimed alongside the
+                // clusters' so the two cannot flatten into one another.
+                claim(
+                    &mut secret_vars,
+                    "password",
+                    env,
+                    "schema registry",
+                    &registry.id,
+                )?;
+                claim(
+                    &mut secret_vars,
+                    "bearer_token",
+                    env,
+                    "schema registry",
+                    &registry.id,
+                )?;
                 // Whether the url is *ccompat* cannot be settled here — it takes
                 // asking the registry, and connecting is lazy. What can be settled
                 // here is the shape of the credentials.
-                if registry.username.is_none()
-                    && (registry.password.is_some() || registry.password_file.is_some())
-                {
+                if registry.username.is_none() && registry.password.is_some() {
                     return Err(ConfigError::Invalid(format!(
                         "schema registry {:?} in environment {env:?} configures a password with no \
                          username",
                         registry.id
                     )));
                 }
-                if registry.username.is_some()
-                    && (registry.bearer_token.is_some() || registry.bearer_token_file.is_some())
-                {
+                if registry.username.is_some() && registry.bearer_token.is_some() {
                     return Err(ConfigError::Invalid(format!(
                         "schema registry {:?} in environment {env:?} configures both basic auth \
                          and a bearer token: only one of them can be sent",
@@ -1062,16 +1136,13 @@ impl Config {
                     )));
                 }
                 match &cluster.sasl {
-                    Some(SaslSettings::Plain(credentials))
-                    | Some(SaslSettings::ScramSha256(credentials))
-                    | Some(SaslSettings::ScramSha512(credentials))
-                        if credentials.password.is_none()
-                            && credentials.password_file.is_none() =>
-                    {
-                        return Err(ConfigError::Invalid(format!(
-                            "cluster {:?} configures sasl without a password or password_file",
-                            cluster.id
-                        )));
+                    // A password mechanism with no `password` reads one from
+                    // the environment, exactly as oauthbearer does, so there is
+                    // nothing to refuse here — only a name to claim.
+                    Some(SaslSettings::Plain(_))
+                    | Some(SaslSettings::ScramSha256(_))
+                    | Some(SaslSettings::ScramSha512(_)) => {
+                        claim(&mut secret_vars, "password", env, "cluster", &cluster.id)?;
                     }
                     Some(SaslSettings::OauthBearer(oauth)) => {
                         // No check that a secret was configured: omitting it
@@ -1085,19 +1156,13 @@ impl Config {
                         // the same variable name. `a-b`/`c` and `a`/`b-c` both
                         // flatten to `A_B_C`, and one of them would silently
                         // authenticate with the other's credential.
-                        let variable = oauth_secret_var(env, &cluster.id);
-                        if let Some(other) =
-                            secret_vars.insert(variable.clone(), cluster.id.clone())
-                            && other != cluster.id
-                        {
-                            return Err(ConfigError::Invalid(format!(
-                                "clusters {other:?} and {:?} both take their oauth client secret \
-                                 from ${variable}: the name is derived from the environment and \
-                                 cluster ids, and these two flatten to the same one. Rename one \
-                                 of them, or set `client_secret` explicitly on it.",
-                                cluster.id
-                            )));
-                        }
+                        claim(
+                            &mut secret_vars,
+                            "client_secret",
+                            env,
+                            "cluster",
+                            &cluster.id,
+                        )?;
                         // Caught here rather than at connect: without TLS the
                         // bearer token goes over the wire in the clear, and
                         // kaas-lib refuses it — but it refuses it per
@@ -1620,7 +1685,7 @@ environments:
         // decode against it, and absence is a normal path.
         assert_eq!(clusters[1].schema_registry, None);
 
-        let settings = registry.to_settings().unwrap();
+        let settings = registry.to_settings("dev").unwrap();
         assert_eq!(settings.subjects_ttl, Duration::from_secs(15));
         assert_eq!(settings.name, "Apicurio (dev)");
     }
@@ -1839,13 +1904,13 @@ environments:
     #[test]
     fn the_secret_variable_is_derived_from_the_address_that_addresses_everything_else() {
         assert_eq!(
-            oauth_secret_var("dev", "strimzi"),
+            secret_var("client_secret", "dev", "strimzi"),
             "KAAS_UI_CLIENT_SECRET_DEV_STRIMZI"
         );
         // Ids may carry `-` and `_`; both flatten, because neither is legal
         // in a variable name in every shell that will export it.
         assert_eq!(
-            oauth_secret_var("prod-eu", "kafka_a"),
+            secret_var("client_secret", "prod-eu", "kafka_a"),
             "KAAS_UI_CLIENT_SECRET_PROD_EU_KAFKA_A"
         );
     }
@@ -1878,16 +1943,100 @@ environments:
             "{rendered}"
         );
         // And it is escapable without a rename.
-        assert!(rendered.contains("client_secret"), "{rendered}");
+        assert!(
+            rendered.contains("set the credential explicitly"),
+            "{rendered}"
+        );
+    }
+
+    /// The rule is one rule, so the other three credentials read the same way.
+    #[test]
+    fn every_credential_falls_back_to_its_derived_variable() {
+        assert_eq!(
+            secret_var("password", "dev", "strimzi"),
+            "KAAS_UI_PASSWORD_DEV_STRIMZI"
+        );
+        assert_eq!(
+            secret_var("bearer_token", "dev", "apicurio"),
+            "KAAS_UI_BEARER_TOKEN_DEV_APICURIO"
+        );
+
+        // A SASL password left out of the file is legal now — it means "from
+        // the environment" — where it used to be refused at load.
+        let config = Config::from_yaml(
+            r#"
+environments:
+  - id: dev
+    kafka_clusters:
+      - id: strimzi
+        bootstrap: ["a:9093"]
+        sasl:
+          mechanism: scram-sha-512
+          username: kaas-ui
+"#,
+        );
+        assert!(config.is_ok(), "{:?}", config.err());
+    }
+
+    /// A registry and a cluster share the `(environment, id)` the name comes
+    /// from, so they share the namespace — and two of them wanting one
+    /// variable must be a startup error rather than a shared password.
+    #[test]
+    fn a_registry_cannot_take_a_clusters_variable() {
+        let err = Config::from_yaml(
+            r#"
+environments:
+  - id: dev
+    schema_registries:
+      - id: shared
+        url: http://registry:8080/apis/ccompat/v7
+        username: someone
+    kafka_clusters:
+      - id: shared
+        bootstrap: ["a:9093"]
+        sasl:
+          mechanism: scram-sha-512
+          username: kaas-ui
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            format!("{err}").contains("KAAS_UI_PASSWORD_DEV_SHARED"),
+            "{err}"
+        );
+    }
+
+    /// A bearer token is looked for only where no username says basic auth,
+    /// and a missing one is not an error — most registries need no auth.
+    #[test]
+    fn an_unauthenticated_registry_stays_unauthenticated() {
+        let config = Config::from_yaml(
+            r#"
+environments:
+  - id: dev
+    schema_registries:
+      - id: apicurio
+        url: http://registry:8080/apis/ccompat/v7
+    kafka_clusters:
+      - id: strimzi
+        bootstrap: ["a:9092"]
+"#,
+        )
+        .unwrap();
+        let settings = config.environments[0].schema_registries[0]
+            .to_settings("dev")
+            .unwrap();
+        // No variable set, no username: no credential invented.
+        assert!(settings.auth.is_none(), "{:?}", settings.auth);
     }
 
     /// The variable lives under `KAAS_UI_`, which the figment overlay also
     /// reads. It must stay invisible to it: `environments` is a list the
     /// overlay cannot index, so a key it *did* accept would refuse to start.
     #[test]
-    fn an_oauth_secret_variable_is_not_a_config_override() {
+    fn a_credential_variable_is_not_a_config_override() {
         assert!(!is_ours(
-            &oauth_secret_var("dev", "strimzi").to_ascii_lowercase()
+            &secret_var("client_secret", "dev", "strimzi").to_ascii_lowercase()
         ));
         assert!(!is_ours("client_secret_dev_strimzi"));
         // The overlay still works for what it is for.
@@ -1951,7 +2100,6 @@ environments:
         let password = SaslSettings::Plain(PasswordCredentials {
             username: "kaas-ui".to_owned(),
             password: Some("hunter2".to_owned()),
-            password_file: None,
             allow_plaintext_password: false,
         });
         let rendered = format!("{password:?}");
@@ -1963,7 +2111,6 @@ environments:
         let unset = SaslSettings::Plain(PasswordCredentials {
             username: "kaas-ui".to_owned(),
             password: None,
-            password_file: Some("/etc/kafka/password".into()),
             allow_plaintext_password: false,
         });
         assert!(format!("{unset:?}").contains("<unset>"));
