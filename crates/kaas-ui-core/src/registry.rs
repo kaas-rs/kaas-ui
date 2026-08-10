@@ -32,7 +32,7 @@ use tokio::sync::Notify;
 
 use crate::config::{
     ClusterEntry, Config, ConfigError, EnvironmentEntry, PasswordCredentials, ResourceEntry,
-    SaslSettings,
+    SaslSettings, oauth_secret_var,
 };
 use crate::error::ErrorKind;
 use crate::health::ClusterHealth;
@@ -103,7 +103,7 @@ impl ClusterHandle {
         let sasl = entry
             .sasl
             .as_ref()
-            .map(|settings| build_sasl(&entry.id, settings))
+            .map(|settings| build_sasl(environment, &entry.id, settings))
             .transpose()?;
         Ok(Self {
             environment: environment.to_owned(),
@@ -341,7 +341,11 @@ async fn sleep_or_nudge(notify: &Notify, delay: Duration) {
 /// endpoint that is not a url, an `http://` issuer — is wrong at startup with
 /// the cluster id in the message, rather than on the third retry of a
 /// background connector nobody is reading the logs of.
-fn build_sasl(cluster: &str, settings: &SaslSettings) -> Result<SaslConfig, ConfigError> {
+fn build_sasl(
+    environment: &str,
+    cluster: &str,
+    settings: &SaslSettings,
+) -> Result<SaslConfig, ConfigError> {
     let invalid = |message: String| ConfigError::Invalid(format!("cluster {cluster:?}: {message}"));
 
     match settings {
@@ -355,15 +359,12 @@ fn build_sasl(cluster: &str, settings: &SaslSettings) -> Result<SaslConfig, Conf
             password_sasl(cluster, SaslMechanism::ScramSha512, credentials)
         }
         SaslSettings::OauthBearer(oauth) => {
-            let secret = match (&oauth.client_secret, &oauth.client_secret_env) {
-                (Some(inline), _) => inline.clone(),
-                (None, Some(variable)) => read_secret_env(cluster, variable)?,
-                // Refused by `Config::validate`; unreachable through `load`.
-                (None, None) => {
-                    return Err(invalid(
-                        "oauthbearer needs a client_secret or a client_secret_env".to_owned(),
-                    ));
-                }
+            // The file wins where it says anything, and says nothing in the
+            // deployment — which is the point: the config carries a credential
+            // nowhere and the environment supplies it.
+            let secret = match &oauth.client_secret {
+                Some(inline) => inline.clone(),
+                None => read_secret_env(cluster, &oauth_secret_var(environment, cluster))?,
             };
 
             let mut config = OidcConfig::new(
@@ -427,8 +428,9 @@ fn password_sasl(
 
 /// Read a secret out of a named environment variable.
 ///
-/// The config names the variable and the deployment fills it — from a
-/// `secretKeyRef`, in the shape everything else in the namespace uses. An
+/// The name is derived from the cluster's address and the deployment fills it
+/// — from a `secretKeyRef`, in the shape everything else in the namespace
+/// uses. An
 /// empty value counts as unset: a `secretKeyRef` to a key that does not exist
 /// fails the pod outright, but an *empty* key succeeds and would otherwise
 /// reach the issuer as a blank secret, which comes back as `invalid_client`

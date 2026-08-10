@@ -92,23 +92,24 @@ kafka_clusters:
       mechanism: oauthbearer
       token_endpoint: https://login.microsoftonline.com/<tenant>/oauth2/v2.0/token
       client_id: <client-id>
-      client_secret_env: KAFKA_OAUTH_CLIENT_SECRET
+      # No client_secret: it comes from $KAAS_UI_CLIENT_SECRET_DEV_STRIMZI
       scope: <client-id>/.default
 ```
 
 Four things about that block are load-bearing, and each has cost somebody an
 afternoon:
 
-- **`client_secret_env`, not `client_secret`.** The config is a ConfigMap; the
-  secret is a Secret. Inline is supported for a local run and is the wrong
-  answer for anything deployed. `client_secret_env` names a *variable* the
-  deployment fills from a `secretKeyRef` — no volume, and the shape Dex
-  already uses for the same credential one container over. Setting both is
-  refused rather than ordered: a fallback chain makes "I rotated it and
-  nothing changed" a thing that can happen quietly. It is read **once, at
-  startup**, so a rotation needs a pod restart — the config poller watches the
-  config file, and a Secret rewritten underneath a running process goes
-  unnoticed.
+- **No `client_secret` at all.** The config is a ConfigMap; the secret is a
+  Secret. Omitting the key is what makes the credential come from the
+  environment, under a name derived from the cluster's address —
+  `dev`/`strimzi` reads `KAAS_UI_CLIENT_SECRET_DEV_STRIMZI` — which the
+  deployment fills from a `secretKeyRef`. Setting the key **overrides** the
+  variable, which is the way round a local run wants and the wrong way round
+  for a deployment, so the deployed ConfigMap simply does not set it. Two
+  clusters whose ids flatten to the same variable are refused at startup
+  rather than left sharing a credential. It is read **once, at startup**, so
+  a rotation needs a pod restart — the config poller watches the config file,
+  and a Secret rewritten underneath a running process goes unnoticed.
 - **`/oauth2/v2.0/token`, not v1.** The v1 endpoint issues
   `iss: https://sts.windows.net/{tid}/`, which fails a broker pinned to the v2
   issuer. The symptom is a SASL failure whose reason is only in the *broker's*

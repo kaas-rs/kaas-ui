@@ -530,7 +530,7 @@ pub struct TlsSettings {
 ///   mechanism: oauthbearer
 ///   token_endpoint: https://login.microsoftonline.com/<tenant>/oauth2/v2.0/token
 ///   client_id: <client-id>
-///   client_secret_env: KAFKA_OAUTH_CLIENT_SECRET
+///   # client_secret comes from $KAAS_UI_CLIENT_SECRET_DEV_STRIMZI
 ///   scope: <client-id>/.default
 /// ```
 #[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -649,30 +649,34 @@ pub struct OauthCredentials {
     /// service principal's **object** id — a different uuid, and the one the
     /// `KafkaUser` has to be named for.
     pub client_id: String,
-    /// The client secret, inline. Prefer `client_secret_env`: an inline
-    /// secret is a secret in the config file, and the config file is a
-    /// ConfigMap that every ArgoCD viewer can read.
+    /// The client secret.
+    ///
+    /// **Omit it and it comes from the environment**, under a name derived
+    /// from the cluster's address — `dev`/`strimzi` reads
+    /// `KAAS_UI_CLIENT_SECRET_DEV_STRIMZI`. See [`oauth_secret_var`]. That is
+    /// how the deployment supplies it: the ConfigMap names no secret, and the
+    /// value arrives from a `secretKeyRef`, so the config carries a credential
+    /// nowhere and the pod spec carries a key name.
+    ///
+    /// Setting it here **overrides** the variable, which is the way round a
+    /// local run wants: a scratch config with the secret written in it beats
+    /// whatever happens to be exported in the shell. It is the wrong way round
+    /// for a deployment, which is why the deployed ConfigMap simply does not
+    /// set it — an inline secret is a secret in a ConfigMap that every ArgoCD
+    /// viewer can read.
+    ///
+    /// Derived rather than named — there was a `client_secret_env` here that
+    /// named the variable, and a `client_secret_file` before that — because
+    /// one key with one rule is less to get wrong than three keys that all
+    /// mean "the secret". The cost is that the variable's name follows the
+    /// cluster's ids, so renaming a cluster renames its variable; that fails
+    /// loudly at startup naming the new one, rather than quietly.
+    ///
+    /// Read once, at startup, whichever way it arrives. Rotating it therefore
+    /// needs a restart: the config poller watches the *config* file, and a
+    /// Secret rewritten underneath a running process goes unnoticed.
     #[serde(default)]
     pub client_secret: Option<String>,
-    /// The **name of** an environment variable holding the client secret.
-    ///
-    /// The name, not the value — `client_secret_env: KAFKA_OAUTH_CLIENT_SECRET`,
-    /// with the value arriving from a `secretKeyRef`. It is the shape Dex uses
-    /// for the same credential one container over, and it needs no volume:
-    /// the Secret is already in the namespace, and this reads it without
-    /// mounting it.
-    ///
-    /// There was a `client_secret_file` beside this, pointing at a mounted
-    /// key, and it is gone. Two ways to say the same thing is two things to
-    /// document, test and choose between, and the deployment uses this one —
-    /// the file bought nothing that a `secretKeyRef` does not, since both are
-    /// readable by anything that can already read the process.
-    ///
-    /// Read once, at startup. Rotating the secret therefore needs a restart:
-    /// the config poller watches the *config* file, and a Secret rewritten
-    /// underneath a running process goes unnoticed until something reconnects.
-    #[serde(default)]
-    pub client_secret_env: Option<String>,
     /// `scope` to request. Entra wants `<client-id>/.default` — the bare id,
     /// not `api://<client-id>/.default`, unless the app registration actually
     /// has an Application ID URI. Keycloak usually wants nothing.
@@ -708,9 +712,6 @@ impl std::fmt::Debug for OauthCredentials {
             .field("token_endpoint", &self.token_endpoint)
             .field("client_id", &self.client_id)
             .field("client_secret", &redacted(self.client_secret.is_some()))
-            // The variable's *name* is not a secret and is the whole
-            // diagnosis when it is the thing that is unset.
-            .field("client_secret_env", &self.client_secret_env)
             .field("scope", &self.scope)
             .field("audience", &self.audience)
             .field("credentials_in_body", &self.credentials_in_body)
@@ -739,6 +740,44 @@ pub enum ConfigError {
     /// The file parsed but says something impossible.
     #[error("{0}")]
     Invalid(String),
+}
+
+/// The environment variable an OAuth client secret comes from, when the config
+/// does not spell it out.
+///
+/// Derived from the cluster's address rather than configured, because that is
+/// the address everything else about a cluster uses: `dev`/`strimzi` reads
+/// `KAAS_UI_CLIENT_SECRET_DEV_STRIMZI`. Ids are already restricted to
+/// `[A-Za-z0-9_-]`, so the only transformation is uppercasing and turning `-`
+/// into `_`.
+///
+/// Two clusters can still flatten to one name — `a-b`/`c` and `a`/`b-c` both
+/// give `A_B_C` — which [`Config::validate`] refuses rather than leaves as a
+/// shared credential.
+///
+/// It sits under the `KAAS_UI_` prefix the figment overlay also reads, and is
+/// invisible to it: the overlay only accepts keys rooted at `server` or
+/// `environments`, and this is neither. `an_oauth_secret_variable_is_not_a_config_override`
+/// holds that, because the day it stops being true this variable would be
+/// parsed as configuration and refuse to start.
+#[must_use]
+pub fn oauth_secret_var(environment: &str, cluster: &str) -> String {
+    fn flatten(id: &str) -> String {
+        id.chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() {
+                    c.to_ascii_uppercase()
+                } else {
+                    '_'
+                }
+            })
+            .collect()
+    }
+    format!(
+        "KAAS_UI_CLIENT_SECRET_{}_{}",
+        flatten(environment),
+        flatten(cluster)
+    )
 }
 
 /// Whether an id can be a path segment verbatim.
@@ -900,6 +939,10 @@ impl Config {
 
         let mut seen_environments: BTreeMap<&str, ()> = BTreeMap::new();
         let mut cluster_count = 0usize;
+        // Derived oauth secret variable → the cluster that claimed it, so two
+        // clusters flattening to one name is a startup error rather than a
+        // shared credential.
+        let mut secret_vars: BTreeMap<String, String> = BTreeMap::new();
 
         for environment in &self.environments {
             let env = environment.id.as_str();
@@ -1031,23 +1074,27 @@ impl Config {
                         )));
                     }
                     Some(SaslSettings::OauthBearer(oauth)) => {
-                        let sources = usize::from(oauth.client_secret.is_some())
-                            + usize::from(oauth.client_secret_env.is_some());
-                        if sources == 0 {
+                        // No check that a secret was configured: omitting it
+                        // is how the deployment says "from the environment".
+                        // Whether the variable is actually set is decided when
+                        // the credentials are built, which is still startup —
+                        // and the error there can name the variable, which a
+                        // check here could only guess at.
+                        //
+                        // What *is* checked is that two clusters do not derive
+                        // the same variable name. `a-b`/`c` and `a`/`b-c` both
+                        // flatten to `A_B_C`, and one of them would silently
+                        // authenticate with the other's credential.
+                        let variable = oauth_secret_var(env, &cluster.id);
+                        if let Some(other) =
+                            secret_vars.insert(variable.clone(), cluster.id.clone())
+                            && other != cluster.id
+                        {
                             return Err(ConfigError::Invalid(format!(
-                                "cluster {:?} configures oauthbearer without a client_secret or \
-                                 client_secret_env",
-                                cluster.id
-                            )));
-                        }
-                        // Two sources is not a fallback chain, it is a
-                        // question nobody can answer from the outside: which
-                        // one is live? Refusing costs one edit and removes a
-                        // class of "I rotated it and nothing changed".
-                        if sources > 1 {
-                            return Err(ConfigError::Invalid(format!(
-                                "cluster {:?} sets both client_secret and client_secret_env; \
-                                 they are alternatives, not an order of preference",
+                                "clusters {other:?} and {:?} both take their oauth client secret \
+                                 from ${variable}: the name is derived from the environment and \
+                                 cluster ids, and these two flatten to the same one. Rename one \
+                                 of them, or set `client_secret` explicitly on it.",
                                 cluster.id
                             )));
                         }
@@ -1715,7 +1762,6 @@ environments:
           mechanism: oauthbearer
           token_endpoint: https://login.microsoftonline.com/tenant/oauth2/v2.0/token
           client_id: a-client-id
-          client_secret_env: KAFKA_OAUTH_CLIENT_SECRET
           scope: a-client-id/.default
           refresh_margin: 90s
 "#,
@@ -1767,9 +1813,12 @@ environments:
         }
     }
 
-    /// The deployment shape: the config names a variable, not a value.
+    /// The deployment shape: the config names no secret at all.
     #[test]
-    fn a_client_secret_can_come_from_a_named_environment_variable() {
+    fn a_missing_client_secret_is_the_environment_supplying_it() {
+        // Legal, and the only way the deployed ConfigMap can carry no
+        // credential. Whether the variable is actually set is decided when
+        // the credentials are built, so the error can name it.
         let config = Config::from_yaml(
             r#"
 environments:
@@ -1782,71 +1831,67 @@ environments:
           mechanism: oauthbearer
           token_endpoint: https://issuer/token
           client_id: x
-          client_secret_env: KAFKA_OAUTH_CLIENT_SECRET
 "#,
-        )
-        .unwrap();
-        match config.environments[0].kafka_clusters[0].sasl.as_ref() {
-            Some(SaslSettings::OauthBearer(oauth)) => {
-                assert_eq!(
-                    oauth.client_secret_env.as_deref(),
-                    Some("KAFKA_OAUTH_CLIENT_SECRET")
-                );
-                assert!(oauth.client_secret.is_none());
-            }
-            other => panic!("expected oauthbearer, got {other:?}"),
-        }
+        );
+        assert!(config.is_ok(), "{:?}", config.err());
     }
 
-    /// Two sources is a question nobody can answer from the outside.
-    ///
-    /// A fallback chain would mean "I rotated the Secret and nothing changed"
-    /// is a thing that can happen quietly, with the inline value still
-    /// winning. There is no precedence to learn because there is no
-    /// precedence.
     #[test]
-    fn two_client_secret_sources_are_refused_rather_than_ordered() {
-        let err = Config::from_yaml(
-            r#"
-environments:
-  - id: dev
-    kafka_clusters:
-      - id: strimzi
-        bootstrap: ["a:9094"]
-        tls: { ca_file: /etc/ca/ca.crt }
-        sasl:
-          mechanism: oauthbearer
-          token_endpoint: https://issuer/token
-          client_id: x
-          client_secret: inline
-          client_secret_env: KAFKA_OAUTH_CLIENT_SECRET
-"#,
-        )
-        .unwrap_err();
-        assert!(
-            format!("{err}").contains("alternatives, not an order of preference"),
-            "{err}"
+    fn the_secret_variable_is_derived_from_the_address_that_addresses_everything_else() {
+        assert_eq!(
+            oauth_secret_var("dev", "strimzi"),
+            "KAAS_UI_CLIENT_SECRET_DEV_STRIMZI"
+        );
+        // Ids may carry `-` and `_`; both flatten, because neither is legal
+        // in a variable name in every shell that will export it.
+        assert_eq!(
+            oauth_secret_var("prod-eu", "kafka_a"),
+            "KAAS_UI_CLIENT_SECRET_PROD_EU_KAFKA_A"
         );
     }
 
+    /// Flattening can collide, and a shared credential must not be the way
+    /// anyone finds out.
     #[test]
-    fn oauthbearer_without_a_secret_is_rejected_at_startup() {
+    fn two_clusters_that_flatten_to_one_variable_are_refused() {
         let err = Config::from_yaml(
             r#"
 environments:
-  - id: dev
+  - id: a-b
     kafka_clusters:
-      - id: strimzi
-        bootstrap: ["a:9094"]
+      - id: c
+        bootstrap: ["x:9094"]
         tls: { ca_file: /etc/ca/ca.crt }
-        sasl:
-          mechanism: oauthbearer
-          token_endpoint: https://issuer/token
-          client_id: x
+        sasl: { mechanism: oauthbearer, token_endpoint: "https://i/t", client_id: x }
+  - id: a
+    kafka_clusters:
+      - id: b-c
+        bootstrap: ["y:9094"]
+        tls: { ca_file: /etc/ca/ca.crt }
+        sasl: { mechanism: oauthbearer, token_endpoint: "https://i/t", client_id: y }
 "#,
         )
         .unwrap_err();
-        assert!(format!("{err}").contains("client_secret_env"), "{err}");
+        let rendered = format!("{err}");
+        assert!(
+            rendered.contains("KAAS_UI_CLIENT_SECRET_A_B_C"),
+            "{rendered}"
+        );
+        // And it is escapable without a rename.
+        assert!(rendered.contains("client_secret"), "{rendered}");
+    }
+
+    /// The variable lives under `KAAS_UI_`, which the figment overlay also
+    /// reads. It must stay invisible to it: `environments` is a list the
+    /// overlay cannot index, so a key it *did* accept would refuse to start.
+    #[test]
+    fn an_oauth_secret_variable_is_not_a_config_override() {
+        assert!(!is_ours(
+            &oauth_secret_var("dev", "strimzi").to_ascii_lowercase()
+        ));
+        assert!(!is_ours("client_secret_dev_strimzi"));
+        // The overlay still works for what it is for.
+        assert!(is_ours("server.listen"));
     }
 
     /// The one that costs a credential rather than a page.
@@ -1889,7 +1934,6 @@ environments:
             token_endpoint: "https://issuer/token".to_owned(),
             client_id: "a-client-id".to_owned(),
             client_secret: Some("sup3r-s3cret".to_owned()),
-            client_secret_env: None,
             scope: None,
             audience: None,
             credentials_in_body: false,

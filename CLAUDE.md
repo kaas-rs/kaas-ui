@@ -237,17 +237,18 @@ active nav, focus ring, selected edge. For accent text on light use
   a registry is still not the same claim as decoding against it, so
   `schema_registry:` stays an explicit line and a cross-environment reference
   is a startup error.
-- **A credential is a reference, and it is read once.** `password_file` names
-  a mounted Secret; `client_secret_env` names a variable the deployment fills
-  from a `secretKeyRef`. The inline forms exist for a local run and are wrong
-  for a deployment, because the config is a ConfigMap. There is deliberately
-  **one** non-inline form per credential — OAuth's file variant was removed
-  once the env one existed, because two ways to say the same thing is two to
-  document and choose between, and setting both is refused rather than
-  ordered. Everything is read at startup, so rotating needs a restart. Secrets
-  redact themselves in `Debug` — the leak that happens is `?entry`, not a
-  deliberate print — and a failing OAuth exchange reports the issuer's error,
-  never the credential.
+- **An absent credential is where the credential comes from.** An OAuth
+  cluster with no `client_secret` reads `KAAS_UI_CLIENT_SECRET_<ENV>_<ID>`
+  from the environment, which the deployment fills from a `secretKeyRef`;
+  writing the key in the config **overrides** it, which is right for a local
+  run and wrong for a deployment, because the config is a ConfigMap. One key,
+  one rule — there were three (`client_secret`, `_file`, `_env`) and each
+  extra one was a decision at the point of writing a config rather than a
+  capability. SASL passwords still use `password_file`, which is the
+  asymmetry to fix next. Everything is read at startup, so rotating needs a
+  restart. Secrets redact themselves in `Debug` — the leak that happens is
+  `?entry`, not a deliberate print — and a failing OAuth exchange reports the
+  issuer's error, never the credential.
 - **ccompat only.** Apicurio's native `/apis/registry/v3` is not supported, and
   a `url` pointing at it is a **configuration** error reported on first use,
   naming `/apis/ccompat/v7`. The failure to design against is every record on
