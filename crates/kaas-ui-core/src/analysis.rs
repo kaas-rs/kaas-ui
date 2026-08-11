@@ -453,22 +453,27 @@ impl TopicAnalysisBuilder {
 
     /// The terminal value.
     ///
-    /// `complete: false` is the honest label for a scan that hit its lifetime
-    /// or lost a partition mid-read: the numbers are real for what *was*
-    /// scanned, and presenting them as the topic's would be worse than an
-    /// error — see the analysis route for where each case arises.
+    /// What ended the scan travels on the result, because the three ways of
+    /// covering less than the whole topic mean three different things to a
+    /// reader: a **configured cap** makes the numbers the sample that was
+    /// asked for, a **time cap** makes them a sample nobody chose the size
+    /// of, and an **error** makes them what could be read before it. Only
+    /// [`AnalysisStop::End`] lets the numbers claim to be the topic's —
+    /// `complete` is derived from it, never set beside it, so the two cannot
+    /// disagree.
     pub fn render(
         self,
         started_at: i64,
         finished_at: i64,
-        complete: bool,
+        stopped_by: AnalysisStop,
         scanned_fraction: Option<f64>,
         errors: Vec<ResourceError>,
     ) -> TopicAnalysis {
         TopicAnalysis {
             started_at,
             finished_at,
-            complete,
+            complete: stopped_by == AnalysisStop::End,
+            stopped_by,
             scanned_fraction,
             clock: self.totals.clock().map(str::to_owned),
             total_stats: self.totals.render(None),
@@ -511,6 +516,24 @@ pub struct AnalysisProgress {
     pub elapsed_ms: u64,
 }
 
+/// What ended a scan.
+///
+/// Not a status code: every variant except `Error` is a *successful* analysis
+/// of however much was read, and the UI's job is to say which sample the
+/// numbers describe rather than to apologise for a cap somebody configured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum AnalysisStop {
+    /// The whole retained topic was read.
+    End,
+    /// The configured record cap was reached first.
+    MessageCap,
+    /// The configured time cap was reached first.
+    TimeCap,
+    /// An error ended the scan — named in `errors`.
+    Error,
+}
+
 /// The terminal value of one analysis.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -519,10 +542,12 @@ pub struct TopicAnalysis {
     pub started_at: i64,
     /// When it finished — or when it stopped, if `complete` is false.
     pub finished_at: i64,
-    /// Whether the whole planned window was read. **A partial result is
-    /// flagged, never silently presented as the topic's numbers** — statistics
-    /// that look complete and are wrong are worse than an error.
+    /// Whether the numbers describe the whole retained topic. **A partial
+    /// result is flagged, never silently presented as the topic's numbers** —
+    /// statistics that look complete and are wrong are worse than an error.
     pub complete: bool,
+    /// What ended the scan — the reason `complete` is what it is.
+    pub stopped_by: AnalysisStop,
     /// How much of the planned offset range was consumed, where known.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scanned_fraction: Option<f64>,
@@ -667,7 +692,7 @@ mod tests {
         builder.record(&record(0, 2, Some("k1"), None));
         builder.record(&record(0, 3, Some("k2"), Some("")));
 
-        let analysis = builder.render(0, 1, true, Some(1.0), Vec::new());
+        let analysis = builder.render(0, 1, AnalysisStop::End, Some(1.0), Vec::new());
         assert_eq!(analysis.total_stats.total_msgs, 3);
         assert_eq!(analysis.total_stats.null_values, 1, "only the tombstone");
         assert_eq!(analysis.total_stats.null_keys, 0);
@@ -707,7 +732,7 @@ mod tests {
         for i in 0..100 {
             builder.record(&record(0, i, Some(&format!("k{i}")), Some("x")));
         }
-        let analysis = builder.render(0, 1, true, None, Vec::new());
+        let analysis = builder.render(0, 1, AnalysisStop::End, None, Vec::new());
         assert!(analysis.total_stats.approx_uniq_keys <= 100);
         assert_eq!(analysis.total_stats.approx_uniq_values, 1);
     }
@@ -757,7 +782,7 @@ mod tests {
         builder.record(&no_ts);
         builder.record(&record(0, 2, None, Some("v")));
 
-        let analysis = builder.render(0, 1, true, None, Vec::new());
+        let analysis = builder.render(0, 1, AnalysisStop::End, None, Vec::new());
         assert_eq!(analysis.total_stats.missing_timestamps, 1);
         assert_eq!(
             analysis.total_stats.hourly_msg_counts.len(),
@@ -788,7 +813,7 @@ mod tests {
         builder.record(&record(1, 21, Some("c"), None));
         builder.malformed(1);
 
-        let analysis = builder.render(0, 1, true, Some(1.0), Vec::new());
+        let analysis = builder.render(0, 1, AnalysisStop::End, Some(1.0), Vec::new());
         assert_eq!(analysis.total_stats.total_msgs, 3);
         assert_eq!(analysis.partition_stats.len(), 2);
         let p1 = &analysis.partition_stats[1];

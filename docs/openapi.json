@@ -684,6 +684,28 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Stop after this many records; absent is the whole topic",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "maxMinutes",
+            "in": "query",
+            "description": "Stop after this many minutes, 1-30; defaults to 10",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
           }
         ],
         "responses": {
@@ -1635,6 +1657,16 @@
             ]
           }
         }
+      },
+      "AnalysisStop": {
+        "type": "string",
+        "description": "What ended a scan.\n\nNot a status code: every variant except `Error` is a *successful* analysis\nof however much was read, and the UI's job is to say which sample the\nnumbers describe rather than to apologise for a cap somebody configured.",
+        "enum": [
+          "end",
+          "messageCap",
+          "timeCap",
+          "error"
+        ]
       },
       "ApiErrorBody": {
         "type": "object",
@@ -5777,6 +5809,7 @@
           "startedAt",
           "finishedAt",
           "complete",
+          "stoppedBy",
           "totalStats",
           "partitionStats",
           "errors"
@@ -5791,7 +5824,7 @@
           },
           "complete": {
             "type": "boolean",
-            "description": "Whether the whole planned window was read. **A partial result is\nflagged, never silently presented as the topic's numbers** — statistics\nthat look complete and are wrong are worse than an error."
+            "description": "Whether the numbers describe the whole retained topic. **A partial\nresult is flagged, never silently presented as the topic's numbers** —\nstatistics that look complete and are wrong are worse than an error."
           },
           "errors": {
             "type": "array",
@@ -5824,6 +5857,10 @@
             "type": "integer",
             "format": "int64",
             "description": "When the scan started, epoch milliseconds."
+          },
+          "stoppedBy": {
+            "$ref": "#/components/schemas/AnalysisStop",
+            "description": "What ended the scan — the reason `complete` is what it is."
           },
           "totalStats": {
             "$ref": "#/components/schemas/AnalysisStats",

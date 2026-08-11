@@ -385,12 +385,17 @@ export interface AnalysisStats {
   malformedBatches: number
 }
 
+/** What ended an analysis scan. Everything but `error` is a valid result. */
+export type AnalysisStop = "end" | "messageCap" | "timeCap" | "error"
+
 /** The terminal `result` event of one analysis. */
 export interface TopicAnalysis {
   startedAt: number
   finishedAt: number
   /** False when the scan was cut short — the numbers cover what was read. */
   complete: boolean
+  /** What ended the scan — the reason `complete` is what it is. */
+  stoppedBy: AnalysisStop
   scannedFraction?: number
   /** Which clock stamped the timestamps: createTime, logAppendTime or mixed. */
   clock?: string

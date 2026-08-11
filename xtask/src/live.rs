@@ -947,6 +947,42 @@ async fn assertions() -> Result<Acceptance, String> {
                 Err(format!("{fractions:?}"))
             },
         );
+
+        // The record cap: exactly the sample asked for, and the result names
+        // the cap — not an error, and not the topic's numbers.
+        let capped = client
+            .get(url(&format!("{base}/analysis?limit=100")))
+            .timeout(Duration::from_secs(60))
+            .send()
+            .await
+            .map_err(|e| e.to_string())?
+            .text()
+            .await
+            .map_err(|e| e.to_string())?;
+        let capped_result: Option<Value> = capped
+            .lines()
+            .zip(capped.lines().skip(1))
+            .find(|(line, _)| *line == "event: result")
+            .and_then(|(_, data)| data.strip_prefix("data: "))
+            .and_then(|data| serde_json::from_str(data).ok());
+        acceptance.check(
+            &format!("{id}: a capped analysis is the sample it asked for"),
+            match capped_result {
+                Some(result)
+                    if result["totalStats"]["totalMsgs"] == 100
+                        && result["stoppedBy"] == "messageCap"
+                        && result["complete"] == false
+                        && result["errors"].as_array().is_some_and(Vec::is_empty) =>
+                {
+                    Ok("100 records, stoppedBy=messageCap, no error".to_owned())
+                }
+                Some(result) => Err(format!(
+                    "totalMsgs={}, stoppedBy={}, complete={}",
+                    result["totalStats"]["totalMsgs"], result["stoppedBy"], result["complete"]
+                )),
+                None => Err("no result event".to_owned()),
+            },
+        );
     }
 
     // --- one analysis per cluster --------------------------------------------

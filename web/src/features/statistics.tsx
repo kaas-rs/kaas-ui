@@ -34,7 +34,13 @@ import { useTopicSize } from "@/api/client"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
 import { Progress } from "@/components/ui/progress"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import {
   Table,
   TableBody,
@@ -57,15 +63,27 @@ import {
   useResolvedDateOrder,
 } from "@/lib/settings"
 
-function analysisUrl(envId: string, clusterId: string, topic: string): string {
+function analysisUrl(
+  envId: string,
+  clusterId: string,
+  topic: string,
+  caps: { limit: number | null; maxMinutes: number }
+): string {
+  const params = new URLSearchParams()
+  if (caps.limit !== null) params.set("limit", String(caps.limit))
+  params.set("maxMinutes", String(caps.maxMinutes))
   // `EventSource` takes a URL, not a path handed to `fetch`, so the base
   // prefix is applied here — the same reason `streamUrl` does.
   return withBase(
     `/api/environments/${encodeURIComponent(envId)}/clusters/${encodeURIComponent(
       clusterId
-    )}/topics/${encodeURIComponent(topic)}/analysis`
+    )}/topics/${encodeURIComponent(topic)}/analysis?${params}`
   )
 }
+
+/** The server's ceiling on `maxMinutes`, mirrored for the input's own check. */
+const MAX_MINUTES = 30
+const DEFAULT_MINUTES = 10
 
 type Phase =
   | { kind: "idle" }
@@ -92,6 +110,14 @@ export function TopicStatistics({
     const cached = queryClient.getQueryData<TopicAnalysis>(cacheKey)
     return cached ? { kind: "done", result: cached } : { kind: "idle" }
   })
+  // The caps, as typed. Records defaults to the topic's current retained
+  // count — the same read as "everything", but a finish line the progress
+  // bar can honestly reach on a topic that is still being produced to.
+  // Blank means uncapped.
+  const [recordCap, setRecordCap] = useState(() =>
+    info.messageCount === null ? "" : String(info.messageCount)
+  )
+  const [minuteCap, setMinuteCap] = useState(String(DEFAULT_MINUTES))
   const source = useRef<EventSource | null>(null)
 
   const stop = useCallback(() => {
@@ -106,7 +132,17 @@ export function TopicStatistics({
   const start = useCallback(() => {
     stop()
     setPhase({ kind: "running", progress: null })
-    const es = new EventSource(analysisUrl(envId, clusterId, topic))
+    const limit = Math.floor(Number(recordCap))
+    const minutes = Math.floor(Number(minuteCap))
+    const es = new EventSource(
+      analysisUrl(envId, clusterId, topic, {
+        limit: Number.isFinite(limit) && limit > 0 ? limit : null,
+        maxMinutes:
+          Number.isFinite(minutes) && minutes > 0
+            ? Math.min(minutes, MAX_MINUTES)
+            : DEFAULT_MINUTES,
+      })
+    )
     source.current = es
 
     es.addEventListener("progress", (event) => {
@@ -163,7 +199,7 @@ export function TopicStatistics({
     // The dependency list names the identity of the analysis, not the cache
     // key array, whose reference changes per render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [envId, clusterId, topic, stop, queryClient])
+  }, [envId, clusterId, topic, recordCap, minuteCap, stop, queryClient])
 
   return (
     <div className="space-y-6">
@@ -173,6 +209,10 @@ export function TopicStatistics({
           envId={envId}
           clusterId={clusterId}
           topic={topic}
+          recordCap={recordCap}
+          minuteCap={minuteCap}
+          onRecordCap={setRecordCap}
+          onMinuteCap={setMinuteCap}
           onStart={start}
         />
       ) : null}
@@ -213,12 +253,20 @@ function StartCard({
   envId,
   clusterId,
   topic,
+  recordCap,
+  minuteCap,
+  onRecordCap,
+  onMinuteCap,
   onStart,
 }: {
   info: TopicDetail
   envId: string
   clusterId: string
   topic: string
+  recordCap: string
+  minuteCap: string
+  onRecordCap(value: string): void
+  onMinuteCap(value: string): void
   onStart(): void
 }) {
   const size = useTopicSize(envId, clusterId, topic)
@@ -226,33 +274,66 @@ function StartCard({
 
   return (
     <Card>
-      <CardContent className="space-y-3">
+      <CardContent className="space-y-4">
         <p className="text-[13px]">
-          Analyse this topic: read every record from the beginning and fold
+          Analyse this topic: read records from the beginning and fold
           statistics — sizes, distinct keys, tombstones, an hourly histogram.
           Nothing is stored on the cluster; the scan is cancelled the moment
           this tab is left.
         </p>
-        <p className="text-[12px] text-ink-muted">
-          This reads{" "}
-          <span className="font-mono">
-            {info.messageCount === null
-              ? "every retained record"
-              : `~${count(info.messageCount)} records`}
-          </span>
-          {logical !== null ? (
+        <div className="flex flex-wrap items-end gap-4">
+          <label className="space-y-1 text-[12px]">
+            <span className="text-ink-muted block">
+              records to scan
+              <span className="text-ink-faint ml-1">
+                (blank = the whole topic)
+              </span>
+            </span>
+            <Input
+              type="number"
+              min={1}
+              value={recordCap}
+              onChange={(event) => onRecordCap(event.target.value)}
+              className="h-8 w-40 font-mono text-[12px]"
+            />
+          </label>
+          <label className="space-y-1 text-[12px]">
+            <span className="text-ink-muted block">
+              max minutes
+              <span className="text-ink-faint ml-1">(up to {MAX_MINUTES})</span>
+            </span>
+            <Input
+              type="number"
+              min={1}
+              max={MAX_MINUTES}
+              value={minuteCap}
+              onChange={(event) => onMinuteCap(event.target.value)}
+              className="h-8 w-24 font-mono text-[12px]"
+            />
+          </label>
+          <Button size="sm" onClick={onStart}>
+            <ChartColumn aria-hidden />
+            analyse topic
+          </Button>
+        </div>
+        <p className="text-ink-muted text-[12px]">
+          The record cap defaults to the topic&apos;s current retained count
+          {info.messageCount !== null ? (
             <>
               {" "}
-              (<span className="font-mono">{bytes(logical)}</span> one copy)
+              (<span className="font-mono">{count(info.messageCount)}</span>)
             </>
-          ) : null}{" "}
-          over the brokers&apos; shared connections — one analysis runs per
-          cluster at a time.
+          ) : null}
+          {logical !== null ? (
+            <>
+              , about <span className="font-mono">{bytes(logical)}</span> for
+              one copy
+            </>
+          ) : null}
+          . Whichever cap is reached first ends the scan, and the result says
+          which sample its numbers describe. The read runs over the
+          brokers&apos; shared connections — one analysis per cluster at a time.
         </p>
-        <Button size="sm" onClick={onStart}>
-          <ChartColumn aria-hidden />
-          analyse topic
-        </Button>
       </CardContent>
     </Card>
   )
@@ -303,18 +384,40 @@ function AnalysisResult({
   const dateOrder = useResolvedDateOrder()
   const totals = result.totalStats
 
+  const fractionNote =
+    result.scannedFraction !== undefined
+      ? ` — about ${Math.round(result.scannedFraction * 100)}% of the retained offset span`
+      : ""
+
   return (
     <div className="space-y-6">
       <ErrorChips errors={result.errors} />
-      {!result.complete ? (
-        <p className="flex items-start gap-2 text-[12px] text-warn-ink">
+      {result.stoppedBy === "messageCap" ? (
+        <p className="text-ink-muted text-[12px]">
+          <strong>Capped result.</strong> The scan stopped at its configured
+          record cap after {count(totals.totalMsgs)} records{fractionNote};
+          every number below describes that sample, read from the beginning of
+          the topic.
+        </p>
+      ) : null}
+      {result.stoppedBy === "timeCap" ? (
+        <p className="text-warn-ink flex items-start gap-2 text-[12px]">
           <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
           <span>
-            <strong>Partial result.</strong> The scan stopped
-            {result.scannedFraction !== undefined
-              ? ` after ~${Math.round(result.scannedFraction * 100)}% of the planned window`
-              : " before reading the whole topic"}
-            ; every number below covers only what was scanned.
+            <strong>Time-capped result.</strong> The scan hit its minute cap
+            after {count(totals.totalMsgs)} records{fractionNote}; every number
+            below covers only what was scanned. Raise the cap, or lower the
+            record cap, to finish inside it.
+          </span>
+        </p>
+      ) : null}
+      {result.stoppedBy === "error" ? (
+        <p className="text-warn-ink flex items-start gap-2 text-[12px]">
+          <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+          <span>
+            <strong>Partial result.</strong> An error ended the scan
+            {fractionNote}; the numbers below cover what was read before it, and
+            the error is named above.
           </span>
         </p>
       ) : null}
@@ -322,9 +425,24 @@ function AnalysisResult({
       <Card>
         <CardContent className="space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex flex-wrap items-center gap-2 text-[12px] text-ink-muted">
-              <Badge variant={result.complete ? "outline" : "destructive"}>
-                {result.complete ? "complete" : "partial"}
+            <div className="text-ink-muted flex flex-wrap items-center gap-2 text-[12px]">
+              <Badge
+                variant={
+                  result.stoppedBy === "end"
+                    ? "outline"
+                    : result.stoppedBy === "messageCap"
+                      ? "secondary"
+                      : "destructive"
+                }
+              >
+                {
+                  {
+                    end: "complete",
+                    messageCap: "capped",
+                    timeCap: "time-capped",
+                    error: "partial",
+                  }[result.stoppedBy]
+                }
               </Badge>
               <span>
                 analysed{" "}
@@ -337,29 +455,41 @@ function AnalysisResult({
             </Button>
           </div>
           <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-[13px] sm:grid-cols-4">
-            <Stat label="messages scanned" value={count(totals.totalMsgs)} />
+            <Stat
+              label="messages scanned"
+              value={count(totals.totalMsgs)}
+              hint="records read and folded — on a compacted or transactional topic this is legitimately below the offset span"
+            />
             <Stat
               label="payload bytes"
               value={bytes(
                 (totals.keySize?.sum ?? 0) + (totals.valueSize?.sum ?? 0)
               )}
               note="keys + values"
+              hint="the bytes actually carried by keys and values, before replication — not the on-disk size"
             />
             <Stat
               label="≈ unique keys"
               value={count(totals.approxUniqKeys)}
               note="estimate"
+              hint="distinct keys, from a cardinality sketch (±1.6%) — against messages scanned it reads as compaction headroom"
             />
             <Stat
               label="≈ unique values"
               value={count(totals.approxUniqValues)}
               note="estimate"
+              hint="distinct values, from the same sketch — far below the message count means repeated payloads"
             />
-            <Stat label="null keys" value={count(totals.nullKeys)} />
+            <Stat
+              label="null keys"
+              value={count(totals.nullKeys)}
+              hint="records written without a key; they partition round-robin and can never be compacted together"
+            />
             <Stat
               label="tombstones"
               value={count(totals.nullValues)}
               note="null values"
+              hint="records with a null value — deletion markers on a compacted topic, and not the same as an empty value"
             />
             <Stat
               label="no timestamp"
@@ -369,11 +499,13 @@ function AnalysisResult({
                   ? "excluded from the chart"
                   : undefined
               }
+              hint="records whose producer set no timestamp; counted here rather than plotted as 1970"
             />
             <Stat
               label="malformed batches"
               value={count(totals.malformedBatches)}
               tone={totals.malformedBatches > 0 ? "warn" : undefined}
+              hint="batches that would not decode at the protocol level — skipped and counted, the scan continues past them"
             />
           </dl>
           {totals.minTimestamp !== undefined &&
@@ -426,20 +558,94 @@ function AnalysisResult({
   )
 }
 
+/**
+ * A table header that says what its column means on hover — the same shape
+ * the partition table uses on the overview tab, for the same reason: every
+ * label here is a term with a plausible wrong reading.
+ */
+function Head({
+  label,
+  hint,
+  right = true,
+}: {
+  label: string
+  hint: string
+  right?: boolean
+}) {
+  return (
+    <TableHead className={right ? "text-right" : undefined}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="cursor-help decoration-dotted underline-offset-4 hover:underline">
+            {label}
+          </span>
+        </TooltipTrigger>
+        <TooltipContent>{hint}</TooltipContent>
+      </Tooltip>
+    </TableHead>
+  )
+}
+
 const PERCENTILES: Array<{
   label: string
+  hint: string
   pick(stats: SizeStats): number | undefined
   exact: boolean
 }> = [
-  { label: "min", pick: (s) => s.min, exact: true },
-  { label: "avg", pick: (s) => Math.round(s.avg), exact: true },
-  { label: "p50", pick: (s) => s.p50, exact: false },
-  { label: "p75", pick: (s) => s.p75, exact: false },
-  { label: "p95", pick: (s) => s.p95, exact: false },
-  { label: "p99", pick: (s) => s.p99, exact: false },
-  { label: "p99.9", pick: (s) => s.p999, exact: false },
-  { label: "max", pick: (s) => s.max, exact: true },
-  { label: "sum", pick: (s) => s.sum, exact: true },
+  {
+    label: "min",
+    hint: "the smallest — exact",
+    pick: (s) => s.min,
+    exact: true,
+  },
+  {
+    label: "avg",
+    hint: "the mean — exact",
+    pick: (s) => Math.round(s.avg),
+    exact: true,
+  },
+  {
+    label: "p50",
+    hint: "the median: half the records are smaller — a sketch estimate (±4%)",
+    pick: (s) => s.p50,
+    exact: false,
+  },
+  {
+    label: "p75",
+    hint: "three quarters are smaller — estimate",
+    pick: (s) => s.p75,
+    exact: false,
+  },
+  {
+    label: "p95",
+    hint: "19 of 20 are smaller — estimate",
+    pick: (s) => s.p95,
+    exact: false,
+  },
+  {
+    label: "p99",
+    hint: "99% are smaller — estimate; the usual sizing figure",
+    pick: (s) => s.p99,
+    exact: false,
+  },
+  {
+    label: "p99.9",
+    hint: "999 of 1000 are smaller — estimate; the outliers",
+    pick: (s) => s.p999,
+    exact: false,
+  },
+  {
+    label: "max",
+    hint: "the largest single record — exact",
+    pick: (s) => s.max,
+    exact: true,
+  },
+  {
+    label: "sum",
+    hint: "every record summed — exact",
+    pick: (s) => s.sum,
+    exact: true,
+  },
 ]
 
 function SizeTable({
@@ -456,9 +662,11 @@ function SizeTable({
           <TableRow>
             <TableHead />
             {PERCENTILES.map((column) => (
-              <TableHead key={column.label} className="text-right">
-                {column.exact ? column.label : `≈ ${column.label}`}
-              </TableHead>
+              <Head
+                key={column.label}
+                label={column.exact ? column.label : `≈ ${column.label}`}
+                hint={column.hint}
+              />
             ))}
           </TableRow>
         </TableHeader>
@@ -488,12 +696,18 @@ function SizeTable({
 }
 
 /**
- * Records per hour, as a single-series bar chart on a **linear time axis** —
- * an hour nothing was written to is a gap at its true position, not a missing
- * category. One hue from the design system's chart ramp; a single series
- * needs no legend, the section title names it. The x label says which clock
- * is being plotted, because `createTime` and `logAppendTime` can disagree by
- * however long a producer buffers.
+ * Records per hour, as a single-series line on a **linear time axis**.
+ *
+ * The series is zero-filled: an hour nothing was written to is a point at
+ * zero in its true position, because a line drawn only through the non-empty
+ * hours would bridge a quiet night as if it never happened — the one lie a
+ * write-rate chart must not tell. One hue from the design system's chart
+ * ramp; a single series needs no legend, the section title names it. The
+ * caption says which clock is being plotted, because `createTime` and
+ * `logAppendTime` can disagree by however long a producer buffers.
+ *
+ * Hover is a column per hour, wider than the line, with the hour and its
+ * count — the mark itself is too thin to be a hit target.
  */
 function HourlyChart({
   stats,
@@ -515,15 +729,30 @@ function HourlyChart({
   if (hours.length === 0) return null
   const first = hours[0]?.hourStart ?? 0
   const last = hours[hours.length - 1]?.hourStart ?? first
-  const span = Math.max(1, (last - first) / HOUR + 1)
+  const span = Math.max(1, Math.round((last - first) / HOUR) + 1)
   const peak = Math.max(...hours.map((hour) => hour.count))
 
-  const barWidth = Math.max(1, plotWidth / span - 2)
-  const x = (hourStart: number) =>
-    PLOT.left + ((hourStart - first) / HOUR) * (plotWidth / span)
-  const y = (value: number) => PLOT.top + plotHeight * (1 - value / peak)
+  // Zero-filled, in hour order. Bounded: the accumulator caps its buckets,
+  // so the span here is at most the cap plus the gaps inside it.
+  const byHour = new Map(hours.map((hour) => [hour.hourStart, hour.count]))
+  const series: Array<{ hourStart: number; count: number }> = []
+  for (let index = 0; index < span; index += 1) {
+    const hourStart = first + index * HOUR
+    series.push({ hourStart, count: byHour.get(hourStart) ?? 0 })
+  }
 
-  // Three recessive gridlines; the labels wear ink, never the series colour.
+  const step = plotWidth / span
+  const x = (hourStart: number) =>
+    PLOT.left + ((hourStart - first) / HOUR) * step + step / 2
+  const y = (value: number) => PLOT.top + plotHeight * (1 - value / peak)
+  const path = series
+    .map(
+      (point, index) =>
+        `${index === 0 ? "M" : "L"}${x(point.hourStart).toFixed(1)},${y(point.count).toFixed(1)}`
+    )
+    .join(" ")
+
+  // Recessive gridlines; the labels wear ink, never the series colour.
   const ticks = [peak, Math.round(peak / 2)].filter(
     (tick, index, all) => tick > 0 && all.indexOf(tick) === index
   )
@@ -575,25 +804,41 @@ function HourlyChart({
           stroke="var(--line-strong)"
           strokeWidth="1"
         />
-        {hours.map((hour) => {
-          const top = y(hour.count)
-          const height = Math.max(1, PLOT.top + plotHeight - top)
-          return (
-            <rect
-              key={hour.hourStart}
-              x={x(hour.hourStart)}
-              y={PLOT.top + plotHeight - height}
-              width={barWidth}
-              height={height}
-              rx={Math.min(2, barWidth / 2)}
-              fill="var(--chart-1)"
-            >
-              <title>
-                {`${hourLabel(hour.hourStart)} — ${count(hour.count)} record${hour.count === 1 ? "" : "s"}`}
-              </title>
-            </rect>
-          )
-        })}
+        <path
+          d={path}
+          fill="none"
+          stroke="var(--chart-1)"
+          strokeWidth="2"
+          strokeLinejoin="round"
+          strokeLinecap="round"
+        />
+        {/* A visible marker only where the series is sparse enough for one
+            per hour to read as points rather than as a rope of beads. */}
+        {series.length <= 60
+          ? series.map((point) => (
+              <circle
+                key={point.hourStart}
+                cx={x(point.hourStart)}
+                cy={y(point.count)}
+                r="2.5"
+                fill="var(--chart-1)"
+              />
+            ))
+          : null}
+        {series.map((point) => (
+          <rect
+            key={point.hourStart}
+            x={x(point.hourStart) - step / 2}
+            y={PLOT.top}
+            width={Math.max(step, 1)}
+            height={plotHeight}
+            fill="transparent"
+          >
+            <title>
+              {`${hourLabel(point.hourStart)} — ${count(point.count)} record${point.count === 1 ? "" : "s"}`}
+            </title>
+          </rect>
+        ))}
         <text
           x={PLOT.left}
           y={HEIGHT - 8}
@@ -636,16 +881,40 @@ function PartitionStatsTable({ partitions }: { partitions: AnalysisStats[] }) {
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead className="text-right">partition</TableHead>
-            <TableHead className="text-right">messages</TableHead>
-            <TableHead className="text-right">min offset</TableHead>
-            <TableHead className="text-right">max offset</TableHead>
-            <TableHead className="text-right">null keys</TableHead>
-            <TableHead className="text-right">tombstones</TableHead>
-            <TableHead className="text-right">≈ unique keys</TableHead>
-            <TableHead className="text-right">avg value</TableHead>
-            <TableHead className="text-right">bytes</TableHead>
-            <TableHead className="text-right">malformed</TableHead>
+            <Head label="partition" hint="its index within the topic" />
+            <Head
+              label="messages"
+              hint="records scanned in this partition — one carrying most of them is a skewed partitioning key"
+            />
+            <Head
+              label="min offset"
+              hint="the lowest offset the scan read here"
+            />
+            <Head
+              label="max offset"
+              hint="the highest offset the scan read here"
+            />
+            <Head label="null keys" hint="records written without a key" />
+            <Head
+              label="tombstones"
+              hint="null-value records — deletion markers on a compacted topic"
+            />
+            <Head
+              label="≈ unique keys"
+              hint="estimated distinct keys in this partition (sketch, ±1.6%)"
+            />
+            <Head
+              label="avg value"
+              hint="the mean value size in this partition — exact"
+            />
+            <Head
+              label="bytes"
+              hint="key plus value bytes scanned in this partition"
+            />
+            <Head
+              label="malformed"
+              hint="batches that would not decode; skipped and counted"
+            />
           </TableRow>
         </TableHeader>
         <TableBody>
