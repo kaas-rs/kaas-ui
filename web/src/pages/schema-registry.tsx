@@ -15,31 +15,18 @@ import { Link } from "@tanstack/react-router"
 import { AlertTriangle } from "lucide-react"
 
 import { useEnvironment, useSubjectDetails, useSubjects } from "@/api/client"
-import type { RegistryCard, SubjectRow } from "@/api/types"
+import type { SubjectRow } from "@/api/types"
 import { Empty, Mono, RegistryCounts, Spinner } from "@/components/domain"
 import { PageTitle } from "@/components/page-title"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip"
-import { cn } from "@/lib/utils"
+import { RegistryFault } from "@/features/schemas/registry-fault"
+import { SubjectPager } from "@/features/schemas/subject-pager"
+import { SubjectTable } from "@/features/schemas/subject-table"
 
 const PAGE = 50
 
-export function SchemaRegistry({
+export function SchemaRegistryPage({
   envId,
   registryId,
 }: {
@@ -209,249 +196,28 @@ export function SchemaRegistry({
         </Empty>
       ) : (
         <>
-          <div className="rounded-md border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <Head
-                    label={`subject${order === "asc" ? " ↑" : " ↓"}`}
-                    hint="What the schema is registered against — usually a topic plus -value."
-                    onClick={() => {
-                      setOrder(order === "asc" ? "desc" : "asc")
-                      setOffset(0)
-                    }}
-                  />
-                  <Head
-                    label="id"
-                    hint="The number the wire format carries. Registry-wide, not per subject."
-                    right
-                  />
-                  <Head label="type" hint="Avro, Protobuf or JSON Schema." />
-                  <Head
-                    label="version"
-                    hint="The newest version of this subject."
-                    right
-                  />
-                  <Head
-                    label="compatibility"
-                    hint="What the registry will accept as the next version."
-                  />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {rows.map((row) => {
-                  const full = described.get(row.subject) ?? row
-                  return (
-                    <TableRow key={row.subject}>
-                      <TableCell>
-                        <Link
-                          to="/environments/$envId/schema-registries/$registryId/subjects/$subject"
-                          params={{ envId, registryId, subject: row.subject }}
-                          className="font-mono hover:underline"
-                          style={{ color: "var(--rust-ink)" }}
-                        >
-                          {row.subject}
-                        </Link>
-                      </TableCell>
-                      <TableCell className="text-right font-mono">
-                        <Pending value={full.id} fetching={details.isFetching}>
-                          {(id) => `#${id}`}
-                        </Pending>
-                      </TableCell>
-                      <TableCell>
-                        <Pending
-                          value={full.format}
-                          fetching={details.isFetching}
-                        >
-                          {(format) => (
-                            <Badge variant="outline">{format}</Badge>
-                          )}
-                        </Pending>
-                      </TableCell>
-                      <TableCell className="text-right font-mono">
-                        <Pending
-                          value={full.version}
-                          fetching={details.isFetching}
-                        >
-                          {(version) => String(version)}
-                        </Pending>
-                      </TableCell>
-                      <TableCell>
-                        <Pending
-                          value={full.compatibility}
-                          fetching={details.isFetching}
-                        >
-                          {(mode) => (
-                            <Compatibility
-                              mode={mode}
-                              inherited={full.compatibilityInherited}
-                            />
-                          )}
-                        </Pending>
-                      </TableCell>
-                    </TableRow>
-                  )
-                })}
-              </TableBody>
-            </Table>
-          </div>
+          <SubjectTable
+            envId={envId}
+            registryId={registryId}
+            rows={rows}
+            described={described}
+            fetching={details.isFetching}
+            order={order}
+            onSort={() => {
+              setOrder(order === "asc" ? "desc" : "asc")
+              setOffset(0)
+            }}
+          />
 
-          {total > PAGE ? (
-            <div className="mt-3 flex items-center gap-3 text-[12px]">
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={offset === 0}
-                onClick={() => setOffset(Math.max(0, offset - PAGE))}
-              >
-                previous
-              </Button>
-              <span className="text-ink-muted">
-                {offset + 1}–{Math.min(offset + PAGE, total)} of {total}
-              </span>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={offset + PAGE >= total}
-                onClick={() => setOffset(offset + PAGE)}
-              >
-                next
-              </Button>
-            </div>
-          ) : null}
+          <SubjectPager
+            offset={offset}
+            total={total}
+            page={PAGE}
+            onOffsetChange={setOffset}
+          />
         </>
       )}
     </>
-  )
-}
-
-/**
- * A column header that says what its column means.
- *
- * Every one of these is a registry term with a precise meaning and a plausible
- * wrong reading — `id` is a counter shared with every other subject, not this
- * subject's own numbering, and `compatibility` is a rule about the *next*
- * version rather than a verdict on this one. One line each, on hover, is
- * cheaper than a legend nobody scrolls to. The same shape the partition table
- * uses, for the same reason.
- */
-function Head({
-  label,
-  hint,
-  right,
-  onClick,
-}: {
-  label: string
-  hint: string
-  right?: boolean
-  /** Present on the one column that sorts; the header becomes the control. */
-  onClick?: () => void
-}) {
-  return (
-    <TableHead className={cn(right && "text-right")}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          {onClick ? (
-            <button
-              type="button"
-              onClick={onClick}
-              className="cursor-pointer decoration-dotted underline-offset-4 hover:underline"
-            >
-              {label}
-            </button>
-          ) : (
-            <span className="cursor-help decoration-dotted underline-offset-4 hover:underline">
-              {label}
-            </span>
-          )}
-        </TooltipTrigger>
-        <TooltipContent>{hint}</TooltipContent>
-      </Tooltip>
-    </TableHead>
-  )
-}
-
-/**
- * A cell whose value is still on its way, or never coming.
- *
- * Blank and `—` are different answers: the first means the registry has not
- * been asked yet, the second that it was and had nothing to say. Collapsing
- * them makes a slow registry indistinguishable from a broken one.
- */
-function Pending<T>({
-  value,
-  fetching,
-  children,
-}: {
-  value: T | null
-  fetching: boolean
-  children: (value: T) => React.ReactNode
-}) {
-  if (value !== null && value !== undefined) return <>{children(value)}</>
-  return (
-    <span
-      className="text-ink-faint"
-      title={fetching ? "still asking" : undefined}
-    >
-      {fetching ? "·" : "—"}
-    </span>
-  )
-}
-
-/**
- * A compatibility mode, and where it came from.
- *
- * `BACKWARD` set on this subject and `BACKWARD` inherited from the registry
- * are not the same fact — the second changes when somebody edits the registry
- * default, and the first does not.
- */
-function Compatibility({
-  mode,
-  inherited,
-}: {
-  mode: string
-  inherited: boolean
-}) {
-  return (
-    <span className="flex items-center gap-1.5">
-      <span className="font-mono text-[12px]">{mode}</span>
-      {inherited ? (
-        <span
-          className="text-[11px] text-ink-faint"
-          title="Inherited from the registry default — this subject sets no rule of its own"
-        >
-          inherited
-        </span>
-      ) : null}
-    </span>
-  )
-}
-
-/**
- * One line, and only when the registry is not answering.
- *
- * What is left of a banner that used to be here in every state. Saying "ready"
- * on a page that is visibly full of subjects was the page repeating itself,
- * and the id and endpoint it also carried are on the nav row's tooltip. The
- * failure is the part that was load-bearing: an unreachable registry returns
- * an empty list, and an empty list renders as "holds no subjects".
- */
-function RegistryFault({ registry }: { registry: RegistryCard }) {
-  if (registry.status === "ready") return null
-  return (
-    <p
-      className={cn(
-        "mb-4 flex items-start gap-2 text-xs",
-        registry.status === "misconfigured" ? "text-danger" : "text-warn-ink"
-      )}
-    >
-      <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-      <span>
-        This registry is {registry.status}
-        {registry.error ? `: ${registry.error}` : "."} What is listed below is
-        what it last answered, which may be nothing at all.
-      </span>
-    </p>
   )
 }
 

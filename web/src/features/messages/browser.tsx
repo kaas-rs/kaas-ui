@@ -8,19 +8,11 @@
 // know which route it is mounted under — it is a tab on the topic page, and
 // the seek parameters belong to that page's URL, not to this file.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { AlertTriangle, Loader2, RotateCw } from "lucide-react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { useDefaultLayout } from "react-resizable-panels"
 
-import {
-  fetchMessagePage,
-  useOldestTimestamp,
-  usePartitionBounds,
-} from "@/api/client"
-import type { ResolvedSeek, StreamProgress, StreamRow } from "@/api/types"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { Progress } from "@/components/ui/progress"
+import { useOldestTimestamp, usePartitionBounds } from "@/api/client"
+import type { StreamRow } from "@/api/types"
 import {
   ResizableHandle,
   ResizablePanel,
@@ -28,19 +20,16 @@ import {
 } from "@/components/ui/resizable"
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet"
 import { useIsMobile } from "@/hooks/use-mobile"
-import { count } from "@/components/domain"
-import {
-  displayTimeZone,
-  formatTimestamp,
-  useResolvedDateOrder,
-} from "@/lib/settings"
+import { displayTimeZone } from "@/lib/settings"
 import { cn } from "@/lib/utils"
 import { downloadBuffer } from "./download"
 import { MessageDetailPanel } from "./message-detail"
-import { MessageList, ROW_HEIGHT } from "./message-list"
-import { withIds } from "./rows"
+import { MessageList } from "./message-list"
 import { SEEK_MODES, type SeekMode } from "./seek-modes"
 import type { MessageSearch } from "./search"
+import { StreamNotices } from "./stream-notices"
+import { StreamStatus } from "./stream-status"
+import { Terminal } from "./terminal"
 import { Toolbar } from "./toolbar"
 import { useMessageStream } from "./use-message-stream"
 
@@ -190,7 +179,7 @@ export function MessageBrowser({
         />
       </div>
 
-      <Notices
+      <StreamNotices
         timeZone={timeZone}
         dropped={stream.dropped}
         progress={stream.progress}
@@ -286,270 +275,6 @@ export function MessageBrowser({
           </SheetContent>
         </Sheet>
       ) : null}
-    </div>
-  )
-}
-
-function StreamStatus({
-  phase,
-  live,
-  reconnecting,
-  rows,
-  onDownload,
-  onRestart,
-}: {
-  phase: string | null
-  live: boolean
-  reconnecting: boolean
-  rows: number
-  onDownload(): void
-  onRestart(): void
-}) {
-  return (
-    <div className="flex items-center gap-2 text-[11px] text-ink-muted">
-      {/* The count is also the way out of the browser: what is buffered is
-          what the file contains, so the number that says how much there is
-          is the thing you click to get it. */}
-      {rows > 0 ? (
-        <button
-          type="button"
-          onClick={onDownload}
-          title={`Download these ${count(rows)} records as JSON — payload text is the list preview, truncated at 256 characters`}
-          className="cursor-pointer tabular-nums underline decoration-dotted underline-offset-2 hover:text-ink"
-        >
-          {count(rows)} buffered
-        </button>
-      ) : (
-        <span className="tabular-nums">0 buffered</span>
-      )}
-
-      {reconnecting ? (
-        <Badge variant="outline" className="gap-1 text-warn-ink">
-          <Loader2 className="size-3 animate-spin" aria-hidden /> reconnecting
-        </Badge>
-      ) : phase === "seeking" ? (
-        <Badge variant="outline" className="gap-1">
-          <Loader2 className="size-3 animate-spin" aria-hidden /> seeking
-        </Badge>
-      ) : phase === "streaming" && live ? (
-        <Badge variant="outline" className="gap-1 text-ok">
-          <span className="size-1.5 rounded-full bg-ok" aria-hidden /> live
-        </Badge>
-      ) : phase === "done" && live ? (
-        // A live stream only ends because the server ended it — a rollout, or
-        // a lifetime expiring. The toolbar has no restart button in this mode,
-        // on the grounds that a live tail does not need one, so the badge that
-        // reports the ending is what picks it back up.
-        <Badge
-          asChild
-          variant="outline"
-          className="cursor-pointer gap-1 text-warn-ink hover:bg-surface-raised"
-        >
-          <button
-            type="button"
-            onClick={onRestart}
-            title="Open the stream again"
-          >
-            <RotateCw className="size-3" aria-hidden /> stream ended
-          </button>
-        </Badge>
-      ) : phase === "done" ? (
-        <Badge variant="outline">window read</Badge>
-      ) : null}
-    </div>
-  )
-}
-
-/** Everything the stream wants to say that is not a row. */
-function Notices({
-  timeZone,
-  dropped,
-  progress,
-  resolved,
-  error,
-  phase,
-}: {
-  timeZone: string
-  dropped: number
-  progress: StreamProgress | null
-  resolved: ResolvedSeek | null
-  error: { message: string } | null
-  phase: string | null
-}) {
-  // The seek someone typed, written back to them the way they typed it. It was
-  // a UTC ISO string, which is not the notation the picker above takes.
-  const dateOrder = useResolvedDateOrder()
-  // The bar is an in-flight indicator, not a result, so it goes when the scan
-  // does. A window that has been read already says so twice — the "window
-  // read" badge and the terminal row — and a bar left sitting underneath them
-  // reads as a control that stopped working rather than one that finished.
-  //
-  // That is not hypothetical: the last frame of a bounded scan is always
-  // `1.0`, and on the default 500-record window it is the *only* frame, so
-  // this element's whole visible life was a full bar under a finished list.
-  const showBar =
-    phase === "streaming" &&
-    progress?.fraction !== null &&
-    progress?.fraction !== undefined
-  const noticeCount =
-    (dropped > 0 ? 1 : 0) +
-    (error ? 1 : 0) +
-    (resolved?.unresolved ? 1 : 0) +
-    (progress?.orderingDegraded ? 1 : 0)
-  if (!noticeCount && !showBar) return null
-
-  return (
-    <div className="shrink-0 border-b border-line">
-      {showBar ? (
-        <Progress
-          value={(progress?.fraction ?? 0) * 100}
-          className="h-0.5 rounded-none"
-        />
-      ) : null}
-      <div className="space-y-1 px-4 py-1.5 empty:hidden">
-        {error ? (
-          <p className="flex items-start gap-2 text-[11px] text-danger">
-            <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-            {error.message}
-          </p>
-        ) : null}
-        {dropped > 0 ? (
-          // Never suppressed. Silently losing records in a debugging tool is
-          // worse than showing a gap.
-          <p className="text-[11px] text-warn-ink">
-            {count(dropped)} message(s) were dropped to keep the stream ahead of
-            this browser.
-          </p>
-        ) : null}
-        {resolved?.unresolved ? (
-          <p className="flex items-start gap-2 text-[11px] text-warn-ink">
-            <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-            <span>
-              This cluster resolved{" "}
-              <span title={new Date(resolved.timestamp).toISOString()}>
-                {formatTimestamp(resolved.timestamp, timeZone, dateOrder)}
-              </span>{" "}
-              to no offset on any of its {resolved.partitions.length}{" "}
-              partitions, so the window is empty. Brokers that keep no timestamp
-              index answer a time seek this way; seeking by offset still works.
-            </span>
-          </p>
-        ) : null}
-        {progress?.orderingDegraded ? (
-          <p className="text-[11px] text-ink-muted">
-            Approximately ordered across partitions — records may be up to{" "}
-            {count(progress.reorderWindow)} apart. Within a partition the order
-            is exact.
-          </p>
-        ) : null}
-      </div>
-    </div>
-  )
-}
-
-/**
- * The end of a bounded window.
- *
- * Rendered rather than left blank: a list that simply stops looks exactly like
- * one that is still loading, and that is acceptance criterion 12.
- */
-function Terminal({
-  envId,
-  clusterId,
-  topic,
-  rows,
-  mode,
-  search,
-  onAppend,
-}: {
-  envId: string
-  clusterId: string
-  topic: string
-  rows: StreamRow[]
-  mode: SeekMode
-  search: {
-    offset?: number
-    timestamp?: number
-    partitions?: string
-    filter?: string
-    limit?: number
-    keyCodec?: string
-    valueCodec?: string
-  }
-  onAppend(rows: StreamRow[]): void
-}) {
-  const [loading, setLoading] = useState(false)
-  const [exhausted, setExhausted] = useState(false)
-  const anchor = useRef<number | null>(null)
-
-  const config = SEEK_MODES[mode]
-  const offsets = rows.map((row) => row.offset)
-  // Guarded: `Math.min()` of nothing is `Infinity`, which would go on the wire
-  // as an offset and come back as a confusing 400.
-  const next = offsets.length
-    ? config.sort === "desc"
-      ? Math.min(...offsets) - 1
-      : Math.max(...offsets) + 1
-    : null
-
-  async function loadMore() {
-    const from = anchor.current ?? next
-    if (from === null) return
-    setLoading(true)
-    try {
-      const params = new URLSearchParams({
-        // "More" of a backward window is the next window further back; of a
-        // forward one, the next window further on. Either way it is an
-        // offset-anchored page, which is why `toOffset`/`fromOffset` back it
-        // whatever mode is on screen.
-        mode: config.sort === "desc" ? "toOffset" : "fromOffset",
-        offset: String(from),
-        limit: String(search.limit ?? 500),
-      })
-      if (search.partitions) params.set("partitions", search.partitions)
-      if (search.filter) params.set("filter", search.filter)
-      // The same decode and filter rules as the stream that filled the list:
-      // a page appended under different ones would sit in the same table
-      // rendering the same values differently.
-      if (search.keyCodec) params.set("keyCodec", search.keyCodec)
-      if (search.valueCodec) params.set("valueCodec", search.valueCodec)
-
-      const page = await fetchMessagePage(envId, clusterId, topic, params)
-      // An empty page is not the end. The filter runs after the decode, so a
-      // window can be read in full and match nothing at all; `hasMore` is
-      // read from what the server *looked at*, and it is the only thing here
-      // that knows the difference between "no more records" and "no more
-      // matches in these five hundred".
-      if (page.items.length) onAppend(withIds(page.items))
-      anchor.current = page.nextOffset
-      if (!page.hasMore || page.nextOffset === null) setExhausted(true)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  return (
-    <div
-      className="flex items-center justify-center gap-3 border-t border-line text-[11px] text-ink-faint"
-      style={{ height: ROW_HEIGHT }}
-    >
-      <span>
-        End of window — {count(rows.length)} message
-        {rows.length === 1 ? "" : "s"}
-      </span>
-      {exhausted ? (
-        <span>no further records found in this direction</span>
-      ) : (
-        <Button
-          size="sm"
-          variant="outline"
-          className="h-6 text-[11px]"
-          onClick={() => void loadMore()}
-          disabled={loading}
-        >
-          {loading ? "loading…" : "Load more"}
-        </Button>
-      )}
     </div>
   )
 }

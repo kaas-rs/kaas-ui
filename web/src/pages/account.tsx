@@ -94,7 +94,7 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
   )
 }
 
-export function Account() {
+export function AccountPage() {
   const identity = useIdentity()
   // The fleet, not one environment's clusters: this page answers "what do I
   // reach", and that question does not sit inside an environment.

@@ -15,7 +15,8 @@ import { AlertTriangle, Loader2 } from "lucide-react"
 import { useMessageDetail } from "@/api/client"
 import type { StreamRow } from "@/api/types"
 import { Badge } from "@/components/ui/badge"
-import { Empty, Mono, bytes } from "@/components/domain"
+import { Empty, Mono } from "@/components/domain"
+import { bytes } from "@/lib/format"
 import {
   displayTimeZone,
   formatTimestamp,

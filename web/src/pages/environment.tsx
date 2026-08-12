@@ -14,7 +14,7 @@ import { ApiError } from "@/api/client"
 import { Empty, Spinner } from "@/components/domain"
 import { PageTitle } from "@/components/page-title"
 import { Card } from "@/components/ui/card"
-import { Environment as EnvironmentSectionView } from "@/pages/fleet"
+import { EnvironmentSection } from "@/features/fleet/environment-section"
 
 export function EnvironmentPage({ envId }: { envId: string }) {
   const environment = useEnvironment(envId)
@@ -48,5 +48,5 @@ export function EnvironmentPage({ envId }: { envId: string }) {
   const section = environment.data?.items[0]
   if (!section) return <Empty>this environment holds nothing you can see</Empty>
 
-  return <EnvironmentSectionView section={section} />
+  return <EnvironmentSection section={section} />
 }

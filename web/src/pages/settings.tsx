@@ -197,7 +197,7 @@ function Now({ timeZone }: { timeZone: string }) {
   )
 }
 
-export function Settings() {
+export function SettingsPage() {
   const [theme] = useTheme()
   const timeZone = displayTimeZone()
   const locale = displayLocale()

@@ -16,7 +16,7 @@ import { AlertTriangle, Info } from "lucide-react"
 
 import type { NoteKind, Payload, PayloadNote } from "@/api/types"
 import { Badge } from "@/components/ui/badge"
-import { bytes } from "@/components/domain"
+import { bytes } from "@/lib/format"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   Tooltip,

@@ -19,7 +19,7 @@ import { LogIn } from "lucide-react"
 import { withBase } from "@/api/base"
 import type { LoginConnector } from "@/api/types"
 
-export function SignIn({
+export function SignInPage({
   enforcing,
   connectors,
 }: {

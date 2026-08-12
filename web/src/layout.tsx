@@ -9,7 +9,7 @@
 import { Outlet, useRouterState } from "@tanstack/react-router"
 
 import { useIdentity } from "@/api/client"
-import { SignIn } from "@/pages/sign-in"
+import { SignInPage } from "@/pages/sign-in"
 import { AppSidebar } from "@/components/app-sidebar"
 import { Breadcrumbs } from "@/components/breadcrumbs"
 import { VersionBadge } from "@/components/version-badge"
@@ -32,7 +32,7 @@ export function AppLayout() {
   // already sees everything, so demanding a login first would be theatre.
   const me = identity.data
   if (me && me.loginAvailable && me.enforcing && !me.authenticated) {
-    return <SignIn enforcing={me.enforcing} connectors={me.connectors} />
+    return <SignInPage enforcing={me.enforcing} connectors={me.connectors} />
   }
 
   return (
