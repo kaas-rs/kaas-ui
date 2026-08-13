@@ -15,7 +15,7 @@ sequenced entirely on its own merits.
 | 3 | multi-group `OffsetFetch` | Phase 5 | pairs with 2 |
 | 4 | `DescribeTopicPartitions` cursor pagination | Phase 2 | medium |
 | 5 | SASL OAUTHBEARER | — | **landed in 0.6.1, in use** |
-| 6 | `DescribeQuorum` (51) | Phase 7 | nice to have |
+| 6 | `DescribeQuorum` (55) | Phase 7 | nice to have |
 | 7 | pool and connection introspection | Phase 1/3 | medium |
 | 8 | `ListConfigResources` (70) | Phase 1 | low |
 | 9 | upstream `kafka-protocol` contributions | Phase 5 | low, long lead |
@@ -147,7 +147,7 @@ The symmetry the original note predicted holds: Dex terminates OIDC for
 *users*, OAUTHBEARER terminates OAuth for *clusters*, and one issuer can serve
 both.
 
-## 6. `DescribeQuorum` (51)
+## 6. `DescribeQuorum` (55)
 
 kaas-lib's api-matrix already calls it "the one in this group a UI might
 plausibly want". A KRaft quorum panel — voters, leader, lag — is directly useful
