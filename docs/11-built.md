@@ -1,6 +1,6 @@
 # What is built
 
-Phases 0–6 are done, and their plan files are gone — a plan for work already
+Phases 0–7 are done, and their plan files are gone — a plan for work already
 finished is a document that can only go stale. What could not go
 with them is here: **what each phase decided differently from its plan**, the
 numbers that were measured rather than predicted, and the things that were
@@ -19,15 +19,15 @@ is surprising.
 | 4 — auth | OIDC via Dex, encrypted-cookie sessions, roles in kafbat's shape, the access audit |
 | 5 — groups | four group kinds, members, committed offsets, lag as states rather than a subtraction |
 | 6 — schema registry | one registry per environment, Avro/Protobuf/JSON Schema, the codec chip, the schema browser, the payload filter over decoded values |
+| 7 — read-only admin | ACLs, client quotas, SCRAM users, reassignments, the transaction inspector, and `CapabilityTab` at last |
 
-Still open: [Phase 7](08-phase-7-read-only-admin.md),
-[Phase 8](09-phase-8-cross-cluster.md).
+Still open: [Phase 8](09-phase-8-cross-cluster.md).
 
 ## Acceptance, as it stands
 
 ```sh
-cargo xtask ci      # green: fmt, clippy, 239 unit tests, five invariant greps
-cargo xtask live    # green: 61 assertions against kaas, strimzi and dead
+cargo xtask ci      # green: fmt, clippy, 275 unit tests, five invariant greps
+cargo xtask live    # green: 71 assertions against kaas, strimzi and dead
 cargo xtask login   # 11 assertions, a real login. Dormant — see below.
 ```
 
@@ -37,7 +37,7 @@ architecture from being edited away: exactly one `Admin::connect_read_only`
 anywhere, no committed `xtask link` fence, and sign-in being an `<a href>`
 rather than a `fetch` — see Phase 4.
 
-Unit tests: 67 in `kaas-ui-api`, 72 in `kaas-ui-core`, 40 in `kaas-ui-auth`,
+Unit tests: 80 in `kaas-ui-api`, 95 in `kaas-ui-core`, 40 in `kaas-ui-auth`,
 47 in `kaas-ui-serde` (38 unit, 9 against a stub registry), 10 in
 `kaas-ui-server`, 3 in `xtask`.
 
@@ -626,6 +626,86 @@ browsable while the cluster you arrived through is down — which is why the
 sidebar's schemas item is the one entry that survives an unreachable cluster.
 A new `Resource::Schema` was considered and rejected: every role granting `all`
 today would silently stop covering the browser.
+
+## Phase 7 — the decisions
+
+**The plan's table of what each cluster answers was measured a second time,
+and three of its five rows had changed.** It said `kaas` had 24 ACLs and no
+SCRAM, and that Strimzi had no authorizer. Today `kaas` answers 31 bindings and
+*does* answer `DescribeUserScramCredentials`; Strimzi answers `DescribeAcls`
+rather than refusing it; and neither cluster has a single client quota
+configured, where the plan expected `throttled-user`'s limits to be the fixture.
+`throttled-user` exists — as a SCRAM credential, which is what the plan had
+seen. The live assertions therefore count nothing: they assert the *shape* of a
+binding and that the count is non-zero, because a test that fails when somebody
+grants a principal a topic is a test that gets deleted.
+
+What did not change is the pair the phase existed for: `ListTransactions`,
+`DescribeTransactions`, `DescribeProducers` and `ListPartitionReassignments`
+are on Strimzi and absent from `kaas`. Both halves are asserted — the answer on
+one cluster and the `UnsupportedApi` naming both version ranges on the other —
+so the tab set really is a conformance report.
+
+**One page with five tabs, not five items in the sidebar.** They share a shape
+— a cluster-wide administrative fact, in a table, that most clusters answer for
+and some do not — and five more rows under every cluster would crowd out the
+four things people open daily. The nav item appears when *any* of the five is
+available, which is why `anyFeature` exists beside `feature`.
+
+**`CapabilityTab` was named by the design system in Phase 1 and written here.**
+Until now the code gated tabs with a condition around `TabsTrigger`, which is
+fine once and is five copies of the same three-state decision at five. The
+third state is the one that makes it a component: a tab that is not rendered
+still has a URL, and `?screen=transactions` in a link somebody sent must land
+on the panel naming both version ranges rather than on an empty table.
+
+The gate beside it is a **function** and not a component, which is worth saying
+because writing it the obvious way is a silent bug: `const gate = <Gate …/>; if
+(gate)` is always true — a component returning `null` still produces an element
+object. Called, it returns the `null` a caller can branch on. Found by reading
+it back, not by a type error, which is what that shape costs.
+
+**The transaction inspector sends a start timestamp and never a duration.**
+`open_for_ms(now)` takes a `now`, and whichever `now` the server passes is
+wrong by the time the response is read and wronger every second the page stays
+open — on the one column the screen is sorted by. The browser ticks it from the
+timestamp, `SnapshotAge`'s decision applied to the number an operator is
+watching to decide whether to intervene. A live assertion checks the *absence*
+of a computed duration in the response, because the tempting version of this
+code is the one that adds a field.
+
+**Quotas are one call per entity type, and the same entity comes back more than
+once.** An empty component list asks about no entity type and the broker
+answers with nothing, so `user`, `client-id` and `ip` are asked separately —
+and `user=alice, client-id=app` arrives from two of the three. Deduplicated on
+the rendered entity, which is the identity the reader sees. Partial failure is
+a result here too: a cluster that answers for users and not for IPs renders the
+users and names the failure.
+
+**`Resource::ClusterConfig` for all five, and no new variant.** The temptation
+on an ACL screen is a `Resource::Acl`, and Phase 6 had already worked the
+argument through for `Resource::Schema`: `Resource::every()` is what a role
+saying `all` expands to, so a new variant silently narrows every deployed role
+that has one. If a deployment ever needs "can see brokers, must not see who can
+authenticate", that is a real requirement and a breaking change to the policy
+file — a decision of its own rather than a side effect of this phase.
+
+**An ACL operation this build cannot name renders as `unknown(99)`.**
+`AclOperation::Unknown(i8)` is the same case as an unknown api key: expected
+output, not a gap. Naming it would be a Kafka version table in kaas-ui, which
+is rule 2 with extra steps.
+
+**A live assertion that depends on a fixture's *size* stops testing without
+failing.** The analysis governor's "a second analysis is refused with 429" ran
+against `kperf-bench` on the premise, written in its own comment, that 146M
+records "will not finish under this test". The topic holds nine thousand now, a
+whole analysis takes 25ms, and the assertion slept 300ms before asking — so it
+had been asserting nothing until the day it started failing. Racing the two
+requests concurrently narrowed the window rather than closing it. The governor
+is a set of `(environment, cluster)` keys in one process and needs no broker at
+all, so it moved to a unit test where the answer is deterministic, and `live`
+says why in the space it left. That is CLAUDE.md's cluster-free/live split
+being applied rather than quoted.
 
 ## What is still unproven
 

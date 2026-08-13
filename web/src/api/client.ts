@@ -1,8 +1,10 @@
 import { useQuery } from "@tanstack/react-query"
 import type {
+  Acl,
   Capabilities,
   ClusterCard,
   ClusterDetail,
+  ClientQuota,
   ConfigResourceEntry,
   Envelope,
   EnvironmentSection,
@@ -15,10 +17,14 @@ import type {
   MessageDetail,
   MessagePage,
   PartitionOffsets,
+  Producer,
+  Reassignment,
+  ScramUser,
   SubjectDetail,
   SubjectList,
   TopicDetail,
   TopicSummary,
+  Transaction,
 } from "./types"
 
 import { parseRowId } from "@/features/messages/rows"
@@ -576,4 +582,93 @@ export function useOldestTimestamp(env: string, id: string, topic: string) {
   })
   const first = query.data?.items[0]
   return first && first.kind === "record" ? first.timestamp : undefined
+}
+
+// --- The read-only admin surface -----------------------------------------
+//
+// Five screens, one hook each, and one shared decision: none of them refetch
+// on an interval. An ACL binding changes when somebody runs a script, not
+// while you watch — unlike a snapshot, which is stale by construction. The
+// transaction list is the exception in spirit and not in mechanism: it moves
+// fast, but what moves is the duration, and the browser ticks that from a
+// timestamp without asking the broker again.
+
+/** Every ACL binding the authorizer holds. */
+export function useAcls(env: string, id: string) {
+  return useQuery({
+    queryKey: ["acls", env, id],
+    queryFn: () => get<Envelope<Acl>>(`${cluster(env, id)}/acls`),
+    staleTime: 30_000,
+  })
+}
+
+/** Every configured client quota, across the three entity types. */
+export function useQuotas(env: string, id: string) {
+  return useQuery({
+    queryKey: ["quotas", env, id],
+    queryFn: () => get<Envelope<ClientQuota>>(`${cluster(env, id)}/quotas`),
+    staleTime: 30_000,
+  })
+}
+
+/** Who can authenticate with SCRAM, and with which mechanisms. */
+export function useScramUsers(env: string, id: string) {
+  return useQuery({
+    queryKey: ["scram-users", env, id],
+    queryFn: () => get<Envelope<ScramUser>>(`${cluster(env, id)}/scram-users`),
+    staleTime: 30_000,
+  })
+}
+
+/**
+ * What is moving right now.
+ *
+ * The one that does poll: a reassignment is a thing in flight, and a screen
+ * showing a completed move as still running is worse than one that costs a
+ * request a minute.
+ */
+export function useReassignments(env: string, id: string) {
+  return useQuery({
+    queryKey: ["reassignments", env, id],
+    queryFn: () =>
+      get<Envelope<Reassignment>>(`${cluster(env, id)}/reassignments`),
+    refetchInterval: 60_000,
+  })
+}
+
+/**
+ * The transactions, described.
+ *
+ * `details=true` from the start rather than as a second request: the state and
+ * the id alone answer nothing anyone opens this screen for, and the column it
+ * is sorted by — how long a transaction has been open — is in the describe.
+ */
+export function useTransactions(env: string, id: string) {
+  return useQuery({
+    queryKey: ["transactions", env, id],
+    queryFn: () =>
+      get<Envelope<Transaction>>(
+        `${cluster(env, id)}/transactions?details=true`
+      ),
+    refetchInterval: 30_000,
+  })
+}
+
+/**
+ * The producers writing to one topic's partitions.
+ *
+ * Asked for a topic at a time, on demand, because it is a request to every
+ * leader that holds a partition of it: this is the "which producer is stuck"
+ * question, and it is asked about the topic a transaction named.
+ */
+export function useProducers(env: string, id: string, topic: string | null) {
+  return useQuery({
+    queryKey: ["producers", env, id, topic],
+    queryFn: () =>
+      get<Envelope<Producer>>(
+        `${cluster(env, id)}/producers?topic=${encode(topic ?? "")}`
+      ),
+    enabled: !!topic,
+    staleTime: 10_000,
+  })
 }

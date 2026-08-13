@@ -114,6 +114,48 @@
         }
       }
     },
+    "/api/environments/{env}/clusters/{id}/acls": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "`GET /api/environments/{env}/clusters/{id}/acls`",
+        "description": "Every binding the authorizer holds, in one call.\n\nThe filter is `AclFilter::default()`, which is \"show me all\" — every field\n`Any`, and it is *not* what `Default` would be if the enums defaulted to\ntheir first variant. kaas-lib writes that default explicitly for this\nreason, and the UI does not narrow it: 24 bindings is a page, and filtering\nby principal is something a reader does to a table they can already see.",
+        "operationId": "acls",
+        "parameters": [
+          {
+            "name": "env",
+            "in": "path",
+            "description": "Environment id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Cluster id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ACL bindings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope_Acl"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/environments/{env}/clusters/{id}/brokers": {
       "get": {
         "tags": [
@@ -449,6 +491,192 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Envelope_GroupOffset"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/environments/{env}/clusters/{id}/producers": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "`GET /api/environments/{env}/clusters/{id}/producers?topic=…&partition=…`",
+        "description": "The producers writing to a topic's partitions — how the one holding a\ntransaction open is found.\n\nRouted by kaas-lib to each partition's **leader**, because producer state is\nleader state and a follower does not have it. Do not fan this out by hand.",
+        "operationId": "producers",
+        "parameters": [
+          {
+            "name": "env",
+            "in": "path",
+            "description": "Environment id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Cluster id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "topic",
+            "in": "query",
+            "description": "Topic name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "partition",
+            "in": "query",
+            "description": "Partitions, comma-separated; every partition if omitted",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Producer state per partition",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope_Producer"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/environments/{env}/clusters/{id}/quotas": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "`GET /api/environments/{env}/clusters/{id}/quotas`",
+        "description": "Every configured quota, across the three entity types.\n\nOne call per entity type rather than one unfiltered call: an empty\ncomponent list asks about *no* entity type, and the broker answers with\nnothing. Partial failure is a result — a cluster that answers for users and\nnot for IPs renders the users and names the failure.",
+        "operationId": "quotas",
+        "parameters": [
+          {
+            "name": "env",
+            "in": "path",
+            "description": "Environment id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Cluster id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Client quotas",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope_ClientQuota"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/environments/{env}/clusters/{id}/reassignments": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "`GET /api/environments/{env}/clusters/{id}/reassignments`",
+        "description": "What is moving right now. `None` asks about the whole cluster, which is the\nquestion the screen exists to answer; an empty list is a healthy cluster and\nrenders as one rather than as an absence.",
+        "operationId": "reassignments",
+        "parameters": [
+          {
+            "name": "env",
+            "in": "path",
+            "description": "Environment id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Cluster id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Reassignments in flight",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope_Reassignment"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/environments/{env}/clusters/{id}/scram-users": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "`GET /api/environments/{env}/clusters/{id}/scram-users`",
+        "description": "Who can authenticate with SCRAM, and with what — **never how**. The broker\nstores a salted hash and cannot return one; there is no field on the wire\nthat could carry a credential even if a handler wanted to.",
+        "operationId": "scram_users",
+        "parameters": [
+          {
+            "name": "env",
+            "in": "path",
+            "description": "Environment id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Cluster id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SCRAM credentials, by user",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope_ScramUser"
                 }
               }
             }
@@ -1261,6 +1489,117 @@
         }
       }
     },
+    "/api/environments/{env}/clusters/{id}/transactions": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "`GET /api/environments/{env}/clusters/{id}/transactions`",
+        "description": "The list, and with `?details=true` everything the describe adds: the start\ntimestamp, the timeout, the producer epoch and the partitions enrolled.\n\n**The start timestamp, never a duration.** `open_for_ms` takes a `now`, and\nwhichever `now` a handler passes is wrong by the time the response is read\nand wronger every second the page stays open — on the one column this screen\nis sorted by. The browser ticks it, exactly as it ticks `snapshotAgeMs`.",
+        "operationId": "transactions",
+        "parameters": [
+          {
+            "name": "env",
+            "in": "path",
+            "description": "Environment id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Cluster id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "details",
+            "in": "query",
+            "description": "Describe each listed transaction",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "description": "Only these states, comma-separated",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Transactions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope_Transaction"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/environments/{env}/clusters/{id}/transactions/{txn}": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "`GET /api/environments/{env}/clusters/{id}/transactions/{txn}`",
+        "description": "One transaction, described. The list already carries this under\n`?details=true`; this is the addressable form, so a stuck transaction is a\nlink somebody can send.",
+        "operationId": "transaction",
+        "parameters": [
+          {
+            "name": "env",
+            "in": "path",
+            "description": "Environment id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Cluster id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "txn",
+            "in": "path",
+            "description": "Transactional id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One transaction",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope_Transaction"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/environments/{env}/schema-registries/{registry}/subjects": {
       "get": {
         "tags": [
@@ -1464,6 +1803,49 @@
   },
   "components": {
     "schemas": {
+      "Acl": {
+        "type": "object",
+        "description": "One ACL binding, as the authorizer stores it.",
+        "required": [
+          "resourceType",
+          "resourceName",
+          "patternType",
+          "principal",
+          "host",
+          "operation",
+          "permission"
+        ],
+        "properties": {
+          "host": {
+            "type": "string",
+            "description": "The host it applies from, or `*`."
+          },
+          "operation": {
+            "type": "string",
+            "description": "The operation."
+          },
+          "patternType": {
+            "type": "string",
+            "description": "`literal` or `prefixed`, which is the difference between a binding that\ncovers one name and one that covers a namespace."
+          },
+          "permission": {
+            "type": "string",
+            "description": "`allow` or `deny`. Denies win in Kafka's evaluation order, which is why\nthis is a column and not a colour."
+          },
+          "principal": {
+            "type": "string",
+            "description": "The principal, as the authorizer spells it — `User:alice`."
+          },
+          "resourceName": {
+            "type": "string",
+            "description": "The resource name, or `*` for every resource of that type."
+          },
+          "resourceType": {
+            "type": "string",
+            "description": "What kind of thing the binding is about — `topic`, `group`, `cluster`,\n`transactionalId`, `delegationToken` or `user`."
+          }
+        }
+      },
       "Action": {
         "type": "string",
         "description": "What may be done to it.",
@@ -1910,6 +2292,30 @@
         ],
         "description": "Where the version table came from."
       },
+      "ClientQuota": {
+        "type": "object",
+        "description": "One quota entity and the limits configured for it.",
+        "required": [
+          "entity",
+          "values"
+        ],
+        "properties": {
+          "entity": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QuotaComponent"
+            },
+            "description": "The entity, one component per type.\n\nA quota is addressed by a *set* of components rather than by a name:\n`user=alice` and `user=alice, client-id=app` are two different quotas\nand the second is the more specific match."
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QuotaValue"
+            },
+            "description": "The configured values, sorted by key."
+          }
+        }
+      },
       "ClusterCard": {
         "type": "object",
         "description": "One cluster on the fleet dashboard.\n\nBuilt from `Cluster::snapshot()` and nothing else. The snapshot carries\nbrokers, controller id, cluster id and every partition's replicas, ISR and\noffline set — everything a card renders — and it works on clusters that do\nnot implement `DescribeCluster`. Enrichment that only some clusters can\nanswer belongs on the detail page, not on the landing page.",
@@ -2225,6 +2631,87 @@
           }
         }
       },
+      "Envelope_Acl": {
+        "type": "object",
+        "description": "What every data endpoint returns.",
+        "required": [
+          "items",
+          "errors"
+        ],
+        "properties": {
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResourceError"
+            },
+            "description": "The resources that did not. Non-empty is still `200 OK`."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One ACL binding, as the authorizer stores it.",
+              "required": [
+                "resourceType",
+                "resourceName",
+                "patternType",
+                "principal",
+                "host",
+                "operation",
+                "permission"
+              ],
+              "properties": {
+                "host": {
+                  "type": "string",
+                  "description": "The host it applies from, or `*`."
+                },
+                "operation": {
+                  "type": "string",
+                  "description": "The operation."
+                },
+                "patternType": {
+                  "type": "string",
+                  "description": "`literal` or `prefixed`, which is the difference between a binding that\ncovers one name and one that covers a namespace."
+                },
+                "permission": {
+                  "type": "string",
+                  "description": "`allow` or `deny`. Denies win in Kafka's evaluation order, which is why\nthis is a column and not a colour."
+                },
+                "principal": {
+                  "type": "string",
+                  "description": "The principal, as the authorizer spells it — `User:alice`."
+                },
+                "resourceName": {
+                  "type": "string",
+                  "description": "The resource name, or `*` for every resource of that type."
+                },
+                "resourceType": {
+                  "type": "string",
+                  "description": "What kind of thing the binding is about — `topic`, `group`, `cluster`,\n`transactionalId`, `delegationToken` or `user`."
+                }
+              }
+            },
+            "description": "The resources that answered."
+          },
+          "snapshotAgeMs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Age of the metadata snapshot the answer was built from, where one was\ninvolved. This is what makes \"as of 4 seconds ago\" honest.",
+            "minimum": 0
+          },
+          "total": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "How many resources matched before paging or truncation.\n\nPresent only where the endpoint pages. Filtering and sorting happen on\nthe server — a fleet with a five-thousand-topic cluster in it is real —\nso the browser needs to be told what it is looking at a window into.",
+            "minimum": 0
+          }
+        }
+      },
       "Envelope_Broker": {
         "type": "object",
         "description": "What every data endpoint returns.",
@@ -2295,6 +2782,68 @@
                   "type": "integer",
                   "description": "Partition replicas hosted here.",
                   "minimum": 0
+                }
+              }
+            },
+            "description": "The resources that answered."
+          },
+          "snapshotAgeMs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Age of the metadata snapshot the answer was built from, where one was\ninvolved. This is what makes \"as of 4 seconds ago\" honest.",
+            "minimum": 0
+          },
+          "total": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "How many resources matched before paging or truncation.\n\nPresent only where the endpoint pages. Filtering and sorting happen on\nthe server — a fleet with a five-thousand-topic cluster in it is real —\nso the browser needs to be told what it is looking at a window into.",
+            "minimum": 0
+          }
+        }
+      },
+      "Envelope_ClientQuota": {
+        "type": "object",
+        "description": "What every data endpoint returns.",
+        "required": [
+          "items",
+          "errors"
+        ],
+        "properties": {
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResourceError"
+            },
+            "description": "The resources that did not. Non-empty is still `200 OK`."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One quota entity and the limits configured for it.",
+              "required": [
+                "entity",
+                "values"
+              ],
+              "properties": {
+                "entity": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/QuotaComponent"
+                  },
+                  "description": "The entity, one component per type.\n\nA quota is addressed by a *set* of components rather than by a name:\n`user=alice` and `user=alice, client-id=app` are two different quotas\nand the second is the more specific match."
+                },
+                "values": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/QuotaValue"
+                  },
+                  "description": "The configured values, sorted by key."
                 }
               }
             },
@@ -3431,6 +3980,244 @@
           }
         }
       },
+      "Envelope_Producer": {
+        "type": "object",
+        "description": "What every data endpoint returns.",
+        "required": [
+          "items",
+          "errors"
+        ],
+        "properties": {
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResourceError"
+            },
+            "description": "The resources that did not. Non-empty is still `200 OK`."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One producer writing to one partition.",
+              "required": [
+                "topic",
+                "partition",
+                "producerId",
+                "producerEpoch",
+                "lastSequence",
+                "lastTimestamp",
+                "coordinatorEpoch"
+              ],
+              "properties": {
+                "coordinatorEpoch": {
+                  "type": "integer",
+                  "format": "int32",
+                  "description": "The coordinator epoch, where the producer is transactional."
+                },
+                "currentTxnStartOffset": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int64",
+                  "description": "Where this producer's open transaction starts, or `None` when it has\nnone in flight — which is the field that identifies the producer\nholding the last stable offset back."
+                },
+                "lastSequence": {
+                  "type": "integer",
+                  "format": "int32",
+                  "description": "The last sequence number the broker accepted from it."
+                },
+                "lastTimestamp": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "When it last wrote, in epoch milliseconds."
+                },
+                "partition": {
+                  "type": "integer",
+                  "format": "int32",
+                  "description": "The partition."
+                },
+                "producerEpoch": {
+                  "type": "integer",
+                  "format": "int32",
+                  "description": "The producer epoch. Not a leader epoch: this one bumps when a producer\nis fenced, which is how a zombie is told from the producer that\nreplaced it."
+                },
+                "producerId": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "The producer id."
+                },
+                "topic": {
+                  "type": "string",
+                  "description": "The topic."
+                }
+              }
+            },
+            "description": "The resources that answered."
+          },
+          "snapshotAgeMs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Age of the metadata snapshot the answer was built from, where one was\ninvolved. This is what makes \"as of 4 seconds ago\" honest.",
+            "minimum": 0
+          },
+          "total": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "How many resources matched before paging or truncation.\n\nPresent only where the endpoint pages. Filtering and sorting happen on\nthe server — a fleet with a five-thousand-topic cluster in it is real —\nso the browser needs to be told what it is looking at a window into.",
+            "minimum": 0
+          }
+        }
+      },
+      "Envelope_Reassignment": {
+        "type": "object",
+        "description": "What every data endpoint returns.",
+        "required": [
+          "items",
+          "errors"
+        ],
+        "properties": {
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResourceError"
+            },
+            "description": "The resources that did not. Non-empty is still `200 OK`."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One partition being moved.",
+              "required": [
+                "topic",
+                "partition",
+                "replicas",
+                "adding",
+                "removing"
+              ],
+              "properties": {
+                "adding": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "int32"
+                  },
+                  "description": "Replicas being added."
+                },
+                "partition": {
+                  "type": "integer",
+                  "format": "int32",
+                  "description": "The partition index."
+                },
+                "removing": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "int32"
+                  },
+                  "description": "Replicas being removed."
+                },
+                "replicas": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "int32"
+                  },
+                  "description": "The current replica set — it holds both the replicas being added and\nthose being removed until the move completes, which is why the two\nbelow are separate lists rather than a diff the reader has to take."
+                },
+                "topic": {
+                  "type": "string",
+                  "description": "The topic."
+                }
+              }
+            },
+            "description": "The resources that answered."
+          },
+          "snapshotAgeMs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Age of the metadata snapshot the answer was built from, where one was\ninvolved. This is what makes \"as of 4 seconds ago\" honest.",
+            "minimum": 0
+          },
+          "total": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "How many resources matched before paging or truncation.\n\nPresent only where the endpoint pages. Filtering and sorting happen on\nthe server — a fleet with a five-thousand-topic cluster in it is real —\nso the browser needs to be told what it is looking at a window into.",
+            "minimum": 0
+          }
+        }
+      },
+      "Envelope_ScramUser": {
+        "type": "object",
+        "description": "What every data endpoint returns.",
+        "required": [
+          "items",
+          "errors"
+        ],
+        "properties": {
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResourceError"
+            },
+            "description": "The resources that did not. Non-empty is still `200 OK`."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One user with SCRAM credentials, and the mechanisms they hold.\n\n**Never a credential.** The broker stores a salted hash and cannot return\none; this says who can authenticate, not how.",
+              "required": [
+                "user",
+                "credentials"
+              ],
+              "properties": {
+                "credentials": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ScramCredential"
+                  },
+                  "description": "One entry per mechanism the user has a credential for."
+                },
+                "user": {
+                  "type": "string",
+                  "description": "The user name."
+                }
+              }
+            },
+            "description": "The resources that answered."
+          },
+          "snapshotAgeMs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Age of the metadata snapshot the answer was built from, where one was\ninvolved. This is what makes \"as of 4 seconds ago\" honest.",
+            "minimum": 0
+          },
+          "total": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "How many resources matched before paging or truncation.\n\nPresent only where the endpoint pages. Filtering and sorting happen on\nthe server — a fleet with a five-thousand-topic cluster in it is real —\nso the browser needs to be told what it is looking at a window into.",
+            "minimum": 0
+          }
+        }
+      },
       "Envelope_TopicDetail": {
         "type": "object",
         "description": "What every data endpoint returns.",
@@ -3659,6 +4446,100 @@
                   "type": "integer",
                   "description": "Partitions whose ISR is short.",
                   "minimum": 0
+                }
+              }
+            },
+            "description": "The resources that answered."
+          },
+          "snapshotAgeMs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Age of the metadata snapshot the answer was built from, where one was\ninvolved. This is what makes \"as of 4 seconds ago\" honest.",
+            "minimum": 0
+          },
+          "total": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "How many resources matched before paging or truncation.\n\nPresent only where the endpoint pages. Filtering and sorting happen on\nthe server — a fleet with a five-thousand-topic cluster in it is real —\nso the browser needs to be told what it is looking at a window into.",
+            "minimum": 0
+          }
+        }
+      },
+      "Envelope_Transaction": {
+        "type": "object",
+        "description": "What every data endpoint returns.",
+        "required": [
+          "items",
+          "errors"
+        ],
+        "properties": {
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResourceError"
+            },
+            "description": "The resources that did not. Non-empty is still `200 OK`."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One row of the transaction list.",
+              "required": [
+                "transactionalId",
+                "producerId",
+                "state",
+                "partitions"
+              ],
+              "properties": {
+                "partitions": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TransactionPartitions"
+                  },
+                  "description": "The partitions enrolled in the current transaction, where it was\ndescribed."
+                },
+                "producerEpoch": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int32",
+                  "description": "The producer epoch, where the transaction was described."
+                },
+                "producerId": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "The producer id currently holding it."
+                },
+                "startTimeMs": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int64",
+                  "description": "When the current transaction started, in epoch milliseconds, where one\nis in flight.\n\n**The start, not the duration.** How long it has been open is the\nnumber that matters, and it is wrong the moment it is serialised —\n`open_for_ms` takes a `now` and the browser is the only place with a\nuseful one. The same decision `snapshotAgeMs` made, for the same reason."
+                },
+                "state": {
+                  "type": "string",
+                  "description": "The state, in the broker's own vocabulary.\n\nPassed through rather than mapped onto an enum of ours: the set grows\nwith Kafka releases, and a kaas-ui enum would be missing a state on the\nnext one and render it as \"unknown\" on a screen whose whole job is to\nsay what is happening."
+                },
+                "timeoutMs": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int32",
+                  "description": "The configured transaction timeout, where the transaction was\ndescribed. A transaction open far past this is the one holding up the\nlast stable offset."
+                },
+                "transactionalId": {
+                  "type": "string",
+                  "description": "The transactional id."
                 }
               }
             },
@@ -4982,6 +5863,102 @@
           }
         }
       },
+      "Producer": {
+        "type": "object",
+        "description": "One producer writing to one partition.",
+        "required": [
+          "topic",
+          "partition",
+          "producerId",
+          "producerEpoch",
+          "lastSequence",
+          "lastTimestamp",
+          "coordinatorEpoch"
+        ],
+        "properties": {
+          "coordinatorEpoch": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The coordinator epoch, where the producer is transactional."
+          },
+          "currentTxnStartOffset": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Where this producer's open transaction starts, or `None` when it has\nnone in flight — which is the field that identifies the producer\nholding the last stable offset back."
+          },
+          "lastSequence": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The last sequence number the broker accepted from it."
+          },
+          "lastTimestamp": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When it last wrote, in epoch milliseconds."
+          },
+          "partition": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The partition."
+          },
+          "producerEpoch": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The producer epoch. Not a leader epoch: this one bumps when a producer\nis fenced, which is how a zombie is told from the producer that\nreplaced it."
+          },
+          "producerId": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The producer id."
+          },
+          "topic": {
+            "type": "string",
+            "description": "The topic."
+          }
+        }
+      },
+      "QuotaComponent": {
+        "type": "object",
+        "description": "One component of a quota entity.",
+        "required": [
+          "entityType"
+        ],
+        "properties": {
+          "entityType": {
+            "type": "string",
+            "description": "`user`, `client-id` or `ip`."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The name, or `None` for the *default* entity of that type.\n\nNull is not \"unset\": a null user with a set client-id is the quota that\napplies to that client for every user who has no quota of their own.\nRendering it blank loses the whole meaning, so it travels as null and\nthe UI writes `<default>`."
+          }
+        }
+      },
+      "QuotaValue": {
+        "type": "object",
+        "description": "One configured limit.",
+        "required": [
+          "key",
+          "value"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "The key, as the broker names it — `producer_byte_rate`,\n`consumer_byte_rate`, `request_percentage`, `controller_mutation_rate`."
+          },
+          "value": {
+            "type": "number",
+            "format": "double",
+            "description": "The value. A rate in bytes per second, or a percentage, depending on\nthe key — which is why no unit is baked in here."
+          }
+        }
+      },
       "RawBytes": {
         "type": "object",
         "description": "The bytes as they arrived, so a codec can be changed without a refetch.\n\nPresent exactly when [`Payload::text`] is a *decoded* rendering — Avro,\nProtobuf or JSON Schema — because those are the only renderings the\noriginal bytes cannot be recovered from. A hex rendering is already the\nbytes, and a UTF-8 one is losslessly convertible to hex in the browser.",
@@ -4997,6 +5974,52 @@
           "truncated": {
             "type": "boolean",
             "description": "Whether the hex was cut short."
+          }
+        }
+      },
+      "Reassignment": {
+        "type": "object",
+        "description": "One partition being moved.",
+        "required": [
+          "topic",
+          "partition",
+          "replicas",
+          "adding",
+          "removing"
+        ],
+        "properties": {
+          "adding": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Replicas being added."
+          },
+          "partition": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The partition index."
+          },
+          "removing": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "Replicas being removed."
+          },
+          "replicas": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "The current replica set — it holds both the replicas being added and\nthose being removed until the move completes, which is why the two\nbelow are separate lists rather than a diff the reader has to take."
+          },
+          "topic": {
+            "type": "string",
+            "description": "The topic."
           }
         }
       },
@@ -5310,6 +6333,46 @@
             "format": "int32",
             "description": "Its version.",
             "minimum": 0
+          }
+        }
+      },
+      "ScramCredential": {
+        "type": "object",
+        "description": "One mechanism a user holds a credential for.",
+        "required": [
+          "mechanism",
+          "iterations"
+        ],
+        "properties": {
+          "iterations": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The iteration count the credential was stored with. Kafka's floor is\n4096; a lower number is a credential written by something that ignored\nit."
+          },
+          "mechanism": {
+            "type": "string",
+            "description": "`SCRAM-SHA-256` or `SCRAM-SHA-512`."
+          }
+        }
+      },
+      "ScramUser": {
+        "type": "object",
+        "description": "One user with SCRAM credentials, and the mechanisms they hold.\n\n**Never a credential.** The broker stores a salted hash and cannot return\none; this says who can authenticate, not how.",
+        "required": [
+          "user",
+          "credentials"
+        ],
+        "properties": {
+          "credentials": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScramCredential"
+            },
+            "description": "One entry per mechanism the user has a credential for."
+          },
+          "user": {
+            "type": "string",
+            "description": "The user name."
           }
         }
       },
@@ -6113,6 +7176,84 @@
           }
         }
       },
+      "Transaction": {
+        "type": "object",
+        "description": "One row of the transaction list.",
+        "required": [
+          "transactionalId",
+          "producerId",
+          "state",
+          "partitions"
+        ],
+        "properties": {
+          "partitions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TransactionPartitions"
+            },
+            "description": "The partitions enrolled in the current transaction, where it was\ndescribed."
+          },
+          "producerEpoch": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The producer epoch, where the transaction was described."
+          },
+          "producerId": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The producer id currently holding it."
+          },
+          "startTimeMs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "When the current transaction started, in epoch milliseconds, where one\nis in flight.\n\n**The start, not the duration.** How long it has been open is the\nnumber that matters, and it is wrong the moment it is serialised —\n`open_for_ms` takes a `now` and the browser is the only place with a\nuseful one. The same decision `snapshotAgeMs` made, for the same reason."
+          },
+          "state": {
+            "type": "string",
+            "description": "The state, in the broker's own vocabulary.\n\nPassed through rather than mapped onto an enum of ours: the set grows\nwith Kafka releases, and a kaas-ui enum would be missing a state on the\nnext one and render it as \"unknown\" on a screen whose whole job is to\nsay what is happening."
+          },
+          "timeoutMs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The configured transaction timeout, where the transaction was\ndescribed. A transaction open far past this is the one holding up the\nlast stable offset."
+          },
+          "transactionalId": {
+            "type": "string",
+            "description": "The transactional id."
+          }
+        }
+      },
+      "TransactionPartitions": {
+        "type": "object",
+        "description": "A topic and the partitions of it enrolled in a transaction.",
+        "required": [
+          "topic",
+          "partitions"
+        ],
+        "properties": {
+          "partitions": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "The partition indexes."
+          },
+          "topic": {
+            "type": "string",
+            "description": "The topic."
+          }
+        }
+      },
       "UnsupportedApiDetail": {
         "type": "object",
         "description": "The two version ranges an [`Error::UnsupportedApi`] carries.\n\nThe pair is a diagnosis rather than a failure, and the three cases render\ndifferently:\n\n* `ours: None` — this build has no schema for the key; bump the codec.\n* `broker: None` — the cluster does not implement it at all.\n* both present but disjoint — the cluster is behind.",
@@ -6188,6 +7329,10 @@
     {
       "name": "schemas",
       "description": "The schema registry an environment shares, reached through a cluster."
+    },
+    {
+      "name": "admin",
+      "description": "The read-only admin surface: ACLs, quotas, SCRAM users, reassignments, transactions. Every one is a describe; the altering neighbours are not in the workspace."
     },
     {
       "name": "meta",

@@ -834,3 +834,102 @@ export type MessageDetail =
       /** The batch as it is on disk. */
       raw: Payload
     }
+
+// --- The read-only admin surface -----------------------------------------
+//
+// Phase 7. Every one of these is a describe; nothing in this section has a
+// mutating counterpart in the client, because there is no route to reach one.
+
+/** One ACL binding, as the authorizer stores it. */
+export interface Acl {
+  /** `topic`, `group`, `cluster`, `transactionalId`, `delegationToken`, `user`. */
+  resourceType: string
+  /** The name, or `*` for every resource of that type. */
+  resourceName: string
+  /** `literal` covers one name; `prefixed` covers a namespace. */
+  patternType: string
+  /** `User:alice`, as the authorizer spells it. */
+  principal: string
+  host: string
+  /** An operation this build has no name for arrives as `unknown(99)`. */
+  operation: string
+  /** `allow` or `deny` — denies win, so this is a column and not a colour. */
+  permission: string
+}
+
+/** One quota entity and the limits configured for it. */
+export interface ClientQuota {
+  entity: QuotaComponent[]
+  values: QuotaValue[]
+}
+
+export interface QuotaComponent {
+  /** `user`, `client-id` or `ip`. */
+  entityType: string
+  /** Null is the *default* entity of that type, not an unset name. */
+  name: string | null
+}
+
+export interface QuotaValue {
+  key: string
+  value: number
+}
+
+/** Who can authenticate with SCRAM — never how. */
+export interface ScramUser {
+  user: string
+  credentials: ScramCredential[]
+}
+
+export interface ScramCredential {
+  mechanism: string
+  iterations: number
+}
+
+/** One partition being moved. */
+export interface Reassignment {
+  topic: string
+  partition: number
+  /** Holds the added and the removed until the move completes. */
+  replicas: number[]
+  adding: number[]
+  removing: number[]
+}
+
+/** One transaction. Everything past `state` needs `?details=true`. */
+export interface Transaction {
+  transactionalId: string
+  producerId: number
+  /** The broker's own vocabulary, passed through. */
+  state: string
+  /**
+   * When the current transaction started, in epoch milliseconds.
+   *
+   * The start, not the duration: how long it has been open is the number that
+   * matters and it is wrong the moment it is serialised, so the browser ticks
+   * it the way it ticks `snapshotAgeMs`.
+   */
+  startTimeMs: number | null
+  timeoutMs: number | null
+  producerEpoch: number | null
+  partitions: TransactionPartitions[]
+}
+
+export interface TransactionPartitions {
+  topic: string
+  partitions: number[]
+}
+
+/** One producer writing to one partition. */
+export interface Producer {
+  topic: string
+  partition: number
+  producerId: number
+  /** Not a leader epoch: this bumps when a producer is fenced. */
+  producerEpoch: number
+  lastSequence: number
+  lastTimestamp: number
+  coordinatorEpoch: number
+  /** Set only where this producer has a transaction open. */
+  currentTxnStartOffset: number | null
+}

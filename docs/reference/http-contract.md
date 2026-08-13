@@ -155,13 +155,13 @@ GET  …/clusters/{id}/groups/{group}/offsets                     [5] committed 
 GET  /api/environments/{env}/schema-registries/{reg}/subjects    [6] the registry, and its subjects
 GET  …/schema-registries/{reg}/subjects/{subject}/versions       [6] every version, with its text
 
-GET  …/clusters/{id}/acls                                       [7]
-GET  …/clusters/{id}/quotas                                     [7]
-GET  …/clusters/{id}/scram-users                                [7]
-GET  …/clusters/{id}/reassignments                              [7]
-GET  …/clusters/{id}/transactions                               [7]
-GET  …/clusters/{id}/transactions/{txn}                         [7]
-GET  …/clusters/{id}/producers?topic=…&partition=…              [7]
+GET  …/clusters/{id}/acls                                       [7] every binding the authorizer holds
+GET  …/clusters/{id}/quotas                                     [7] one call per entity type, deduplicated
+GET  …/clusters/{id}/scram-users                                [7] who can authenticate, never how
+GET  …/clusters/{id}/reassignments                              [7] what is moving; empty is a cluster at rest
+GET  …/clusters/{id}/transactions?details=true&state=…          [7] the list, described
+GET  …/clusters/{id}/transactions/{txn}                         [7] one of them, addressable
+GET  …/clusters/{id}/producers?topic=…&partition=…              [7] producer state, routed to each leader
 
 GET  /api/search/topics?q=orders-*                              [8] across the fleet
 GET  /api/compare?a={id}&b={id}                                 [8] capability + config diff

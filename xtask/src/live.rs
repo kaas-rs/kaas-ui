@@ -985,66 +985,20 @@ async fn assertions() -> Result<Acceptance, String> {
         );
     }
 
-    // --- one analysis per cluster --------------------------------------------
+    // --- one analysis per cluster is a unit test, not a live one -------------
     //
-    // The ceiling is about everyone else's latency, not memory: an analysis
-    // fetches continuously on the shared per-broker connection, so a second
-    // one would queue behind the first — see upstream ask 11. Holding an open
-    // response on kperf-bench (146M records: it will not finish under this
-    // test) and asking for a second must refuse with 429, and dropping the
-    // first must free the slot, because dropping the response is the only
-    // cancellation there is.
-    {
-        let target = ids.first().cloned().unwrap_or_default();
-        let held = client
-            .get(url(&format!(
-                "/api/environments/{ENV}/clusters/{target}/topics/kperf-bench/analysis"
-            )))
-            .timeout(Duration::from_secs(120))
-            .send()
-            .await
-            .map_err(|e| e.to_string())?;
-        tokio::time::sleep(Duration::from_millis(300)).await;
-
-        let second = client
-            .get(url(&format!(
-                "/api/environments/{ENV}/clusters/{target}/topics/kaas-canary-v1/analysis"
-            )))
-            .timeout(Duration::from_secs(10))
-            .send()
-            .await
-            .map_err(|e| e.to_string())?;
-        acceptance.check(
-            "a second analysis on a busy cluster is refused with 429",
-            if second.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
-                Ok(String::new())
-            } else {
-                Err(format!("got {}", second.status()))
-            },
-        );
-        drop(second);
-        drop(held);
-
-        // The slot frees when the reader goes away — the same release the
-        // stream governor's permit has, asserted the same way: by using it.
-        tokio::time::sleep(Duration::from_millis(500)).await;
-        let after = client
-            .get(url(&format!(
-                "/api/environments/{ENV}/clusters/{target}/topics/kaas-canary-v1/analysis"
-            )))
-            .timeout(Duration::from_secs(10))
-            .send()
-            .await
-            .map_err(|e| e.to_string())?;
-        acceptance.check(
-            "dropping an analysis response frees the cluster's slot",
-            if after.status().is_success() {
-                Ok(String::new())
-            } else {
-                Err(format!("got {}", after.status()))
-            },
-        );
-    }
+    // It used to be here: open kperf-bench, ask for a second, expect 429. The
+    // premise was the comment it carried — "146M records: it will not finish
+    // under this test" — and the topic holds nine thousand now. A whole
+    // analysis of it takes 25ms, so the assertion was racing a scan that was
+    // over before the second request left, and racing them concurrently only
+    // narrowed the window rather than closing it.
+    //
+    // The governor is a set of `(environment, cluster)` keys in the process.
+    // Nothing about it needs a broker, so it is asserted where the answer is
+    // deterministic: `one_analysis_per_cluster_and_the_slot_returns` in
+    // kaas-ui-api. This is the case CLAUDE.md's split is for — a live test
+    // that depends on a fixture's *size* stops testing without failing.
 
     // --- streams are bounded, and the bound releases -------------------------
     {
@@ -1747,6 +1701,243 @@ async fn assertions() -> Result<Acceptance, String> {
             Err(format!("{enormous_status}: {enormous_body}"))
         },
     );
+
+    // --- the read-only admin surface ----------------------------------------
+    //
+    // The whole point of the phase in one block: five describes, one of which
+    // every cluster answers and three of which only one does. Put the two
+    // clusters side by side and the pass list *is* the conformance report.
+    {
+        // ACLs. `kaas` is the only cluster here with an authorizer holding
+        // bindings, and the count is measured rather than asserted at a
+        // constant: bindings are added to this cluster by other work, and a
+        // test that fails when somebody grants a principal a topic is a test
+        // nobody keeps.
+        let acls = get(
+            &client,
+            &format!("/api/environments/{ENV}/clusters/kaas/acls"),
+        )
+        .await;
+        acceptance.check(
+            "kaas renders its ACL bindings",
+            match &acls {
+                Ok(body) => {
+                    let items = body["items"].as_array().map(Vec::len).unwrap_or(0);
+                    let first = &body["items"][0];
+                    if items > 0
+                        && first["principal"].is_string()
+                        && first["operation"].is_string()
+                        && first["permission"].is_string()
+                        && first["patternType"].is_string()
+                    {
+                        Ok(format!("{items} bindings"))
+                    } else {
+                        Err(format!("{items} bindings, shape {first}"))
+                    }
+                }
+                Err(error) => Err(error.clone()),
+            },
+        );
+
+        // Strimzi has no authorizer configured, and that is a different fact
+        // from an empty list: the broker refuses the call rather than
+        // answering it with nothing. It must not be a 500.
+        let no_authorizer = client
+            .get(url(&format!(
+                "/api/environments/{ENV}/clusters/strimzi/acls"
+            )))
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        let status = no_authorizer.status();
+        let body: Value = no_authorizer.json().await.unwrap_or(Value::Null);
+        acceptance.check(
+            "strimzi's missing authorizer is a named error, not a 500",
+            if status.is_success() {
+                Ok("answers with a list".into())
+            } else if status != reqwest::StatusCode::INTERNAL_SERVER_ERROR
+                && body["kind"].is_string()
+            {
+                Ok(format!("{status} {}", body["kind"]))
+            } else {
+                Err(format!("{status}: {body}"))
+            },
+        );
+
+        // SCRAM. Both clusters answer, and the assertion that matters is the
+        // one about what is *not* in the response.
+        for cluster in ["kaas", "strimzi"] {
+            let users = get(
+                &client,
+                &format!("/api/environments/{ENV}/clusters/{cluster}/scram-users"),
+            )
+            .await;
+            acceptance.check(
+                &format!("{cluster} lists SCRAM users and no credential"),
+                match &users {
+                    Ok(body) => {
+                        let rendered = body.to_string();
+                        let items = body["items"].as_array().map(Vec::len).unwrap_or(0);
+                        // Nothing that could carry a secret, under any of the
+                        // names the wire uses for one.
+                        let leaks = ["password", "salt", "saltedPassword", "storedKey"]
+                            .iter()
+                            .any(|field| rendered.contains(field));
+                        // A user with no mechanism named is a row that says
+                        // nothing: the point of the screen is *which* way
+                        // somebody can authenticate.
+                        if leaks {
+                            Err("a credential field is in the response".into())
+                        } else if items > 0
+                            && !body["items"][0]["credentials"][0]["mechanism"].is_string()
+                        {
+                            Err("a user came back with no mechanism".into())
+                        } else {
+                            Ok(format!("{items} users"))
+                        }
+                    }
+                    Err(error) => Err(error.clone()),
+                },
+            );
+        }
+
+        // Quotas: both answer, neither has any configured, and an empty list
+        // is a successful answer rather than an error.
+        for cluster in ["kaas", "strimzi"] {
+            let quotas = get(
+                &client,
+                &format!("/api/environments/{ENV}/clusters/{cluster}/quotas"),
+            )
+            .await;
+            acceptance.check(
+                &format!("{cluster} answers for client quotas"),
+                match &quotas {
+                    Ok(body) if body["items"].is_array() => Ok(format!(
+                        "{} entities",
+                        body["items"].as_array().map(Vec::len).unwrap_or(0)
+                    )),
+                    Ok(body) => Err(format!("shape {body}")),
+                    Err(error) => Err(error.clone()),
+                },
+            );
+        }
+
+        // Reassignments and transactions: present on strimzi, absent on kaas.
+        // The absence is the assertion — an `UnsupportedApi` naming both
+        // ranges, which is what the tab renders instead of existing.
+        for (path, api) in [
+            ("reassignments", "ListPartitionReassignments"),
+            ("transactions", "ListTransactions"),
+        ] {
+            let ok = get(
+                &client,
+                &format!("/api/environments/{ENV}/clusters/strimzi/{path}"),
+            )
+            .await;
+            acceptance.check(
+                &format!("strimzi answers {path}"),
+                match &ok {
+                    Ok(body) if body["items"].is_array() => Ok(format!(
+                        "{} rows",
+                        body["items"].as_array().map(Vec::len).unwrap_or(0)
+                    )),
+                    Ok(body) => Err(format!("shape {body}")),
+                    Err(error) => Err(error.clone()),
+                },
+            );
+
+            let missing = client
+                .get(url(&format!(
+                    "/api/environments/{ENV}/clusters/kaas/{path}"
+                )))
+                .send()
+                .await
+                .map_err(|e| e.to_string())?;
+            let status = missing.status();
+            let body: Value = missing.json().await.unwrap_or(Value::Null);
+            acceptance.check(
+                &format!("kaas reports {path} as unsupported, with both ranges"),
+                if body["kind"] == "unsupported"
+                    && body["unsupportedApi"]["api"] == api
+                    && body["unsupportedApi"]["broker"].is_null()
+                    && body["unsupportedApi"]["ours"].is_array()
+                {
+                    Ok(format!("{}", body["unsupportedApi"]["apiKey"]))
+                } else {
+                    Err(format!("{status}: {body}"))
+                },
+            );
+        }
+
+        // The describe path: everything the list cannot carry, and the field
+        // the screen is sorted by. `startTimeMs` and never a duration — a
+        // duration computed here is wrong by the time it is read.
+        let described = get(
+            &client,
+            &format!("/api/environments/{ENV}/clusters/strimzi/transactions?details=true"),
+        )
+        .await;
+        acceptance.check(
+            "a described transaction carries a start timestamp, not a duration",
+            match &described {
+                Ok(body) => {
+                    let items = body["items"].as_array().cloned().unwrap_or_default();
+                    let rendered = body.to_string();
+                    let with_start = items
+                        .iter()
+                        .filter(|item| item["startTimeMs"].is_i64())
+                        .count();
+                    if rendered.contains("openFor") {
+                        Err("the response carries a computed duration".into())
+                    } else if items.is_empty() {
+                        Err("no transactional id on strimzi to describe".into())
+                    } else if with_start > 0 {
+                        Ok(format!("{with_start} of {} started", items.len()))
+                    } else {
+                        Err("no transaction carried a start timestamp".into())
+                    }
+                }
+                Err(error) => Err(error.clone()),
+            },
+        );
+
+        // And the producers behind one, routed to each partition's leader.
+        let producers = get(
+            &client,
+            &format!("/api/environments/{ENV}/clusters/strimzi/producers?topic=kaas-canary-v1"),
+        )
+        .await;
+        acceptance.check(
+            "describe_producers answers for a topic's partitions",
+            match &producers {
+                Ok(body) if body["items"].is_array() => Ok(format!(
+                    "{} producers",
+                    body["items"].as_array().map(Vec::len).unwrap_or(0)
+                )),
+                Ok(body) => Err(format!("shape {body}")),
+                Err(error) => Err(error.clone()),
+            },
+        );
+
+        // A topic that is not there is a bad request naming it, not an empty
+        // list that reads as "no producers".
+        let unknown = client
+            .get(url(&format!(
+                "/api/environments/{ENV}/clusters/strimzi/producers?topic=definitely-not-a-topic"
+            )))
+            .send()
+            .await
+            .map_err(|e| e.to_string())?
+            .status();
+        acceptance.check(
+            "producers on an unknown topic is a 400, not an empty list",
+            if unknown == reqwest::StatusCode::BAD_REQUEST {
+                Ok(String::new())
+            } else {
+                Err(format!("got {unknown}"))
+            },
+        );
+    }
 
     // --- an unknown id is absent, not forbidden -----------------------------
     let status = client

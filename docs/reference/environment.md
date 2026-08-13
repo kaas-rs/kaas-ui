@@ -35,7 +35,9 @@ Every phase's acceptance command below runs against them.
 | api keys advertised | **37** | **75** |
 | topics | 13 | 17, of which 2 internal |
 | groups | 2, all reporting `group_type: ""` | 16, all `classic` |
-| authorizer | yes — 24 ACLs | none — `SECURITY_DISABLED(54)` |
+| authorizer | yes — 31 ACLs (was 24) | yes — it answers `DescribeAcls`, where this file recorded `SECURITY_DISABLED(54)` until Phase 7 asked it |
+| SCRAM credentials | `alice`, `throttled-user` | `alice` |
+| client quotas | none configured | none configured |
 | topic ids | **not reported** — `Fetch` stays on the name path | reported — `Fetch` runs v18 by id |
 
 **The topic and group rows move; the rest does not.** Canaries connect and
@@ -44,8 +46,15 @@ leave, benchmarks create and delete. Those two numbers were 21/14 topics and
 `livetest probe` — so treat them as "roughly this many, both non-empty" rather
 than as constants. No assertion in `cargo xtask live` pins them, deliberately:
 a test that fails because someone's canary restarted is a test that gets
-disabled. The api-key counts and the ACL count are the stable facts, and they
-are the ones the capability work rests on.
+disabled. The api-key counts are the stable facts, and they are the ones the
+capability work rests on.
+
+**The ACL count is not one of them, and neither is the authorizer row.** Both
+were re-measured when Phase 7 built the screen that reads them, and both had
+moved: 24 bindings had become 31, and Strimzi — recorded here as having no
+authorizer at all — answers the call. `cargo xtask live` asserts the *shape* of
+a binding and that the list is non-empty, never the count: a test that fails
+because somebody granted a principal a topic is a test that gets disabled.
 
 Both are `ClusterIP` only; there is no ingress in this cluster, so kaas-ui is
 reached in development by running it here and using the code-server port
@@ -159,8 +168,10 @@ delegation tokens (38–41), every share-group api (76–92),
 `UnregisterBroker` (64).
 
 That maps onto UI features almost one for one: on `kaas` the transactions tab,
-the quorum panel, the SCRAM list and the reassignment view have nothing behind
-them, and on Strimzi they do. **Put the two side by side and the tab sets are a
+the quorum panel and the reassignment view have nothing behind them, and on
+Strimzi they do. The SCRAM list is the exception this list gets wrong — `kaas`
+answers `DescribeUserScramCredentials` today, and Phase 7's admin page shows
+that tab on both clusters. **Put the two side by side and the tab sets are a
 conformance report** — PLAN.md §5's claim, and it is true today rather than
 aspirationally.
 

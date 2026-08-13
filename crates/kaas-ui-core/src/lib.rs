@@ -20,6 +20,7 @@
     )
 )]
 
+pub mod admin;
 pub mod analysis;
 pub mod capabilities;
 pub mod config;

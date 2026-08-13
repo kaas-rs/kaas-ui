@@ -11,12 +11,12 @@ in [11-built.md](11-built.md).
 
 ## Status
 
-**Phases 0–6 are done.**
+**Phases 0–7 are done.**
 The workspace is five crates, a frontend and an xtask.
 
 ```sh
-cargo xtask ci      # green: fmt, clippy, 239 unit tests, five invariant greps
-cargo xtask live    # green: 61 assertions against kaas, strimzi and a dead cluster
+cargo xtask ci      # green: fmt, clippy, 275 unit tests, five invariant greps
+cargo xtask live    # green: 71 assertions against kaas, strimzi and a dead cluster
 cargo xtask login   # 11 assertions, a real login. Needs the dex-test app
                     # synced; it is currently out of the cluster, so this
                     # command reports that and does nothing.
@@ -31,7 +31,7 @@ cargo xtask login   # 11 assertions, a real login. Needs the dex-test app
 | 4 — auth | **done** — Dex deployed, people sign in, roles enforced, reads audited, and `cargo xtask login` performs a real login against a second Dex in the cluster |
 | 5 — groups | **done** — four kinds, members, committed offsets, lag as states rather than a subtraction |
 | 6 — schema registry | **done** — one registry per environment, Avro/Protobuf/JSON Schema, the codec chip, the schema browser, the payload filter over decoded values |
-| 7 — read-only admin | not started — ACLs, quotas, SCRAM, reassignments, transactions |
+| 7 — read-only admin | **done** — ACLs, quotas, SCRAM users, reassignments, the transaction inspector, and the `CapabilityTab` the design system named in Phase 1 |
 | 8 — cross-cluster | not started — fleet topic search, cluster comparison, capability diff |
 
 Phase *n* is milestone M*n* in PLAN.md §8. One numbering, not two.
@@ -42,7 +42,6 @@ Phase *n* is milestone M*n* in PLAN.md §8. One numbering, not two.
 |---|---|---|
 | [00](00-foundations.md) | **Foundations** | workspace, dependency pins, how kaas-lib is consumed, the invariants CI enforces |
 | [11](11-built.md) | **What is built** | phases 0–6: what each decided differently from its plan, what was measured, what is still unproven |
-| [08](08-phase-7-read-only-admin.md) | **Phase 7 — read-only admin** | ACLs, quotas, SCRAM, reassignments, transactions |
 | [09](09-phase-8-cross-cluster.md) | **Phase 8 — cross-cluster** | fleet topic search, cluster comparison, capability diff |
 
 Running alongside all of them:

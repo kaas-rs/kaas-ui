@@ -179,7 +179,11 @@ anything else.
 
 **`CapabilityTab`** — a tab that knows it might not exist. Three states:
 available (normal), unsupported (**not rendered**), and unsupported-but-routed
-(rendered as the panel below when the URL points at it directly).
+(rendered as the panel below when the URL points at it directly). Written in
+Phase 7, where five screens needed it; the three-state decision had been a
+condition around `TabsTrigger` until there were five copies of it. Its
+companion `capabilityGate` is a **function**, not a component, because
+`const gate = <Gate …/>; if (gate)` is always true.
 
 **`UnsupportedApiPanel`** — the degradation component. Shows the api name and
 *both* version ranges, laid out as a comparison rather than prose, because the

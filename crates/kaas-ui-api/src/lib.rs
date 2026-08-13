@@ -367,7 +367,8 @@ pub fn router(state: AppState) -> Router {
 
 fn api_router() -> Router<AppState> {
     use routes::{
-        analysis, capabilities, clusters, configs, groups, me, messages, schemas, spec, topics,
+        admin, analysis, capabilities, clusters, configs, groups, me, messages, schemas, spec,
+        topics,
     };
 
     Router::new()
@@ -456,6 +457,35 @@ fn api_router() -> Router<AppState> {
             "/environments/{env}/clusters/{id}/groups/{group}/offsets",
             get(groups::offsets),
         )
+        // Phase 7: the read-only admin surface. Every one is
+        // `ClusterConfig` + `View` — facts about a cluster rather than about a
+        // named topic or group — and every one is hidden by the capability
+        // projection on a cluster that does not implement it.
+        .route("/environments/{env}/clusters/{id}/acls", get(admin::acls))
+        .route(
+            "/environments/{env}/clusters/{id}/quotas",
+            get(admin::quotas),
+        )
+        .route(
+            "/environments/{env}/clusters/{id}/scram-users",
+            get(admin::scram_users),
+        )
+        .route(
+            "/environments/{env}/clusters/{id}/reassignments",
+            get(admin::reassignments),
+        )
+        .route(
+            "/environments/{env}/clusters/{id}/transactions",
+            get(admin::transactions),
+        )
+        .route(
+            "/environments/{env}/clusters/{id}/transactions/{txn}",
+            get(admin::transaction),
+        )
+        .route(
+            "/environments/{env}/clusters/{id}/producers",
+            get(admin::producers),
+        )
         // A registry is a peer of a cluster inside an environment, not a
         // feature of one. It got this URL when environments did: the id is
         // scoped, and the lookup still refuses a caller who cannot see a
@@ -498,6 +528,38 @@ environments:
     /// The caller an open deployment resolves for every request.
     fn anyone() -> Caller {
         Caller::new(Principal::anonymous(), Access::admin())
+    }
+
+    /// One analysis per cluster, and the slot comes back when the reader goes.
+    ///
+    /// A unit test and not a live one, because there is no broker in this: the
+    /// governor is a set of `(environment, cluster)` keys in this process, and
+    /// asserting it against a real cluster meant racing a scan — which worked
+    /// only while the topic it raced was big enough to be slow, and silently
+    /// stopped asserting anything when that topic was truncated.
+    #[test]
+    fn one_analysis_per_cluster_and_the_slot_returns() {
+        let state = state(Policy::open());
+
+        let first = state.begin_analysis("dev", "kaas").unwrap();
+        let refused = state.begin_analysis("dev", "kaas").unwrap_err();
+        assert_eq!(
+            refused.status(),
+            axum::http::StatusCode::TOO_MANY_REQUESTS,
+            "429 and not 409: nothing conflicts, the cluster is busy"
+        );
+
+        // Another cluster is another slot — the connections a scan occupies
+        // are that cluster's, so one busy cluster must not stop the fleet.
+        assert!(state.begin_analysis("dev", "other").is_ok());
+
+        // Dropping the permit is the only cancellation there is: the response
+        // going away is what ends the scan.
+        drop(first);
+        assert!(
+            state.begin_analysis("dev", "kaas").is_ok(),
+            "the slot did not come back"
+        );
     }
 
     #[test]

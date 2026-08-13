@@ -9,6 +9,8 @@ import {
   redirect,
   useParams,
 } from "@tanstack/react-router"
+import type { SearchSchemaInput } from "@tanstack/react-router"
+import { z } from "zod"
 
 import { AppLayout } from "@/layout"
 import { PageTitle } from "@/components/page-title"
@@ -20,6 +22,8 @@ import { SettingsPage } from "@/pages/settings"
 import { ClusterOverviewPage } from "@/pages/cluster-overview"
 import { ClusterCapabilitiesPage } from "@/pages/cluster-capabilities"
 import { ClusterConfigsPage } from "@/pages/cluster-configs"
+import { ADMIN_TABS, ClusterAdminPage } from "@/pages/cluster-admin"
+import type { AdminTab } from "@/pages/cluster-admin"
 import { TopicsPage } from "@/pages/topics"
 import { TopicDetailPage } from "@/pages/topic-detail"
 import { GroupsPage } from "@/pages/groups"
@@ -185,6 +189,35 @@ const configsRoute = createRoute({
   },
 })
 
+/**
+ * The read-only admin surface: five screens behind one URL.
+ *
+ * The tab is a search parameter rather than a path segment, for the reason the
+ * topic page's is: it is this page's state, and a link somebody sends should
+ * open on the screen they were looking at. `.catch` on the enum means a
+ * hand-edited or retired one lands on the ACLs rather than on an error
+ * boundary — including `?screen=transactions` on a cluster that has none,
+ * which is the URL the capability panel exists to answer.
+ *
+ * `screen` and not `tab`: the router types every search key across the whole
+ * tree, so a second `tab` would widen the topic page's union with values it
+ * has no tab for.
+ */
+const adminRoute = createRoute({
+  getParentRoute: () => clusterRoute,
+  path: "admin",
+  validateSearch: (input: { screen?: AdminTab } & SearchSchemaInput) =>
+    ({ screen: z.enum(ADMIN_TABS).catch("acls").parse(input.screen) }) as {
+      screen: AdminTab
+    },
+  component: function AdminRoute() {
+    const { envId, clusterId } = useParams({
+      from: "/environments/$envId/clusters/$clusterId",
+    })
+    return <ClusterAdminPage envId={envId} clusterId={clusterId} />
+  },
+})
+
 const capabilitiesRoute = createRoute({
   getParentRoute: () => clusterRoute,
   path: "capabilities",
@@ -253,6 +286,7 @@ const routeTree = rootRoute.addChildren([
       groupRoute,
       configsRoute,
       capabilitiesRoute,
+      adminRoute,
     ]),
     schemaRegistryRoute,
     schemaRoute,

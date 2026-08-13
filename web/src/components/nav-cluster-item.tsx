@@ -37,6 +37,8 @@ const CLUSTER_NAV: {
   label: string
   to: string
   feature?: Feature
+  /** Shown when *any* of these is available, for a page that holds several. */
+  anyFeature?: Feature[]
   /** The permission this item needs `view` on. */
   resource?: Resource
   /**
@@ -64,6 +66,21 @@ const CLUSTER_NAV: {
     to: "/environments/$envId/clusters/$clusterId/configs",
     feature: "configs",
     resource: "cluster_config",
+  },
+  {
+    label: "admin",
+    to: "/environments/$envId/clusters/$clusterId/admin",
+    resource: "cluster_config",
+    // Not one feature but five, and the item is worth showing when *any* of
+    // them is: a cluster with ACLs and no transactions has an admin page with
+    // one tab on it, and a cluster with none of the five has nothing to open.
+    anyFeature: [
+      "acls",
+      "quotas",
+      "scramUsers",
+      "reassignments",
+      "transactions",
+    ],
   },
   {
     label: "capabilities",
@@ -117,13 +134,18 @@ export function NavClusterItem({
     ) {
       return false
     }
-    if (!item.feature) return true
     // Until the answer arrives, show it: an item that appears under the cursor
-    // is worse than one that errors once.
-    const state = capabilities.data?.features.find(
-      (feature) => feature.feature === item.feature
-    )
-    return state === undefined || state.state === "available"
+    // is worse than one that errors once. That rule is why both checks below
+    // treat "not in the list" as available.
+    const available = (feature: Feature) => {
+      const state = capabilities.data?.features.find(
+        (entry) => entry.feature === feature
+      )
+      return state === undefined || state.state === "available"
+    }
+    if (item.anyFeature) return item.anyFeature.some(available)
+    if (!item.feature) return true
+    return available(item.feature)
   })
 
   return (

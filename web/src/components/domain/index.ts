@@ -17,3 +17,8 @@ export { Stat } from "./stat"
 export { FeatureBadge, featureState } from "./feature-badge"
 export { HintHead } from "./hint-head"
 export { SortableHead } from "./sortable-head"
+export {
+  CapabilityTab,
+  capabilityGate,
+  capabilityState,
+} from "./capability-tab"

@@ -139,10 +139,16 @@ clusters are a better target than one container anyway.
 | **topics** | server-side filtered/sorted/paged list, partitions, replica placement grid, configs, offsets |
 | **messages** | the tail of a topic, and a live viewer: seven seek modes over SSE, a virtualized list, a detail panel, and the whole view in the URL |
 | **groups** | the four group kinds, members, committed offsets and lag in its four states |
+| **auth** | OIDC through Dex, roles in kafbat-ui's shape, and a UI that hides what a role does not reach rather than erroring on click |
+| **schemas** | one registry per environment, Avro/Protobuf/JSON Schema decoded by schema id, the codec chip, the schema browser, and a filter over the *decoded* value |
+| **admin** | **the part kafbat-ui does not have**: ACLs, client quotas, SCRAM users, reassignments, and a transaction inspector that says how long each transaction has been open and which producer is holding it |
 
-Not built yet: OIDC/Dex and roles, schema registry, the read-only admin views
-(ACLs, quotas, SCRAM, reassignments, transactions) and the cross-cluster views.
-See [`docs/README.md`](docs/README.md) for what each phase covers.
+All of it is read. `DescribeAcls` is here and `CreateAcls` is not in the
+workspace; the same goes for every altering neighbour of every call above.
+
+Not built yet: the cross-cluster views — fleet-wide topic search, cluster
+comparison, capability diff. See [`docs/README.md`](docs/README.md) for what
+each phase covers.
 
 The message viewer runs on **kaas-lib 0.4.0**. Three things it needed went in
 there rather than here, because version and implementation knowledge belongs in
