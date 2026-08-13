@@ -212,6 +212,22 @@ that cannot be corrected is worse than none.
 **`SnapshotAge`** — "as of 4s ago", ticking. On every screen backed by a
 snapshot. Turns `--color-warn-ink` past the configured staleness.
 
+**`HintHead` / `SortableHead` / `Stat`'s `hint`** — **every column header and
+every stat label carries one line saying what it means.** Not decoration: each
+is a Kafka or registry term with a precise meaning and a plausible wrong
+reading, and getting it wrong is a wrong operational conclusion. `messages` is
+what is *retained*, not what was ever written; `epoch` counts leadership
+changes; a subject's `id` is a registry-wide counter and not that subject's
+numbering; `compatibility` is a rule about the *next* version rather than a
+verdict on this one. One line on hover beats a legend nobody scrolls to, and
+beats a footnote for a reader who already knows.
+
+The affordance is one thing learned once: a dotted underline, hover, one
+sentence. `HintHead` where the header is a label and `SortableHead` where it is
+also the sort control — two components rather than one with an optional
+`onClick`, because the element differs (`<span>` vs `<button>`) and a header
+that looks clickable and is not is worse than either.
+
 ## Type and density
 
 | | |
@@ -230,6 +246,21 @@ Row height 36px in tables, 32px in dense mode. A twelve-cluster fleet view and a
 5000-topic list are both real, so density is a first-class setting, not an
 afterthought.
 
+## Icons
+
+lucide for everything generic, and a brand mark where the thing being pointed
+at has one of its own: Apache Kafka for a cluster, MQTT for an MQTT broker, a
+shelf of books for a schema registry — the last from Remix Icon, a line weight
+that sits beside lucide rather than against it. The marks come from
+`react-icons`, whose per-icon imports tree-shake: three of them cost ~2.6 kB
+gzipped, which is the budget a brand glyph has to earn.
+
+**One table decides, in `components/domain/resource-kinds.ts`.** The nav and the
+fleet read it, so a registry cannot be a shelf on one screen and a cylinder on
+the other, and the glyph that means *cluster* is never quietly reused for a
+resource under one. Icons carry no `size` prop: react-icons default to `1em`
+and lucide to 24, and a `size-4` in the class list settles both.
+
 ## Motion
 
 Transitions on colour and opacity only, 120ms, `ease-out`. No layout animation:
@@ -239,8 +270,11 @@ target you cannot click. `prefers-reduced-motion` removes all of it.
 ## Accessibility floor
 
 - All text ≥ 4.5:1 against its ground; the tokens above are chosen for it.
-- **No state is signalled by colour alone.** Offline is a red fill *and* a
-  glyph; under-replicated is amber *and* a count. A red/green fleet dashboard is
-  useless to ~8% of men looking at it.
+- **No state is signalled by colour alone.** Offline is a red dot *and* the word
+  `unreachable`; under-replicated is amber *and* a count. A red/green fleet
+  dashboard is useless to ~8% of men looking at it. The word is what discharges
+  this on a status badge, which is why the tick and the cross that used to sit
+  between the dot and it are gone: three renderings of one fact, and only one of
+  them says which fact.
 - Focus ring is `--color-accent`, 2px, offset 2px, never suppressed.
 - Every table is keyboard-navigable and every icon-only control is labelled.

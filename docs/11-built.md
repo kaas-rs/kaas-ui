@@ -589,6 +589,36 @@ deployments; both sides appear when both exist, because a key schema and a
 value schema are two subjects and picking one would be picking whichever
 sorted first.
 
+**And from the list's end it is a third request, not a third column of the
+first.** The topic table asks `?schemas=true` the way it asks `?metrics=true`,
+against a different dependency and for the same reason: the registry is the one
+thing on that page which is not the cluster, and a registry that has gone away
+should cost one column rather than the table. The join is one `subjects()` — the
+cached listing the fleet tile and the schema browser already read — reduced
+against the fifty names on screen, so the cost is a round trip per page and
+never a call per row.
+
+Read from the subject *names* only, which is the one place the list and the
+detail differ. `{topic}-{record}` needs its schema to find its seam, and
+fetching one per subject to fill a column would scale with the registry to
+answer a question about the page; the topic page searches for its own name and
+describes the handful that come back, so that strategy is answered there and
+`TopicNameStrategy` is answered in both. The same `SubjectNaming::of(name,
+None)` the `topics` and `dangling` counts are built from, so the two pages
+cannot disagree about which topic a subject belongs to. A row carries the
+registry's own glyph, one per side and each linking to its subject — fifty rows
+of the words `value` and `key` is a column of text to read where the question it
+answers is one a mark answers at a glance. Nothing pops up on hover to say which
+side it is; that is in the subject it links to, and the glyph carries an
+`aria-label` rather than a `title`, which names it for a screen reader without
+putting a tooltip on a table someone is scanning. The column is absent on a cluster
+referencing no registry, `—` where the registry holds nothing for that topic,
+and `·` while the request is out — `TopicSummary.schemas` is `None` for
+"not answered" and `Some` with two empty sides for "nothing registered", which
+is the distinction the metric columns already draw. It is not sortable: ordering
+by it would mean reading the registry for every topic on the cluster before the
+first row could be placed.
+
 **The schema browser is guarded like the topic list**, `Resource::Topic` +
 `Action::View`, and it does **not** require a connected cluster. A registry
 serves an environment and knows nothing about brokers, so its subjects stay

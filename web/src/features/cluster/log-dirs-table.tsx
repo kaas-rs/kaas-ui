@@ -3,10 +3,10 @@ import {
   Table,
   TableBody,
   TableCell,
-  TableHead,
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { HintHead } from "@/components/domain"
 import type { LogDir } from "@/api/types"
 
 /** One broker's log directories: capacity, and what of it Kafka occupies. */
@@ -22,11 +22,30 @@ export function LogDirsTable({
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>path (broker {broker})</TableHead>
-            <TableHead className="text-right">total</TableHead>
-            <TableHead className="text-right">usable</TableHead>
-            <TableHead className="text-right">replicas</TableHead>
-            <TableHead className="text-right">on disk</TableHead>
+            <HintHead
+              label={`path (broker ${broker})`}
+              hint="a directory this broker stores log segments in"
+            />
+            <HintHead
+              label="total"
+              hint="the size of the filesystem holding it, not a Kafka quota"
+              right
+            />
+            <HintHead
+              label="usable"
+              hint="what the filesystem says is free — everything on it counts, Kafka or not"
+              right
+            />
+            <HintHead
+              label="replicas"
+              hint="partition copies stored here, leaders and followers alike"
+              right
+            />
+            <HintHead
+              label="on disk"
+              hint="those replicas summed: what Kafka occupies of the total"
+              right
+            />
           </TableRow>
         </TableHeader>
         <TableBody>

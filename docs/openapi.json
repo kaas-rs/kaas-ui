@@ -548,6 +548,15 @@
             }
           },
           {
+            "name": "schemas",
+            "in": "query",
+            "description": "Fill in which subjects name each topic",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
             "name": "name",
             "in": "query",
             "description": "Describe these topics instead of listing",
@@ -3628,6 +3637,17 @@
                   "description": "The smallest replica count across partitions, which is what anyone\nmeans by \"replication factor\".",
                   "minimum": 0
                 },
+                "schemas": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "$ref": "#/components/schemas/TopicSchemas",
+                      "description": "Which subjects in the cluster's registry name this topic, when\n`?schemas=true` was asked for.\n\n`None` is \"not answered\" and not \"none registered\": the question was not\nasked, the cluster reads no registry, or the registry would not hand\nover its subject list. A topic with no schema is `Some` with both sides\nempty, which is what lets a column say `—` on the topics that have none\nwithout saying it on the ones nobody asked about."
+                    }
+                  ]
+                },
                 "topicId": {
                   "type": [
                     "string",
@@ -5982,6 +6002,33 @@
           }
         }
       },
+      "TopicSchemas": {
+        "type": "object",
+        "description": "The subjects of one topic, by the side of the record they decode.\n\nRead from the subject *names* alone, which resolves `TopicNameStrategy` and\nnothing else. `{topic}-{record}` hides its seam in the schema rather than in\nthe name — recovering it is a registry call per subject, which is a cost\nthat scales with the registry to fill a column that scales with the page.\nThe topic page answers that one: it searches for the topic and describes the\nhandful of subjects that come back. See [`kaas_ui_serde::SubjectNaming`].",
+        "required": [
+          "registry"
+        ],
+        "properties": {
+          "key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`{topic}-key`, where it is registered."
+          },
+          "registry": {
+            "type": "string",
+            "description": "The registry the subjects are registered in, addressed within the\nenvironment the request already names."
+          },
+          "value": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`{topic}-value`, where it is registered.\n\nBoth sides, because a key schema and a value schema are two subjects and\nshowing whichever sorted first would be picking one at random."
+          }
+        }
+      },
       "TopicSummary": {
         "type": "object",
         "description": "One row of the topic list.",
@@ -6040,6 +6087,17 @@
             "type": "integer",
             "description": "The smallest replica count across partitions, which is what anyone\nmeans by \"replication factor\".",
             "minimum": 0
+          },
+          "schemas": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TopicSchemas",
+                "description": "Which subjects in the cluster's registry name this topic, when\n`?schemas=true` was asked for.\n\n`None` is \"not answered\" and not \"none registered\": the question was not\nasked, the cluster reads no registry, or the registry would not hand\nover its subject list. A topic with no schema is `Some` with both sides\nempty, which is what lets a column say `—` on the topics that have none\nwithout saying it on the ones nobody asked about."
+              }
+            ]
           },
           "topicId": {
             "type": [

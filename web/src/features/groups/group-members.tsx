@@ -1,10 +1,9 @@
 import type { GroupMember } from "@/api/types"
-import { Empty } from "@/components/domain"
+import { Empty, HintHead } from "@/components/domain"
 import {
   Table,
   TableBody,
   TableCell,
-  TableHead,
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
@@ -23,11 +22,27 @@ export function GroupMembers({ members }: { members: GroupMember[] }) {
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>member</TableHead>
-            <TableHead>client</TableHead>
-            <TableHead>host</TableHead>
-            <TableHead className="text-right">epoch</TableHead>
-            <TableHead>assignment</TableHead>
+            <HintHead
+              label="member"
+              hint="the id the coordinator issued — it changes on every rejoin unless the member is static"
+            />
+            <HintHead
+              label="client"
+              hint="the client id the member set, which is a name it chose and not an identity"
+            />
+            <HintHead
+              label="host"
+              hint="where the coordinator saw the connection come from"
+            />
+            <HintHead
+              label="epoch"
+              hint="the member's rebalance generation — it bumps every time the group rebalances"
+              right
+            />
+            <HintHead
+              label="assignment"
+              hint="the partitions this member owns right now"
+            />
           </TableRow>
         </TableHeader>
         <TableBody>

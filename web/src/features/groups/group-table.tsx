@@ -1,11 +1,11 @@
 import { Link } from "@tanstack/react-router"
 
 import type { GroupSummary } from "@/api/types"
+import { HintHead } from "@/components/domain"
 import {
   Table,
   TableBody,
   TableCell,
-  TableHead,
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
@@ -29,10 +29,22 @@ export function GroupTable({
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>group</TableHead>
-            <TableHead>state</TableHead>
-            <TableHead>type</TableHead>
-            <TableHead>protocol</TableHead>
+            <HintHead
+              label="group"
+              hint="the id consumers join under; greyed where this build cannot describe its kind"
+            />
+            <HintHead
+              label="state"
+              hint="what the coordinator says it is doing — empty means committed offsets but no members"
+            />
+            <HintHead
+              label="type"
+              hint="classic or consumer: which rebalance protocol the group runs"
+            />
+            <HintHead
+              label="protocol"
+              hint="the assignor the members agreed on, for a classic group"
+            />
           </TableRow>
         </TableHeader>
         <TableBody>

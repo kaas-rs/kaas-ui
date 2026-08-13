@@ -46,6 +46,18 @@ pub struct TopicQuery {
     /// than the page.
     #[serde(default)]
     pub metrics: bool,
+    /// Fill in which subjects name each topic.
+    ///
+    /// Opt-in for the reason `metrics` is, and the reason is the same shape
+    /// with a different dependency: this is the only thing on the route that
+    /// touches the *schema registry*, and a registry that has gone away must
+    /// not hold up a table about brokers. One cached call fills a page, so the
+    /// cost is a round trip and not a call per row.
+    ///
+    /// Ignored by the `?name=` path, which describes topics across clusters and
+    /// asks a different question.
+    #[serde(default)]
+    pub schemas: bool,
     /// Describe exactly these topics, comma-separated, instead of listing.
     ///
     /// This is the path where the envelope earns its keep: naming fifty topics
@@ -68,6 +80,7 @@ pub struct TopicQuery {
         ("limit" = Option<usize>, Query, description = "Page size"),
         ("offset" = Option<usize>, Query, description = "Page offset"),
         ("metrics" = Option<bool>, Query, description = "Fetch message counts and sizes"),
+        ("schemas" = Option<bool>, Query, description = "Fill in which subjects name each topic"),
         ("name" = Option<String>, Query, description = "Describe these topics instead of listing"),
     ),
     responses((status = 200, description = "Topics", body = Envelope<TopicSummary>)),
@@ -147,6 +160,14 @@ pub async fn list(
 
     if query.metrics && !sort_needs_metrics {
         errors.extend(enrich(&admin, &snapshot, &mut page).await);
+    }
+
+    // After paging, always: unlike a metric there is nothing to sort by here,
+    // so the join is over the fifty rows on screen and never over the cluster.
+    if query.schemas
+        && let Some(registry) = handle.schema_registry()
+    {
+        attach_schemas(registry, &mut page).await;
     }
 
     Ok(Json(
@@ -245,6 +266,73 @@ async fn enrich(
     }
 
     errors
+}
+
+/// Attach the subjects naming each topic, in place.
+///
+/// One call to the registry for the whole page, and usually none: `subjects()`
+/// is the cached listing the schema browser and the fleet tile already read, so
+/// a table refreshing every ten seconds does not turn into a request every ten
+/// seconds against somebody's registry.
+///
+/// Read from the subject **names**. `SubjectNaming::of(name, None)` resolves
+/// the two suffix strategies and refuses to guess at `{topic}-{record}`, whose
+/// seam is in the schema — recovering that would be a call per subject in the
+/// registry to fill a column of fifty, so it is the topic page's job and not
+/// this one's. The same reading is what the subject table's `topics` count is
+/// built from, so the two pages cannot disagree about which topic a subject
+/// belongs to.
+///
+/// A registry that will not answer leaves every row `None`, which reads as "not
+/// answered" rather than "nothing registered". It raises nothing: the fault is
+/// already on the registry's own card, in the sidebar and on the fleet, and a
+/// topic list is not the place to learn that a schema registry is down.
+async fn attach_schemas(registry: &kaas_ui_serde::RegistryHandle, topics: &mut [TopicSummary]) {
+    let Ok(subjects) = registry.subjects().await else {
+        return;
+    };
+
+    let wanted: HashSet<&str> = topics.iter().map(|topic| topic.name.as_str()).collect();
+    let mut by_topic = sides_by_topic(&subjects, &wanted);
+
+    for topic in topics.iter_mut() {
+        let (key, value) = by_topic.remove(&topic.name).unwrap_or_default();
+        topic.set_schemas(kaas_ui_core::dto::TopicSchemas {
+            registry: registry.id().to_owned(),
+            key,
+            value,
+        });
+    }
+}
+
+/// The `(key, value)` subjects of each wanted topic, read from the names.
+///
+/// Split out from [`attach_schemas`] because it is the whole decision and the
+/// rest is a registry: an equality on `naming.topic` and never a prefix, which
+/// is the difference between `orders` owning `orders-value` and `orders`
+/// claiming `orders-eu-value`.
+fn sides_by_topic(
+    subjects: &[String],
+    wanted: &HashSet<&str>,
+) -> HashMap<String, (Option<String>, Option<String>)> {
+    let mut by_topic: HashMap<String, (Option<String>, Option<String>)> = HashMap::new();
+    for subject in subjects {
+        let Some(topic) = kaas_ui_serde::SubjectNaming::of(subject, None).topic else {
+            continue;
+        };
+        if !wanted.contains(topic.as_str()) {
+            continue;
+        }
+        let sides = by_topic.entry(topic).or_default();
+        // `-key` or the other one: the strategy that got us here is the one
+        // whose entire content is which suffix it ends in.
+        if subject.ends_with("-key") {
+            sides.0 = Some(subject.clone());
+        } else {
+            sides.1 = Some(subject.clone());
+        }
+    }
+    by_topic
 }
 
 /// `GET /api/clusters/{id}/topics/{topic}`
@@ -462,4 +550,50 @@ pub struct PartitionOffsets {
     pub latest_offset: Option<i64>,
     /// How many records are between them.
     pub records: Option<i64>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sides(
+        subjects: &[&str],
+        wanted: &[&str],
+    ) -> HashMap<String, (Option<String>, Option<String>)> {
+        let subjects: Vec<String> = subjects.iter().map(|s| (*s).to_owned()).collect();
+        let wanted: HashSet<&str> = wanted.iter().copied().collect();
+        sides_by_topic(&subjects, &wanted)
+    }
+
+    #[test]
+    fn both_sides_of_a_topic_are_kept() {
+        let by_topic = sides(&["orders-key", "orders-value"], &["orders"]);
+        let (key, value) = by_topic.get("orders").unwrap();
+        assert_eq!(key.as_deref(), Some("orders-key"));
+        assert_eq!(value.as_deref(), Some("orders-value"));
+    }
+
+    /// The bug a prefix match would have: `orders-` matches both of these, and
+    /// only one of them is a schema for `orders`.
+    #[test]
+    fn a_longer_topic_does_not_claim_a_shorter_ones_row() {
+        let by_topic = sides(&["orders-eu-value"], &["orders", "orders-eu"]);
+        assert!(!by_topic.contains_key("orders"));
+        assert_eq!(
+            by_topic.get("orders-eu").unwrap().1.as_deref(),
+            Some("orders-eu-value")
+        );
+    }
+
+    /// Nothing is guessed at from a name whose seam is in the schema, and
+    /// nothing is invented for a subject naming a topic this page is not
+    /// showing.
+    #[test]
+    fn unresolvable_and_unwanted_subjects_are_dropped() {
+        let by_topic = sides(
+            &["orders-com.acme.Order", "com.acme.Order", "payments-value"],
+            &["orders"],
+        );
+        assert!(by_topic.is_empty());
+    }
 }

@@ -1,15 +1,18 @@
 import { Link } from "@tanstack/react-router"
 
-import type { TopicSummary } from "@/api/types"
+import type { TopicSchemas, TopicSummary } from "@/api/types"
+import { HintHead, RESOURCE_KINDS, SortableHead } from "@/components/domain"
 import { bytes, count } from "@/lib/format"
 import {
   Table,
   TableBody,
   TableCell,
-  TableHead,
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+
+/** From the one table, so this column cannot disagree with the sidebar. */
+const SchemaIcon = RESOURCE_KINDS.schema_registry.icon
 
 /**
  * A metric cell in one of its three states.
@@ -40,12 +43,83 @@ function Metric({
   )
 }
 
+/**
+ * The subjects naming one topic, in the three states this cell also has.
+ *
+ * A link per side, because "there is a schema" and "here it is" are one click
+ * apart and the second is what anyone reading the column wants next. Both sides
+ * appear when both exist: a key schema and a value schema are two subjects.
+ *
+ * The registry's own glyph rather than the words `value` and `key`. Fifty rows
+ * of two-letter badges is a column of text to read where the question is one a
+ * mark answers at a glance, and the mark is the one the sidebar and the fleet
+ * already use for a registry. Nothing pops up on hover to say which side each
+ * is: it is in the subject the link goes to, which is where a reader who wants
+ * to know is headed anyway.
+ *
+ * `—` is an answer — the registry holds nothing for this topic — and `·` is the
+ * absence of one, which is the same distinction `Metric` draws and for the same
+ * reason: a dash that quietly means "still asking" is how a registry looks
+ * empty for as long as it is slow.
+ */
+function SchemaCell({
+  envId,
+  schemas,
+  pending,
+}: {
+  envId: string
+  schemas: TopicSchemas | undefined
+  pending: boolean
+}) {
+  if (!schemas) {
+    return (
+      <span
+        className="text-ink-faint"
+        title={pending ? "still asking" : undefined}
+      >
+        {pending ? "·" : "—"}
+      </span>
+    )
+  }
+
+  const sides: [string, string][] = []
+  if (schemas.value) sides.push(["value", schemas.value])
+  if (schemas.key) sides.push(["key", schemas.key])
+  if (!sides.length) return <span className="text-ink-faint">—</span>
+
+  return (
+    <span className="flex items-center gap-2">
+      {sides.map(([side, subject]) => (
+        <Link
+          key={side}
+          to="/environments/$envId/schema-registries/$registryId/subjects/$subject"
+          params={{ envId, registryId: schemas.registry, subject }}
+          // Named for a screen reader and not for a pointer: a link whose
+          // whole content is an `aria-hidden` glyph has no accessible name
+          // without this, and it raises nothing on hover.
+          aria-label={`${side} schema of this topic: ${subject}`}
+          // Muted, not link ink: fifty rows of an accent-coloured glyph is a
+          // column that pulls the eye harder than the topic names beside it,
+          // and the mark is a fact about the row rather than the thing the row
+          // is for. It darkens on hover, which is where it says it is a link.
+          className="text-ink-muted hover:text-ink"
+        >
+          <SchemaIcon aria-hidden className="size-4" />
+        </Link>
+      ))}
+    </span>
+  )
+}
+
 export function TopicTable({
   envId,
   clusterId,
   items,
   replication,
   enriched,
+  registryId,
+  subjects,
+  schemasPending,
   metricsPending,
   sort,
   order,
@@ -56,22 +130,29 @@ export function TopicTable({
   items: TopicSummary[]
   replication: boolean
   enriched: Map<string, TopicSummary>
+  /** The registry this cluster reads, and whether the column exists at all. */
+  registryId: string | null
+  subjects: Map<string, TopicSchemas>
+  schemasPending: boolean
   metricsPending: boolean
   sort: string
   order: "asc" | "desc"
   onSort: (column: string) => void
 }) {
-  const heading = (label: string, column: string, right?: boolean) => (
-    <TableHead className={right ? "text-right" : undefined}>
-      <button
-        type="button"
-        onClick={() => onSort(column)}
-        className="hover:underline"
-      >
-        {label}
-        {sort === column ? (order === "asc" ? " ↑" : " ↓") : ""}
-      </button>
-    </TableHead>
+  // The arrow rides in the label so the sorted column says so inside the same
+  // control it is set from, rather than beside it.
+  const heading = (
+    label: string,
+    column: string,
+    hint: string,
+    right?: boolean
+  ) => (
+    <SortableHead
+      label={`${label}${sort === column ? (order === "asc" ? " ↑" : " ↓") : ""}`}
+      hint={hint}
+      right={right}
+      onClick={() => onSort(column)}
+    />
   )
 
   return (
@@ -79,16 +160,50 @@ export function TopicTable({
       <Table>
         <TableHeader>
           <TableRow>
-            {heading("name", "name")}
-            {heading("partitions", "partitions", true)}
+            {heading("name", "name", "sorted as bytes, so `A` before `a`")}
+            {/* Not sortable: the column is a join the server does over the
+                page, and ordering by it would mean reading the registry for
+                every topic on the cluster before the first row could be
+                placed. */}
+            {registryId ? (
+              <HintHead
+                label="schema"
+                hint={`subjects in ${registryId} naming this topic — one link per side`}
+              />
+            ) : null}
+            {heading(
+              "partitions",
+              "partitions",
+              "how many the topic has; a red ✕ counts those with no leader",
+              true
+            )}
             {replication
-              ? heading("out of sync", "underReplicated", true)
+              ? heading(
+                  "out of sync",
+                  "underReplicated",
+                  "partitions whose ISR is short of their replica count",
+                  true
+                )
               : null}
             {replication ? (
-              <TableHead className="text-right">rf</TableHead>
+              <HintHead
+                label="rf"
+                hint="replication factor — the smallest replica count across partitions"
+                right
+              />
             ) : null}
-            {heading("messages", "messages", true)}
-            {heading("size", "size", true)}
+            {heading(
+              "messages",
+              "messages",
+              "latest − earliest summed: what is retained, not what was ever written",
+              true
+            )}
+            {heading(
+              "size",
+              "size",
+              "bytes on disk across every replica, not one copy",
+              true
+            )}
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -114,6 +229,15 @@ export function TopicTable({
                     </span>
                   ) : null}
                 </TableCell>
+                {registryId ? (
+                  <TableCell>
+                    <SchemaCell
+                      envId={envId}
+                      schemas={subjects.get(topic.name)}
+                      pending={schemasPending}
+                    />
+                  </TableCell>
+                ) : null}
                 {/* Offline partitions ride in this cell rather than in a
                     column of their own: on a healthy cluster that column
                     is a stripe of zeroes, and the one row that matters is

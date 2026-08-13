@@ -197,6 +197,7 @@ export interface TopicListQuery {
   limit?: number
   offset?: number
   metrics?: boolean
+  schemas?: boolean
 }
 
 /**
@@ -222,6 +223,7 @@ function topicParams(query: TopicListQuery): URLSearchParams {
   if (query.limit !== undefined) params.set("limit", String(query.limit))
   if (query.offset) params.set("offset", String(query.offset))
   if (query.metrics) params.set("metrics", "true")
+  if (query.schemas) params.set("schemas", "true")
   return params
 }
 
@@ -269,6 +271,39 @@ export function useTopicMetrics(
     // first request already carries fresher numbers for these very rows, and
     // handing back the last page's would shadow them with older ones.
     placeholderData: isMetricSort ? undefined : (previous) => previous,
+  })
+}
+
+/**
+ * The same page a third time, with the subjects that name each row.
+ *
+ * Split off for the reason the metrics are, against a different dependency: the
+ * registry is the one thing this table asks that is not the cluster, and a
+ * registry that has gone away should cost one column rather than the page. It
+ * is one cached call on the server, so a page of fifty is a page of fifty and
+ * not fifty lookups.
+ *
+ * `enabled` is the caller's, because whether the cluster reads a registry at
+ * all is on its card and this hook has no business fetching that too.
+ */
+export function useTopicSchemas(
+  env: string,
+  id: string,
+  query: TopicListQuery,
+  enabled: boolean
+) {
+  const params = topicParams({ ...query, schemas: true })
+
+  return useQuery({
+    queryKey: ["topic-schemas", env, id, params.toString()],
+    queryFn: () =>
+      get<Envelope<TopicSummary>>(`${cluster(env, id)}/topics?${params}`),
+    enabled,
+    // A subject registered a moment ago should appear without a reload, and
+    // nothing more urgent than that: subjects are registered by deploys, not by
+    // traffic. The same thirty seconds the subject listing holds.
+    staleTime: 30_000,
+    placeholderData: (previous) => previous,
   })
 }
 

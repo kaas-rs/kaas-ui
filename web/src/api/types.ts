@@ -286,6 +286,26 @@ export interface TopicSummary {
   messageCount: number | null
   logicalBytes: number | null
   replicatedBytes: number | null
+  /**
+   * Which subjects name this topic. Null until `?schemas=true` answers, on a
+   * cluster that reads no registry, and where the registry would not answer —
+   * a topic with nothing registered is an object with both sides null, which
+   * is a different fact and has to look like one.
+   */
+  schemas: TopicSchemas | null
+}
+
+/**
+ * The subjects of one topic, by the side of the record they decode.
+ *
+ * Read from the subject names, so `TopicNameStrategy` and nothing else: a
+ * `{topic}-{record}` subject hides its seam in the schema, and the topic page's
+ * schema card is where that one is answered.
+ */
+export interface TopicSchemas {
+  registry: string
+  key: string | null
+  value: string | null
 }
 
 export interface Partition {

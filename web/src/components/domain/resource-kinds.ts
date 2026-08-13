@@ -1,29 +1,53 @@
-import { Boxes, Cable, Database, Globe, Radio, Server } from "lucide-react"
-import type { LucideIcon } from "lucide-react"
+import type { ComponentType } from "react"
+import { Boxes, Cable, Globe } from "lucide-react"
+import { RiBookShelfLine } from "react-icons/ri"
+import { SiApachekafka, SiMqtt } from "react-icons/si"
 
 import type { ResourceKind } from "@/api/types"
+
+/**
+ * What every icon in this table has to be, and all it has to be.
+ *
+ * Two libraries meet here — lucide for the generic kinds, react-icons for the
+ * three that have a mark of their own — and neither type is the other's. The
+ * call sites pass a class and hide the glyph from a screen reader, so that is
+ * the contract, and both satisfy it. Sizing is CSS at the call site rather than
+ * a prop, which is why no `size` appears: react-icons default to `1em` and
+ * lucide to 24, and a `size-4` in the class list settles both.
+ */
+export type ResourceIcon = ComponentType<{
+  className?: string
+  "aria-hidden"?: boolean
+}>
 
 /**
  * What a Kafka cluster looks like wherever one is listed.
  *
  * Here rather than at each call site so the nav and the fleet cannot drift
  * into two different pictures of the same thing — and so that the one glyph
- * that means "cluster" is never quietly reused for a resource below.
+ * that means "cluster" is never quietly reused for a resource below. Kafka's
+ * own mark, because a broker is the one thing on these screens that has one
+ * and every reader already knows it.
  */
-export const CLUSTER_ICON: LucideIcon = Server
+export const CLUSTER_ICON: ResourceIcon = SiApachekafka
 
 /**
  * Icon and wording per non-cluster resource kind.
  *
  * One table, two readers: the fleet card and the sidebar. A registry that is a
  * cylinder on one screen and a box on the other is a second thing to learn.
+ *
+ * A brand mark where the thing has one and a generic glyph where it does not:
+ * MQTT is a protocol with a logo, Kafka Connect and a REST proxy are not — and
+ * a registry is shelved schemas, which says more about what it holds than a
+ * database cylinder did.
  */
 export const RESOURCE_KINDS: Record<
   ResourceKind,
-  { icon: LucideIcon; label: string }
+  { icon: ResourceIcon; label: string }
 > = {
-  schema_registry: { icon: Database, label: "schema registry" },
-  mqtt_broker: { icon: Radio, label: "MQTT broker" },
+  schema_registry: { icon: RiBookShelfLine, label: "schema registry" },
+  mqtt_broker: { icon: SiMqtt, label: "MQTT broker" },
   kafka_connect: { icon: Cable, label: "Kafka Connect" },
   rest_proxy: { icon: Globe, label: "REST proxy" },
   other: { icon: Boxes, label: "resource" },

@@ -17,13 +17,18 @@ import type { ReactNode } from "react"
 
 import { useFleet, useIdentity } from "@/api/client"
 import type { Action, Resource } from "@/api/types"
-import { ClusterChip, Empty, Section, Spinner } from "@/components/domain"
+import {
+  ClusterChip,
+  Empty,
+  HintHead,
+  Section,
+  Spinner,
+} from "@/components/domain"
 import { Badge } from "@/components/ui/badge"
 import {
   Table,
   TableBody,
   TableCell,
-  TableHead,
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
@@ -196,18 +201,16 @@ export function AccountPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>cluster</TableHead>
+                    <HintHead
+                      label="cluster"
+                      hint="every cluster you can see, in every environment — a cluster you cannot is not listed here either"
+                    />
                     {RESOURCES.map((entry) => (
-                      <TableHead key={entry.resource}>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <span className="cursor-default">
-                              {entry.label}
-                            </span>
-                          </TooltipTrigger>
-                          <TooltipContent>{entry.what}</TooltipContent>
-                        </Tooltip>
-                      </TableHead>
+                      <HintHead
+                        key={entry.resource}
+                        label={entry.label}
+                        hint={entry.what}
+                      />
                     ))}
                   </TableRow>
                 </TableHeader>

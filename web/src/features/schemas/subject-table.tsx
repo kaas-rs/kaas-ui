@@ -1,7 +1,7 @@
 import { Link } from "@tanstack/react-router"
 
 import type { SubjectRow } from "@/api/types"
-import { HintHead } from "@/components/domain"
+import { HintHead, SortableHead } from "@/components/domain"
 import { Badge } from "@/components/ui/badge"
 import {
   Table,
@@ -13,7 +13,6 @@ import {
 
 import { Compatibility } from "./compatibility"
 import { Pending } from "./pending"
-import { SortableHead } from "./sortable-head"
 
 export function SubjectTable({
   envId,

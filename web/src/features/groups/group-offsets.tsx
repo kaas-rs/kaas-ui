@@ -4,6 +4,7 @@ import { useGroupOffsets } from "@/api/client"
 import {
   Empty,
   ErrorChips,
+  HintHead,
   LagCell,
   Section,
   Spinner,
@@ -13,7 +14,6 @@ import {
   Table,
   TableBody,
   TableCell,
-  TableHead,
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
@@ -41,12 +41,34 @@ export function GroupOffsets({
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>topic</TableHead>
-                <TableHead className="text-right">partition</TableHead>
-                <TableHead className="text-right">committed</TableHead>
-                <TableHead className="text-right">log end</TableHead>
-                <TableHead className="text-right">lag</TableHead>
-                <TableHead>metadata</TableHead>
+                <HintHead
+                  label="topic"
+                  hint="a topic this group has committed an offset for — it need not still be subscribed"
+                />
+                <HintHead
+                  label="partition"
+                  hint="its index within the topic"
+                  right
+                />
+                <HintHead
+                  label="committed"
+                  hint="the offset the group will resume from, which is the next record it has not read"
+                  right
+                />
+                <HintHead
+                  label="log end"
+                  hint="the offset the next record written will get"
+                  right
+                />
+                <HintHead
+                  label="lag"
+                  hint="log end − committed: records written and not yet read"
+                  right
+                />
+                <HintHead
+                  label="metadata"
+                  hint="whatever the member attached to the commit; usually empty"
+                />
               </TableRow>
             </TableHeader>
             <TableBody>

@@ -79,15 +79,24 @@ export function TopicFacts({
       <CardContent>
         <ErrorChips errors={size.data?.errors ?? []} />
         <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-[13px] sm:grid-cols-4">
-          <Stat label="partitions" value={count(partitions.length)} />
+          <Stat
+            label="partitions"
+            value={count(partitions.length)}
+            hint="how many the topic is split into — the unit of both ordering and parallelism"
+          />
           {replicated ? (
-            <Stat label="replication factor" value={count(replicationFactor)} />
+            <Stat
+              label="replication factor"
+              value={count(replicationFactor)}
+              hint="the smallest replica count across partitions, which is the guarantee every partition actually meets"
+            />
           ) : null}
           {replicated ? (
             <Stat
               label="under-replicated"
               value={count(underReplicated)}
               tone={underReplicated > 0 ? "warn" : undefined}
+              hint="partitions whose in-sync set is short of their replica count — replicas exist but are behind or offline"
             />
           ) : null}
           {replicated ? (
@@ -96,12 +105,18 @@ export function TopicFacts({
               value={count(inSync)}
               note={`of ${count(replicas)}`}
               tone={inSync < replicas ? "warn" : undefined}
+              hint="both sums are across every partition, so this is copies rather than partitions"
             />
           ) : null}
-          <Stat label="type" value={info.internal ? "internal" : "external"} />
+          <Stat
+            label="type"
+            value={info.internal ? "internal" : "external"}
+            hint="internal is Kafka's own bookkeeping — `__consumer_offsets` and its friends, which kaas-ui lists but never parses"
+          />
           <Stat
             label="segment size"
             value={pending(onDisk, bytes, size.isFetching)}
+            hint="bytes on disk from `DescribeLogDirs`; the headline is every replica summed, so it is roughly one copy times the replication factor"
             note={
               onDisk === null
                 ? undefined
@@ -113,15 +128,18 @@ export function TopicFacts({
           <Stat
             label="log-dir entries"
             value={pending(entries, count, size.isFetching)}
+            hint="what other UIs call a segment count — `DescribeLogDirs` reports no segment files, so this counts replica copies per directory"
             note={entries === null ? undefined : "one per copy, per directory"}
           />
           <Stat
             label="cleanup policy"
             value={cleanup ?? (configs.isLoading ? "\u00b7" : "\u2014")}
+            hint="delete drops old segments, compact keeps the newest record per key — which is why a compacted topic holds fewer records than were written to it"
           />
           <Stat
             label="messages"
             value={pending(messages, count, false)}
+            hint="latest − earliest summed across partitions: what is retained, not what was ever written"
             note={messages === null ? undefined : "retained"}
           />
         </dl>

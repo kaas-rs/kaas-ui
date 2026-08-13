@@ -681,6 +681,38 @@ pub struct TopicSummary {
     pub logical_bytes: Option<i64>,
     /// Bytes on disk across replicas.
     pub replicated_bytes: Option<i64>,
+    /// Which subjects in the cluster's registry name this topic, when
+    /// `?schemas=true` was asked for.
+    ///
+    /// `None` is "not answered" and not "none registered": the question was not
+    /// asked, the cluster reads no registry, or the registry would not hand
+    /// over its subject list. A topic with no schema is `Some` with both sides
+    /// empty, which is what lets a column say `—` on the topics that have none
+    /// without saying it on the ones nobody asked about.
+    pub schemas: Option<TopicSchemas>,
+}
+
+/// The subjects of one topic, by the side of the record they decode.
+///
+/// Read from the subject *names* alone, which resolves `TopicNameStrategy` and
+/// nothing else. `{topic}-{record}` hides its seam in the schema rather than in
+/// the name — recovering it is a registry call per subject, which is a cost
+/// that scales with the registry to fill a column that scales with the page.
+/// The topic page answers that one: it searches for the topic and describes the
+/// handful of subjects that come back. See [`kaas_ui_serde::SubjectNaming`].
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TopicSchemas {
+    /// The registry the subjects are registered in, addressed within the
+    /// environment the request already names.
+    pub registry: String,
+    /// `{topic}-key`, where it is registered.
+    pub key: Option<String>,
+    /// `{topic}-value`, where it is registered.
+    ///
+    /// Both sides, because a key schema and a value schema are two subjects and
+    /// showing whichever sorted first would be picking one at random.
+    pub value: Option<String>,
 }
 
 /// The smallest replica count across partitions, which is what anyone means
@@ -732,6 +764,7 @@ impl TopicSummary {
             message_count: None,
             logical_bytes: None,
             replicated_bytes: None,
+            schemas: None,
         }
     }
 
@@ -749,6 +782,14 @@ impl TopicSummary {
     /// Attach the retained record count.
     pub fn set_message_count(&mut self, records: i64) {
         self.message_count = Some(records);
+    }
+
+    /// Attach the subjects naming this topic, empty sides included.
+    ///
+    /// Called for every row of a page that asked, because "the registry holds
+    /// nothing for this topic" is an answer and has to arrive as one.
+    pub fn set_schemas(&mut self, schemas: TopicSchemas) {
+        self.schemas = Some(schemas);
     }
 }
 

@@ -3,7 +3,6 @@ import {
   Table,
   TableBody,
   TableCell,
-  TableHead,
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
@@ -12,6 +11,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { HintHead } from "@/components/domain"
 import type { ConfigEntry } from "@/api/types"
 
 /**
@@ -32,9 +32,18 @@ export function ConfigTable({
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>key</TableHead>
-              <TableHead>value</TableHead>
-              <TableHead>source</TableHead>
+              <HintHead
+                label="key"
+                hint="the setting's name; ⓘ carries the broker's own documentation"
+              />
+              <HintHead
+                label="value"
+                hint="what is in force here — the broker redacts anything sensitive"
+              />
+              <HintHead
+                label="source"
+                hint="where the value came from: set here, inherited, or the default"
+              />
             </TableRow>
           </TableHeader>
           <TableBody>

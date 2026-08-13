@@ -1,7 +1,7 @@
 import { useState } from "react"
 
 import { useLogDirs } from "@/api/client"
-import { Spinner } from "@/components/domain"
+import { HintHead, Spinner } from "@/components/domain"
 import { count } from "@/lib/format"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -10,7 +10,6 @@ import {
   Table,
   TableBody,
   TableCell,
-  TableHead,
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
@@ -46,14 +45,41 @@ export function BrokerTable({
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>node</TableHead>
-              <TableHead>host</TableHead>
-              <TableHead className="text-right">port</TableHead>
-              <TableHead>rack</TableHead>
-              <TableHead className="text-right">leads</TableHead>
-              <TableHead className="text-right">replicas</TableHead>
-              <TableHead>role</TableHead>
-              <TableHead>log dirs</TableHead>
+              <HintHead
+                label="node"
+                hint="the broker id, which is configured rather than assigned"
+              />
+              <HintHead
+                label="host"
+                hint="the listener the broker advertises — what clients are told to dial"
+              />
+              <HintHead
+                label="port"
+                hint="the advertised port, not necessarily the one it binds"
+                right
+              />
+              <HintHead
+                label="rack"
+                hint="the failure domain the broker declares; blank where it declares none"
+              />
+              <HintHead
+                label="leads"
+                hint="partitions this broker is leader of — every read and write goes here"
+                right
+              />
+              <HintHead
+                label="replicas"
+                hint="partitions it holds a copy of, the ones it leads included"
+                right
+              />
+              <HintHead
+                label="role"
+                hint="broker, controller, or both on a dual-role node"
+              />
+              <HintHead
+                label="log dirs"
+                hint="its data directories and what they hold — fetched per broker, on ask"
+              />
             </TableRow>
           </TableHeader>
           <TableBody>

@@ -6,7 +6,11 @@ import { Stat } from "./stat"
 export function ClusterCounts({ card }: { card: ClusterCardData }) {
   return (
     <dl className="grid grid-cols-3 gap-x-4 gap-y-2 text-[13px]">
-      <Stat label="brokers" value={count(card.brokerCount)} />
+      <Stat
+        label="brokers"
+        value={count(card.brokerCount)}
+        hint="nodes in the metadata this cluster last reported — controllers that serve no partitions included."
+      />
       <Stat
         label="topics"
         value={count(card.topicCount)}
@@ -15,21 +19,29 @@ export function ClusterCounts({ card }: { card: ClusterCardData }) {
             ? `${card.internalTopicCount} internal`
             : undefined
         }
+        hint="every topic, Kafka's own bookkeeping ones included — the note counts those separately."
       />
-      <Stat label="partitions" value={count(card.partitionCount)} />
+      <Stat
+        label="partitions"
+        value={count(card.partitionCount)}
+        hint="partitions across every topic, counted once each rather than once per replica."
+      />
       <Stat
         label="offline"
         value={count(card.offlinePartitionCount)}
         tone={card.offlinePartitionCount > 0 ? "danger" : undefined}
+        hint="partitions with no leader or an offline replica — nothing can be read from or written to one."
       />
       <Stat
         label="under-replicated"
         value={count(card.underReplicatedPartitionCount)}
         tone={card.underReplicatedPartitionCount > 0 ? "warn" : undefined}
+        hint="partitions whose in-sync set is short of their replica count: still serving, with less redundancy than configured."
       />
       <Stat
         label="controller"
         value={card.controllerId === null ? "—" : String(card.controllerId)}
+        hint="the broker this cluster names as the active controller; blank where it answers no DescribeCluster at all."
       />
     </dl>
   )

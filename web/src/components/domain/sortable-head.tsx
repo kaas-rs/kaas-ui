@@ -7,14 +7,15 @@ import {
 import { cn } from "@/lib/utils"
 
 /**
- * A column header that says what its column means.
+ * The sorting half of [`HintHead`]: a header that reorders the table and says
+ * what its column means.
  *
- * Every one of these is a registry term with a precise meaning and a plausible
- * wrong reading — `id` is a counter shared with every other subject, not this
- * subject's own numbering, and `compatibility` is a rule about the *next*
- * version rather than a verdict on this one. One line each, on hover, is
- * cheaper than a legend nobody scrolls to. The same shape the partition table
- * uses, for the same reason.
+ * Two components rather than one with an optional `onClick`, because the
+ * element differs — a `<button>` where the header is a control and a `<span>`
+ * where it is a label — and a header that looks clickable and is not is worse
+ * than either. Everything else is deliberately identical: the same dotted
+ * underline, the same one line on hover, so a reader learns the affordance once
+ * and it means the same thing on every table.
  */
 export function SortableHead({
   label,

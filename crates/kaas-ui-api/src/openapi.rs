@@ -103,6 +103,7 @@ use utoipa::OpenApi;
         kaas_ui_core::dto::StreamRow,
         kaas_ui_core::dto::TopicDetail,
         kaas_ui_core::dto::TopicPartitions,
+        kaas_ui_core::dto::TopicSchemas,
         kaas_ui_core::dto::TopicSummary,
         kaas_ui_core::envelope::ResourceError,
         kaas_ui_core::error::ErrorKind,

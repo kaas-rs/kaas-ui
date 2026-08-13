@@ -7,8 +7,13 @@
 
 import { useMemo, useState } from "react"
 
-import { useTopicMetrics, useTopics } from "@/api/client"
-import type { TopicSummary } from "@/api/types"
+import {
+  useClusters,
+  useTopicMetrics,
+  useTopicSchemas,
+  useTopics,
+} from "@/api/client"
+import type { TopicSchemas, TopicSummary } from "@/api/types"
 import { Empty, ErrorChips, SnapshotAge, Spinner } from "@/components/domain"
 import { count } from "@/lib/format"
 import { Button } from "@/components/ui/button"
@@ -40,6 +45,15 @@ export function TopicsPage({
   const topics = useTopics(envId, clusterId, query)
   const metrics = useTopicMetrics(envId, clusterId, query)
 
+  // A third, against the registry rather than the brokers, and only where
+  // there is one to ask: a cluster referencing no registry has no schema
+  // column, not an empty one.
+  const clusters = useClusters(envId)
+  const registryId =
+    clusters.data?.items.find((card) => card.id === clusterId)
+      ?.schemaRegistry ?? null
+  const schemas = useTopicSchemas(envId, clusterId, query, !!registryId)
+
   const total = topics.data?.total ?? 0
   const items = topics.data?.items ?? []
 
@@ -51,6 +65,17 @@ export function TopicsPage({
     for (const topic of metrics.data?.items ?? []) map.set(topic.name, topic)
     return map
   }, [metrics.data])
+
+  // Keyed by name for the same reason, and holding the answer rather than the
+  // row: a topic that is in this map with both sides null has been asked
+  // about and has no schema, which is not what an absent key means.
+  const subjects = useMemo(() => {
+    const map = new Map<string, TopicSchemas>()
+    for (const topic of schemas.data?.items ?? []) {
+      if (topic.schemas) map.set(topic.name, topic.schemas)
+    }
+    return map
+  }, [schemas.data])
 
   const sortBy = (column: string) => {
     if (sort === column) {
@@ -118,6 +143,9 @@ export function TopicsPage({
             items={items}
             replication={replication}
             enriched={enriched}
+            registryId={registryId}
+            subjects={subjects}
+            schemasPending={schemas.isFetching}
             metricsPending={metrics.isFetching}
             sort={sort}
             order={order}

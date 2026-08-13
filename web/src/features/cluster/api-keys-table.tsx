@@ -2,10 +2,10 @@ import {
   Table,
   TableBody,
   TableCell,
-  TableHead,
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { HintHead } from "@/components/domain"
 import type { ApiKeyEntry } from "@/api/types"
 
 /** The version table, one row per advertised api key. */
@@ -15,12 +15,32 @@ export function ApiKeysTable({ keys }: { keys: ApiKeyEntry[] }) {
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead className="text-right">key</TableHead>
-            <TableHead>name</TableHead>
-            <TableHead>broker</TableHead>
-            <TableHead>kaas-ui</TableHead>
-            <TableHead className="text-right">negotiated</TableHead>
-            <TableHead>note</TableHead>
+            <HintHead
+              label="key"
+              hint="the protocol's number for this request — stable across releases"
+              right
+            />
+            <HintHead
+              label="name"
+              hint="what this build calls the key; blank where it has no name for it"
+            />
+            <HintHead
+              label="broker"
+              hint="the version range this broker advertises for the key"
+            />
+            <HintHead
+              label="kaas-ui"
+              hint="the range kaas-lib can speak, from the schema compiled in"
+            />
+            <HintHead
+              label="negotiated"
+              hint="the highest version both ends have — what a request actually uses"
+              right
+            />
+            <HintHead
+              label="note"
+              hint="where the two ranges do not meet, and which side is ahead"
+            />
           </TableRow>
         </TableHeader>
         <TableBody>

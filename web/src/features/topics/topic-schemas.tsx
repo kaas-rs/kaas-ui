@@ -77,14 +77,17 @@ export function TopicSchemas({
                       label="schema id"
                       value={row.id === null ? "—" : `#${row.id}`}
                       note="what the wire format carries"
+                      hint="the registry-wide id in the five-byte prefix of every record — shared with every other subject, not this subject's own numbering"
                     />
                     <Stat
                       label="version"
                       value={row.version === null ? "—" : `v${row.version}`}
+                      hint="the newest version of this subject; records already written carry whichever id was newest then"
                     />
                     <Stat
                       label="compatibility"
                       value={row.compatibility ?? "—"}
+                      hint="the rule the next version has to satisfy — a promise about what may be registered, not a verdict on what is"
                       note={
                         row.compatibilityInherited
                           ? "the registry's default"
@@ -92,7 +95,11 @@ export function TopicSchemas({
                       }
                     />
                     {row.naming.recordName ? (
-                      <Stat label="record" value={row.naming.recordName} />
+                      <Stat
+                        label="record"
+                        value={row.naming.recordName}
+                        hint="the fully-qualified name the schema itself declares, which is what tells a topic from a record in the subject name"
+                      />
                     ) : null}
                   </dl>
                 </div>

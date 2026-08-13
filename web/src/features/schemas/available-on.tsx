@@ -2,12 +2,11 @@ import { Link } from "@tanstack/react-router"
 
 import { useEnvironment, useTopics } from "@/api/client"
 import type { SubjectNaming } from "@/api/types"
-import { Empty, Mono, Section } from "@/components/domain"
+import { Empty, HintHead, Mono, Section } from "@/components/domain"
 import {
   Table,
   TableBody,
   TableCell,
-  TableHead,
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
@@ -77,17 +76,28 @@ export function AvailableOn({
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>cluster</TableHead>
-              <TableHead>schema resolves</TableHead>
+              <HintHead
+                label="cluster"
+                hint="a cluster in this environment that names this registry — not one that necessarily uses this subject"
+              />
+              <HintHead
+                label="schema resolves"
+                hint="whether a record carrying this schema id decodes here, which is a property of the registry rather than of the cluster"
+              />
               {/* The column exists only when the subject holds a topic. A
                   `RecordNameStrategy` subject would otherwise repeat one
                   sentence down every row, saying the same thing about the
                   subject each time as though it were a fact about the cluster
                   — and it would cost a topic listing per cluster to say it. */}
               {topic === null ? null : (
-                <TableHead>
-                  topic <span className="font-mono">{topic}</span>
-                </TableHead>
+                <HintHead
+                  label={
+                    <>
+                      topic <span className="font-mono">{topic}</span>
+                    </>
+                  }
+                  hint="whether the topic this subject names exists on that cluster"
+                />
               )}
             </TableRow>
           </TableHeader>
