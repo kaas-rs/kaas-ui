@@ -12,13 +12,13 @@ with no new infrastructure.
 
 ## What gets built
 
-| screen | RPCs | `kaas` | `strimzi` |
-|---|---|---|---|
-| ACL viewer | `DescribeAcls` | **yes — 24 ACLs** | yes, none configured |
-| Client quotas | `DescribeClientQuotas` | yes | yes |
-| SCRAM users | `DescribeUserScramCredentials` | no | yes |
-| Reassignments | `ListPartitionReassignments` | no | yes |
-| Transactions | `ListTransactions`, `DescribeTransactions`, `DescribeProducers` | no | yes |
+| screen        | RPCs                                                            | `kaas`            | `strimzi`            |
+|---------------|-----------------------------------------------------------------|-------------------|----------------------|
+| ACL viewer    | `DescribeAcls`                                                  | **yes — 24 ACLs** | yes, none configured |
+| Client quotas | `DescribeClientQuotas`                                          | yes               | yes                  |
+| SCRAM users   | `DescribeUserScramCredentials`                                  | no                | yes                  |
+| Reassignments | `ListPartitionReassignments`                                    | no                | yes                  |
+| Transactions  | `ListTransactions`, `DescribeTransactions`, `DescribeProducers` | no                | yes                  |
 
 The `kaas`/`strimzi` columns are measured, not guessed. Note the shape: `kaas`
 is the *only* cluster with ACLs to look at, and Strimzi is the only one with
