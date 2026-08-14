@@ -152,6 +152,47 @@ The full CLI walkthrough this was built against, including how to mint a token
 by hand, is `docs/strimzi-oauth-cli.md` in the cluster repo. **That file holds a
 live client secret; nothing in kaas-ui does, and nothing in kaas-ui should.**
 
+### …and the same block with no secret at all
+
+The deployment against `kaas`'s OAUTHBEARER listener (9096) authenticates by
+**workload identity** instead, which is one key different:
+
+```yaml
+sasl:
+  mechanism: oauthbearer
+  token_endpoint: https://login.microsoftonline.com/<tenant>/oauth2/v2.0/token
+  client_id: <client-id>
+  client_assertion_file: /var/run/spiffe/svid/azure-token
+  scope: <client-id>/.default
+```
+
+The file is a SPIFFE JWT-SVID written by a `spiffe-helper` sidecar, minted for
+`spiffe://spiffe.smeding.cloud/ns/<namespace>/sa/<service-account>` and
+addressed to `api://AzureADTokenExchange`; the Entra app registration carries a
+federated credential naming that issuer and that subject, and hands back an
+access token in exchange. So there is no `KAAS_UI_CLIENT_SECRET_*` for such a
+cluster, no Secret, and nothing to rotate — the credential lives for minutes
+and cannot be used off the pod that was issued it.
+
+Four consequences, in the order they bite:
+
+- **`client_assertion_file` switches the exchange over.** A `client_secret`
+  beside it is refused at startup naming both keys, and the environment is not
+  consulted at all — a leftover variable must not resurrect the other flow.
+- **The assertion is re-read on every fetch, not held.** SPIRE's JWT-SVIDs
+  default to a five-minute TTL here; the access token they buy lasts an hour.
+- **A missing file is retriable, not fatal.** The sidecar writes it, and it is
+  allowed to be seconds behind us — which is also why nothing checks the path
+  at startup.
+- **The principal is still the token's `sub`**, the service principal's object
+  id, exactly as with a secret. The way the token was bought is invisible to
+  the broker.
+
+`SPIFFE ID` is namespace-and-service-account shaped, so **moving kaas-ui to
+another namespace or renaming its ServiceAccount invalidates the federated
+credential** — the symptom is `AADSTS700213: No matching federated identity
+record found`, quoted back on the fleet card.
+
 ## Measured facts, not assumed ones
 
 Everything in this section came out of a probe run against both clusters,

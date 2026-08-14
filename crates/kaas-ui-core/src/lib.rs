@@ -28,6 +28,7 @@ pub mod decode;
 pub mod dto;
 pub mod envelope;
 pub mod error;
+pub mod federated;
 pub mod health;
 pub mod registry;
 

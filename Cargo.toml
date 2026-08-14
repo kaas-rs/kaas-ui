@@ -97,7 +97,12 @@ protofish   = "0.5"
 # provider" means kaas-ui-serde installs one — see `RegistryHandle::new` — so
 # the crate that needs TLS is the crate that arranges for it, rather than
 # `main` having to remember on its behalf.
-reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
+#
+# `form` is the OAuth token exchange in `kaas_ui_core::federated`: a token
+# endpoint takes `application/x-www-form-urlencoded` and nothing else, and the
+# feature is one small crate (`serde_urlencoded`) against hand-rolling the
+# encoding of a body that carries a credential.
+reqwest = { version = "0.13", default-features = false, features = ["json", "form", "rustls-no-provider"] }
 # Only to install that provider, once, behind a `Once`.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 

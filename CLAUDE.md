@@ -254,7 +254,11 @@ active nav, focus ring, selected edge. For accent text on light use
   and the extra two were a decision at the point of writing a config rather
   than a capability. Two things whose ids flatten to one variable — including
   a cluster and a registry sharing an id — are a startup error, not a shared
-  credential. **PEM stays a file**: `ca_file`, `cert_file` and `key_file` are
+  credential. The exception proves the rule: `client_assertion_file` names a
+  **signed assertion somebody else wrote** — a SPIFFE JWT-SVID — so there is
+  no secret to find, the environment is not consulted, a `client_secret`
+  beside it is refused, and the file is re-read on every exchange because it
+  outlives nothing. **PEM stays a file**: `ca_file`, `cert_file` and `key_file` are
   multi-line and belong in a mount. Everything is read at startup, so rotating
   needs a restart. Secrets redact themselves in `Debug` — the leak that
   happens is `?entry`, not a deliberate print — and a failing exchange reports

@@ -899,6 +899,48 @@ off records rather than seeking by time; fractions are monotonic and capped;
 a second analysis on a busy cluster answers 429 and the slot frees when the
 response drops.
 
+## Workload identity, instead of a client secret (after Phase 7)
+
+`sasl.oauthbearer` grew one key — `client_assertion_file` — and with it the
+ability to authenticate to a cluster with no secret anywhere in the
+deployment. The file is a SPIFFE JWT-SVID a sidecar writes; the issuer trusts
+it because a federated credential names its issuer and its subject; what comes
+back is the same Entra access token the secret flow bought. What was decided
+at the point of building:
+
+- **A key, not a variant.** `SaslSettings` is variants-per-mechanism because a
+  username means nothing to OAUTHBEARER — but this is the *same* mechanism and
+  the same exchange, differing in two form fields. A second variant would have
+  duplicated `token_endpoint`, `client_id`, `scope`, `audience` and four
+  timeouts to express "bought differently".
+- **Naming it switches the exchange over**, and `client_secret` beside it is a
+  startup error naming both keys. Two credential sources in one block is the
+  one shape that parses and cannot work, so it does not parse either.
+- **The environment is not consulted.** The `KAAS_UI_<CREDENTIAL>_<ENV>_<ID>`
+  rule is untouched for every other credential; a federated cluster simply has
+  none, and a leftover variable must not resurrect a flow the config stopped
+  asking for.
+- **In `kaas_ui_core::federated`, not in kaas-lib.** `kafka_conn::TokenProvider`
+  is an explicitly caller-supplied trait, so this needed no release of the
+  library; the ask to move the shape down is
+  [16](reference/upstream-asks.md). It caches, refreshes at 80% of the
+  token's life, and presents a still-valid cached token when a refresh fails —
+  the same three rules kaas-lib's own provider follows, for the same reasons.
+- **The assertion is re-read on every exchange** and a missing file is
+  *retriable* (`status: None`, which is what kaas-lib keys retriability off).
+  SPIRE mints JWT-SVIDs with a five-minute TTL against an hour-long access
+  token, and the sidecar that writes it is allowed to be seconds behind the
+  process that reads it. Nothing checks the path at startup for that reason.
+- **The refusal is quoted back.** Entra's `error_description` opens with the
+  AADSTS code — `AADSTS700213` for a subject with no matching federated
+  credential — and that string is the whole diagnosis, so it reaches the fleet
+  card rather than being flattened into "authentication failed".
+
+Unit-tested against a real socket rather than a mocked client: the point of
+the module is what lands in the form body, and the test asserts the
+`client_assertion_type`, the trimmed assertion and the scope as they are
+actually encoded.
+
 ## Upstream asks these phases raised
 
 Filed in [reference/upstream-asks.md](reference/upstream-asks.md), open against

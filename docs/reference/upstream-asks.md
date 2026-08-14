@@ -400,6 +400,36 @@ add up" into an explanation.
 
 ---
 
+## 16. `OidcTokenProvider` should take an assertion as well as a secret
+
+**Built in kaas-ui first, and the only reason it is there is that the trait
+allowed it.**
+
+`OidcConfig::new` requires a `client_secret`, so the `client_credentials`
+exchange kaas-lib ships can only be run by a client that *holds* a secret.
+Workload-identity federation replaces the secret with a signed assertion —
+RFC 7523's `client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer`
+plus a JWT some other party signed — and that is what every cloud's
+pod-identity story now is: a SPIFFE JWT-SVID here, a projected service account
+token on AKS/EKS/GKE. The form body differs by two fields; everything else,
+including the caching and the early refresh, is the code kaas-lib already has.
+
+kaas-ui implements it in `kaas_ui_core::federated` against
+`kafka_conn::TokenProvider`, which is exactly what that trait is for, so this
+is not blocking. It is filed because the *shape* belongs downstairs: a
+`ClientCredential::Secret(String) | ClientCredential::AssertionFile(PathBuf)`
+on `OidcConfig` would give every kaas-lib caller the flow, and there is now a
+second implementation of the same exchange in the ecosystem — with its own
+expiry arithmetic to keep in step.
+
+Two details worth carrying down with it, both learned from the file rather
+than the RFC: the assertion has to be **re-read on every exchange** (SPIRE's
+default JWT-SVID TTL is five minutes, far shorter than the access token it
+buys), and a missing file has to be **retriable** — the sidecar that writes it
+is legitimately allowed to be a few seconds behind the process that reads it.
+
+---
+
 ## Not needed
 
 Producer, group membership, incremental fetch sessions. A read-only kaas-ui

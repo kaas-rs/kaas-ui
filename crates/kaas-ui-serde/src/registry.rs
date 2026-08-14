@@ -318,8 +318,10 @@ pub struct RegistryHandle {
 ///
 /// `install_default` fails when a provider is already installed, which is a
 /// success for our purposes: something else got there first, and one process
-/// only ever needs one.
-fn install_crypto_provider() {
+/// only ever needs one. That is also why this is public: kaas-ui-core builds a
+/// second HTTPS client, for the token exchange in
+/// `kaas_ui_core::federated`, and calling this again there is free.
+pub fn install_crypto_provider() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
         let _ = rustls::crypto::ring::default_provider().install_default();

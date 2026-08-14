@@ -18,6 +18,10 @@ kafka-read  = { workspace = true }
 
 arc-swap        = { workspace = true }
 figment         = { workspace = true }
+# The token exchange in `federated`. The same copy of reqwest kaas-ui-serde
+# uses, and therefore the same `rustls-no-provider` arrangement — the provider
+# is installed by `kaas_ui_serde::install_crypto_provider`, once, for both.
+reqwest         = { workspace = true }
 humantime-serde = { workspace = true }
 serde           = { workspace = true }
 serde_json      = { workspace = true }

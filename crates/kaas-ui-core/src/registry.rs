@@ -35,6 +35,7 @@ use crate::config::{
     SaslSettings, secret_from_env, secret_var,
 };
 use crate::error::ErrorKind;
+use crate::federated::{FederatedOauth, FederatedTokenProvider};
 use crate::health::ClusterHealth;
 
 /// Retry backoff floor and ceiling for a cluster that will not connect.
@@ -365,6 +366,47 @@ fn build_sasl(
             credentials,
         ),
         SaslSettings::OauthBearer(oauth) => {
+            // Workload identity: an assertion signed by someone else, read
+            // from a file, and no secret in this process at all. Checked
+            // before the secret path so a config naming both is a startup
+            // error rather than a silent preference.
+            if let Some(assertion_file) = &oauth.client_assertion_file {
+                if oauth.client_secret.is_some() {
+                    return Err(invalid(
+                        "sets both `client_secret` and `client_assertion_file`; a client \
+                         authenticates with one or the other, so drop whichever is not the \
+                         one this cluster uses"
+                            .to_owned(),
+                    ));
+                }
+
+                let mut config = FederatedOauth::new(
+                    oauth.token_endpoint.clone(),
+                    oauth.client_id.clone(),
+                    assertion_file.clone(),
+                )
+                .with_maybe_scope(oauth.scope.clone())
+                .with_maybe_audience(oauth.audience.clone());
+                if let Some(margin) = oauth.refresh_margin {
+                    config = config.with_refresh_margin(margin);
+                }
+                if let Some(timeout) = oauth.timeout {
+                    config = config.with_timeout(timeout);
+                }
+                if oauth.allow_plaintext_endpoint {
+                    config = config.with_allow_plaintext_endpoint();
+                }
+
+                let provider = FederatedTokenProvider::new(config)
+                    .map_err(|error| invalid(error.to_string()))?;
+
+                let mut sasl = SaslConfig::oauth_bearer(provider);
+                if oauth.allow_plaintext_token {
+                    sasl = sasl.allow_plaintext_password();
+                }
+                return Ok(sasl);
+            }
+
             // The file wins where it says anything, and says nothing in the
             // deployment — which is the point: the config carries a credential
             // nowhere and the environment supplies it.
@@ -1006,6 +1048,50 @@ environments:
             after.schema_registry().unwrap().settings().url,
             "http://somewhere-else:8080/apis/ccompat/v7"
         );
+    }
+
+    /// One cluster, authenticating with a signed assertion instead of a secret.
+    ///
+    /// The assertion is a *path*, and the file behind it is written by a
+    /// sidecar that may be seconds behind us — so this must build with nothing
+    /// on disk and nothing in the environment. A version of this that checked
+    /// the file at startup would turn a normal race into a crash loop.
+    fn federated_yaml(extra: &str) -> String {
+        format!(
+            r#"
+environments:
+  - id: dev
+    kafka_clusters:
+      - id: kaas
+        bootstrap: ["kaas.kaas.svc.cluster.local:9096"]
+        tls:
+          ca_file: /etc/kaas-ui-kafka-ca/ca.crt
+        sasl:
+          mechanism: oauthbearer
+          token_endpoint: https://login.microsoftonline.com/tenant/oauth2/v2.0/token
+          client_id: a-client-id
+          client_assertion_file: /var/run/spiffe/svid/azure-token
+          scope: a-client-id/.default
+{extra}"#
+        )
+    }
+
+    #[test]
+    fn a_federated_cluster_needs_no_secret_in_the_environment() {
+        let config = Config::from_yaml(&federated_yaml("")).unwrap();
+        let registry = Registry::from_config(&config).unwrap();
+        assert!(registry.get("dev", "kaas", &anyone()).is_some());
+    }
+
+    /// Both credentials named is a mistake with two plausible readings, so it
+    /// is neither — it is a startup error naming both keys.
+    #[test]
+    fn a_client_secret_beside_an_assertion_is_refused() {
+        let config = Config::from_yaml(&federated_yaml("          client_secret: s\n")).unwrap();
+        let error = Registry::from_config(&config).unwrap_err().to_string();
+        assert!(error.contains("client_secret"), "{error}");
+        assert!(error.contains("client_assertion_file"), "{error}");
+        assert!(error.contains("kaas"), "{error}");
     }
 
     #[test]

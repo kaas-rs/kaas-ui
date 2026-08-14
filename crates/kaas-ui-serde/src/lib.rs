@@ -50,7 +50,7 @@ pub use codec::{
 pub use naming::{NamingStrategy, SubjectNaming, declared_name};
 pub use registry::{
     Decoded, RegistryAuth, RegistryError, RegistryFault, RegistryHandle, RegistryHealth,
-    RegistrySettings, RegistryStatus,
+    RegistrySettings, RegistryStatus, install_crypto_provider,
 };
 pub use subjects::{SchemaReference, SubjectSchema};
 

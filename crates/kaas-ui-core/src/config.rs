@@ -534,6 +534,18 @@ pub struct TlsSettings {
 ///   # client_secret comes from $KAAS_UI_CLIENT_SECRET_DEV_STRIMZI
 ///   scope: <client-id>/.default
 /// ```
+///
+/// …or with no secret at all, which is the same mechanism buying its token a
+/// different way — see [`OauthCredentials::client_assertion_file`]:
+///
+/// ```yaml
+/// sasl:
+///   mechanism: oauthbearer
+///   token_endpoint: https://login.microsoftonline.com/<tenant>/oauth2/v2.0/token
+///   client_id: <client-id>
+///   client_assertion_file: /var/run/spiffe/svid/azure-token
+///   scope: <client-id>/.default
+/// ```
 #[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(tag = "mechanism", rename_all = "kebab-case")]
 pub enum SaslSettings {
@@ -677,6 +689,29 @@ pub struct OauthCredentials {
     /// Secret rewritten underneath a running process goes unnoticed.
     #[serde(default)]
     pub client_secret: Option<String>,
+    /// A file holding a signed assertion to present **instead of** a secret.
+    ///
+    /// This is workload-identity federation: the file is a JWT some other
+    /// party signed — a SPIFFE JWT-SVID written by a spiffe-helper sidecar
+    /// here, a projected service account token on the managed clouds — and the
+    /// issuer trusts it because a federated credential names its issuer and
+    /// its subject. There is then no secret anywhere: nothing in a Secret,
+    /// nothing to rotate, and nothing that still works once the pod is gone.
+    ///
+    /// Naming it **switches the exchange over**, which is the only way two
+    /// credential sources can share one block without a combination that
+    /// parses and cannot work. `client_secret` beside it is refused at startup
+    /// rather than one silently winning, and the environment is not consulted
+    /// at all: there is no `KAAS_UI_CLIENT_SECRET_…` for a cluster that
+    /// authenticates this way, and a leftover variable must not resurrect the
+    /// other flow.
+    ///
+    /// Re-read on every exchange, unlike every other credential kaas-ui takes,
+    /// because this one is minted with minutes of life and rewritten
+    /// underneath the process. That is also why it is a path rather than a
+    /// value: there is nothing here worth putting in a config file.
+    #[serde(default)]
+    pub client_assertion_file: Option<PathBuf>,
     /// `scope` to request. Entra wants `<client-id>/.default` — the bare id,
     /// not `api://<client-id>/.default`, unless the app registration actually
     /// has an Application ID URI. Keycloak usually wants nothing.
@@ -712,6 +747,9 @@ impl std::fmt::Debug for OauthCredentials {
             .field("token_endpoint", &self.token_endpoint)
             .field("client_id", &self.client_id)
             .field("client_secret", &redacted(self.client_secret.is_some()))
+            // A path, not a credential — printed in full, and the one field
+            // here that can be printed in full.
+            .field("client_assertion_file", &self.client_assertion_file)
             .field("scope", &self.scope)
             .field("audience", &self.audience)
             .field("credentials_in_body", &self.credentials_in_body)
@@ -2083,6 +2121,7 @@ environments:
             token_endpoint: "https://issuer/token".to_owned(),
             client_id: "a-client-id".to_owned(),
             client_secret: Some("sup3r-s3cret".to_owned()),
+            client_assertion_file: None,
             scope: None,
             audience: None,
             credentials_in_body: false,
