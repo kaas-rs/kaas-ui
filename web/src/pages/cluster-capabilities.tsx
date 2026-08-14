@@ -77,9 +77,6 @@ export function ClusterCapabilitiesPage({
               </Button>
             )
           })}
-          <span className="ml-auto text-[12px] text-ink-muted">
-            each answers for itself
-          </span>
         </div>
       ) : null}
 
