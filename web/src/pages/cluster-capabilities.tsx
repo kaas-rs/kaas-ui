@@ -1,9 +1,10 @@
 import { useState } from "react"
+import { Info } from "lucide-react"
 
 import { useCapabilities, useCluster } from "@/api/client"
 import { FeatureBadge, Section, Spinner } from "@/components/domain"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
+import { Card } from "@/components/ui/card"
 import { PageTitle } from "@/components/page-title"
 import { ApiKeysTable } from "@/features/cluster/api-keys-table"
 
@@ -82,9 +83,16 @@ export function ClusterCapabilitiesPage({
         </div>
       ) : null}
 
-      <Card className="mb-6 max-w-3xl">
-        <CardContent className="text-[13px] text-ink-muted">
-          The version table is <strong>per connection</strong>, deliberately:
+      {/* A note, not a card. A `Card` is the surface content sits on, and this
+          is an aside *about* the content below it — sunken rather than raised,
+          an accent rule down the edge, and the same icon-and-line shape a
+          payload note has. Full width because the two sections below it are:
+          a narrower column would read as a panel of its own. */}
+      <div className="mb-6 flex items-start gap-2.5 rounded-sm border border-line border-l-2 border-l-rust-edge bg-surface-sunken px-3.5 py-2.5 text-[12px] text-ink-muted">
+        <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+        <p>
+          The version table is{" "}
+          <span className="font-medium">per connection</span>, deliberately:
           brokers mid-rolling-upgrade genuinely disagree, and a cluster-wide
           table would be wrong during exactly the window when being right
           matters. So this page names the broker it asked instead of pretending
@@ -93,8 +101,8 @@ export function ClusterCapabilitiesPage({
             ? ", and asking each of them in turn is how a half-finished upgrade becomes visible"
             : ""}
           .
-        </CardContent>
-      </Card>
+        </p>
+      </div>
 
       {capabilities.isLoading ? (
         <Spinner label="asking a broker" />
