@@ -172,10 +172,18 @@ let spec = ScanSpec::new("orders").from(StartPosition::Earliest).limit(10_000);
 let mut stream = Box::pin(kafka_read::scan(cluster, spec).await?);
 ```
 
-`ScanEvent` is `Record | Progress | Malformed | End`, and every one maps to a
-row or a control in the UI. `ScanProgress` carries `records_emitted`,
-`records_scanned`, `malformed_batches`, `offsets_consumed`, `offsets_total`,
-`partitions_active`, `ordering_degraded` and `fraction()`.
+`ScanEvent` is
+`PartitionStarted | Record | Malformed | Progress | PartitionComplete | Done`,
+and every one maps to a row or a control in the UI. `ScanProgress` carries
+`records_emitted`, `records_scanned`, `malformed_batches`, `offsets_consumed`,
+`offsets_total`, `partitions_active`, `partitions_planned`, `reorder_window`
+and `fraction()`.
+
+`reorder_window` is kaas-lib's own sizing as of 0.9 — the buffer ceiling over
+the merge's real width, and `0` exactly when cross-partition timestamp order
+held. kaas-ui reconstructed it from the plan until then, and the flag that
+came with it had to be suppressed on the single-partition case that raised it
+without any reorder to warn about.
 
 `RecordFilter` matches raw bytes, which is why kaas-ui does not use it: its
 payload filter is a substring of the *decoded* value and cannot be expressed
@@ -185,10 +193,15 @@ that still bounds what the broker sends.
 
 Two measured behaviours to design against:
 
-- **`limit` is spread across partitions with `div_ceil`.** `TailSpec::new(t,
-  20)` on a 16-partition topic returns 32 records, 2 per partition. Not a bug —
-  "the last N of a topic" has no single answer across partitions — but the HTTP
-  layer must say which it means.
+- **`limit` is a topic-wide target, and still over-fetches.** It was divided
+  across every partition with `div_ceil` before 0.9 — `TailSpec::new(t, 20)`
+  on a 16-partition topic returned 32 records, 2 each, and a topic with idle
+  partitions returned a *fraction* of what was asked for. 0.9 measures the
+  bounds first, drops partitions holding nothing from the divisor and hands an
+  exhausted walk's share to one that can still yield; what remains is that a
+  partition's last chunk is kept whole, so the count comes back at or above
+  the limit and the HTTP layer truncates after merging. `PartitionTail` also
+  reports `reached_log_start`, which is where `hasMore` comes from.
 - **The backward walk really is cheap.** ~325 KB of network to tail a 40M-record
   topic, 16 fetches for 16 partitions. `Connection::stats_snapshot()` and
   `StatsSnapshot::since()` are how Phase 3 asserts that.

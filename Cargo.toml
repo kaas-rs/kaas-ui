@@ -22,14 +22,14 @@ rust-version = "1.97"
 # `cargo xtask link` writes a fenced [patch.crates-io] block for local
 # iteration against ../kaas-lib; `cargo xtask ci` fails if that fence was
 # committed.
-kafka-admin = "0.6"
+kafka-admin = "0.9"
 # `oidc` is what makes SASL/OAUTHBEARER usable from a config file: it brings
 # the `client_credentials` token provider that fetches a token and refreshes
 # it. Without the feature the mechanism exists but only a hand-written
 # `TokenProvider` can reach it, which a YAML block cannot be.
-kafka-conn  = { version = "0.6", features = ["oidc"] }
-kafka-meta  = "0.6"
-kafka-read  = "0.6"
+kafka-conn  = { version = "0.9", features = ["oidc"] }
+kafka-meta  = "0.9"
+kafka-read  = "0.9"
 
 # HTTP
 axum       = { version = "0.8", features = ["macros", "http2"] }

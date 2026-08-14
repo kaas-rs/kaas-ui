@@ -212,14 +212,15 @@ active nav, focus ring, selected edge. For accent text on light use
   `cluster.capabilities()`; do not fabricate one by picking a broker. Until
   upstream ask 1 lands, read from an explicitly named broker and say so in the
   UI.
-- **`TailSpec::limit` is spread across partitions with `div_ceil`** — `limit=20`
-  on 16 partitions returns 32. The HTTP layer merges and truncates. The same
-  rule *under-fills* on a topic with idle partitions — ⌈500/3⌉ = 167 when one
-  partition of three holds records — so backward reads first ask `ListOffsets`
-  which partitions are non-empty, restrict the spec to those, and compute
-  `hasMore` from the log-start bounds rather than from the budget
-  (`backward_bounds` in `routes/messages/mod.rs`). Unwound when
-  kaas-rs/kaas-lib#17 lands.
+- **`TailSpec::limit` over-fetches** — a partition's last chunk is kept whole,
+  so `limit=20` comes back at or above 20 and the HTTP layer merges and
+  truncates. It used to *under-fill* as well, being divided across every
+  partition with `div_ceil` before anything was known about them — ⌈500/3⌉ =
+  167 when one partition of three holds records — and kaas-ui asked
+  `ListOffsets` which partitions were non-empty to work around it. kaas-lib
+  0.9 fixed it downstairs (kaas-rs/kaas-lib#17) and the workaround is gone;
+  `hasMore` now reads `PartitionTail::reached_log_start` (`more_below` in
+  `routes/messages/mod.rs`).
 - **Streams do not go in the TanStack Query cache.** SSE feeds a capped ring
   buffer in its own hook.
 - **Group kinds are four variants, not one struct with optional fields.**

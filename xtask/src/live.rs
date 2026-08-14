@@ -1657,15 +1657,14 @@ async fn assertions() -> Result<Acceptance, String> {
     // and the page has to say where to look next anyway. Anchoring on the rows
     // would answer `null` here and stop paging with the topic barely touched.
     //
-    // Asserted on both directions, because they reach it by different routes —
-    // the forward one counts what the scan emitted, the backward one what
-    // `tail` returned — and with different claims about `hasMore`. Only the
-    // forward read can promise it: `tail` spreads its limit across partitions
-    // with `div_ceil`, so on this canary, where one partition of three holds
-    // the records, a window of 20 reads 7 and never fills its budget. That is
-    // the library's shape rather than a filter effect, and demanding `hasMore`
-    // of it would be asserting the fixture instead of the behaviour.
-    for (mode, budget_fills) in [("oldest", true), ("newest", false)] {
+    // Asserted on both directions, because they reach it by different routes:
+    // the forward one counts what the scan emitted, the backward one asks each
+    // walk whether it reached the start of its partition's retention. Both
+    // promise `hasMore` here. The backward half could not until kaas-lib 0.9 —
+    // `tail` divided its limit across every partition before knowing which
+    // held anything, so on this canary, where one of three holds the records,
+    // a window of 20 read 7 and never filled its budget.
+    for mode in ["oldest", "newest"] {
         acceptance.check(
             &format!("a {mode} window that matched nothing still says where the next one starts"),
             match get(
@@ -1681,7 +1680,7 @@ async fn assertions() -> Result<Acceptance, String> {
                 Ok(body)
                     if body["items"].as_array().is_some_and(Vec::is_empty)
                         && body["nextOffset"].is_i64()
-                        && (!budget_fills || body["hasMore"] == true) =>
+                        && body["hasMore"] == true =>
                 {
                     Ok(format!(
                         "next at {}, hasMore {}",

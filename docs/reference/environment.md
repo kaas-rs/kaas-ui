@@ -259,10 +259,12 @@ strimzi tail(kperf-bench, 20) -> 32 records, 16 fetches, 325180 bytes received
 
 Two things to carry forward:
 
-- **`TailSpec::limit` is a per-topic target spread across partitions with
-  `div_ceil`.** 20 over 16 partitions is 2 each, so 32 come back. The HTTP
-  `?limit=` must either say so or truncate after merging — decided in
-  [what is built](../11-built.md).
+- **`TailSpec::limit` is a per-topic target that over-fetches.** Measured with
+  kafka-read 0.6, which divided it across every partition with `div_ceil`: 20
+  over 16 partitions is 2 each, so 32 come back. 0.9 spreads it over the
+  partitions that hold something instead, and over-fetches by keeping a
+  partition's last chunk whole. Either way the HTTP `?limit=` must say so or
+  truncate after merging — decided in [what is built](../11-built.md).
 - **~325 KB to reach the tail of a 40M-record topic** is the backward walk
   working. Phase 3's acceptance asserts on this via `ConnectionStats`, and the
   numbers above are the baseline.

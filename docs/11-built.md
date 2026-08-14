@@ -178,7 +178,7 @@ bought was a second place to look for messages and a back button between them.
 `…/topics/{t}/messages` still resolves as a redirect carrying its search params
 into `…/topics/{t}?tab=messages`. The `messages/tail` route survives — it is the
 only bounded, cacheable read of a topic's end, and `cargo xtask live` still
-asserts the `div_ceil` spread through it — but nothing in the frontend calls it.
+asserts the over-fetch through it — but nothing in the frontend calls it.
 
 **"No `tokio::spawn` that outlives a response" became "no spawn that *can*
 outlive one".** The pump has to be a task rather than an inline stream: the
@@ -534,8 +534,8 @@ was examined rather than off the surviving rows — anchoring on the rows would
 return `None` for a window that matched nothing, and paging would stop dead on
 the first five hundred records a selective filter emptied. The exception is a
 backward page cut to its limit, where the last row *shown* is the boundary:
-`tail` over-fetches with `div_ceil`, and stepping past what it read would skip
-records nobody saw.
+`tail` over-fetches — a partition's last chunk is kept whole — and stepping
+past what it read would skip records nobody saw.
 
 The needle is capped at 256 characters — `MAX_FILTER_CHARS` — and a longer one
 is a `400`. It is a comparison the server repeats per record at the caller's

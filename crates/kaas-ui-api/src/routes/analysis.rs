@@ -330,7 +330,11 @@ async fn pump(
                         Vec::new(),
                     );
                 }
-                Some(Ok(ScanEvent::PartitionComplete { .. })) => {}
+                // Where each partition's walk began, and whether the requested
+                // start was substituted. A fold over the whole topic starts at
+                // the log start by construction, so there is nothing here the
+                // result would render — the seek views are where it matters.
+                Some(Ok(ScanEvent::PartitionStarted { .. } | ScanEvent::PartitionComplete { .. })) => {}
                 Some(Err(error)) => {
                     // Upstream ask 13 is the honest fix: today one partition's
                     // failure ends the whole stream, so the fold up to here is
@@ -451,7 +455,8 @@ mod tests {
             offsets_consumed: 80,
             offsets_total: 8_000,
             partitions_active: 1,
-            ordering_degraded: false,
+            partitions_planned: 1,
+            reorder_window: 0,
         };
         // Uncapped: 1% of the span. Capped at 100: 80% of the cap.
         let by_span = fraction(&progress, &builder, None).unwrap_or(0.0);

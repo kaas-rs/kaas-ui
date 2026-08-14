@@ -73,11 +73,11 @@ impl TailQuery {
 
 /// `GET /api/clusters/{id}/topics/{topic}/messages/tail`
 ///
-/// `TailSpec::limit` is a per-topic target that kaas-lib spreads across
-/// partitions with `div_ceil`, so asking for 20 on a 16-partition topic
-/// genuinely fetches 32. "The last n of a topic" has no single answer across
-/// partitions, so this layer picks one and says so: **the n most recent by
-/// timestamp**, merged across partitions and truncated after the fact.
+/// `TailSpec::limit` is a per-topic target, and kaas-lib keeps each
+/// partition's last chunk whole rather than splitting it, so asking for 20
+/// fetches somewhat more than 20. "The last n of a topic" has no single answer
+/// across partitions, so this layer picks one and says so: **the n most recent
+/// by timestamp**, merged across partitions and truncated after the fact.
 /// `total` reports how many were fetched before truncation.
 #[utoipa::path(
     get,
@@ -280,17 +280,9 @@ pub async fn page(
     let mut backward_more: Option<bool> = None;
 
     match plan {
-        Plan::Backward { mut spec } => {
-            let bounds = backward_bounds(&admin, &topic, spec.partitions.as_deref()).await;
-            if let Some(contributors) = bounds.contributors.clone() {
-                spec.partitions = Some(contributors);
-            }
+        Plan::Backward { spec } => {
             let tails = crate::call("tail", kafka_read::tail(admin.cluster(), &spec)).await?;
-            backward_more = bounds.more_below(
-                tails
-                    .iter()
-                    .map(|tail| (tail.partition, tail.records.first().map(|r| r.offset))),
-            );
+            backward_more = Some(more_below(&tails));
             let mut malformed = 0usize;
             for partition in &tails {
                 malformed += partition.malformed;
@@ -326,16 +318,16 @@ pub async fn page(
 
     let collected = rows.len();
     rows.truncate(limit);
-    // A backward read over-fetches — `tail` spreads its limit across
-    // partitions with `div_ceil` — so rows past the limit are cut here and
-    // were never shown. Where that happened, the last row shown is the
-    // boundary; anywhere else it is the far end of what was read.
+    // A backward read over-fetches — a partition's last chunk is kept whole
+    // rather than split — so rows past the limit are cut here and were never
+    // shown. Where that happened, the last row shown is the boundary;
+    // anywhere else it is the far end of what was read.
     let cut = collected > rows.len();
-    // A backward read knows the honest answer — whether any partition still
-    // holds records below what came back — because `backward_bounds` fetched
-    // the log starts. "Did the read fill its budget" is the fallback, and the
-    // only signal a forward read has; a page cut to its limit discarded
-    // records past the cut, so those are more whatever the bounds say.
+    // A backward read knows the honest answer — whether any walk stopped
+    // short of the start of its partition's retention. "Did the read fill its
+    // budget" is the fallback, and the only signal a forward read has; a page
+    // cut to its limit discarded records past the cut, so those are more
+    // whatever the walks said.
     let has_more = match backward_more {
         Some(more) => cut || more,
         None => window.examined >= limit,
@@ -361,133 +353,21 @@ pub async fn page(
     }))
 }
 
-/// What a backward read learns before it fetches: which partitions can
-/// contribute records at all, and where each one's retention starts.
+/// Whether a backward read left records below the window it returned.
 ///
-/// `TailSpec::limit` is spread across partitions with `div_ceil` *before*
-/// kaas-lib knows which of them hold anything, so on an unevenly-filled topic
-/// most of the budget is spent reading nothing — three partitions of which two
-/// are empty turns "the last 500" into ⌈500/3⌉ = 167, and a read that can
-/// never fill its budget looks permanently exhausted. This asks `ListOffsets`
-/// the question the library fetches and discards, so the divisor is the number
-/// of partitions that can answer and `has_more` is a statement about the topic
-/// rather than about the budget.
+/// A walk that reached the start of what its partition retains has nothing
+/// below it; one that stopped anywhere else does. kaas-lib measures those
+/// bounds to plan the walk and reports the answer with the records, so this
+/// is a statement about the topic rather than about the budget — and it costs
+/// no `ListOffsets` of kaas-ui's own.
 ///
-/// Duplicates knowledge that belongs downstream, knowingly: kaas-rs/kaas-lib#17
-/// asks `tail` to exclude empty partitions from its own divisor and report
-/// whether the walk reached the start of retention. When that lands, this
-/// struct is unwound.
-#[derive(Debug, Default)]
-struct BackwardBounds {
-    /// Partitions holding at least one record, in the shape `TailSpec` takes.
-    ///
-    /// `None` when the bounds could not be learned; the spec is left alone
-    /// and the read behaves as it always did.
-    contributors: Option<Vec<i32>>,
-    /// Log-start offset per partition, for the honest `has_more`.
-    earliest: std::collections::BTreeMap<i32, i64>,
-}
-
-impl BackwardBounds {
-    /// Whether any partition still holds records below what this read
-    /// returned, given each partition's oldest returned offset.
-    ///
-    /// `None` when the bounds were never learned — the caller falls back to
-    /// "did the read fill its budget". A partition whose log start could not
-    /// be read is compared against `0`, which no record sits below, so an
-    /// unknown bound can cost one extra empty page but never ends paging
-    /// while records remain.
-    fn more_below<I>(&self, oldest_returned: I) -> Option<bool>
-    where
-        I: IntoIterator<Item = (i32, Option<i64>)>,
-    {
-        self.contributors.as_ref()?;
-        Some(oldest_returned.into_iter().any(|(partition, oldest)| {
-            oldest
-                .is_some_and(|offset| offset > self.earliest.get(&partition).copied().unwrap_or(0))
-        }))
-    }
-}
-
-/// Ask a cluster where a backward read's window actually is.
-///
-/// Best-effort by design: a failure here returns [`BackwardBounds::default`],
-/// which changes nothing about the read — dropping a partition on a transient
-/// `ListOffsets` error would silently narrow the window, and that is worse
-/// than the under-fill this exists to fix.
-async fn backward_bounds(
-    admin: &kafka_admin::Admin,
-    topic: &str,
-    requested: Option<&[i32]>,
-) -> BackwardBounds {
-    let wanted: Vec<i32> = match requested {
-        Some(list) => list.to_vec(),
-        None => admin
-            .cluster()
-            .snapshot()
-            .topic(topic)
-            .map(|info| info.partitions.iter().map(|p| p.partition).collect())
-            .unwrap_or_default(),
-    };
-    if wanted.is_empty() {
-        // Nothing to ask about — an unknown topic stays `tail`'s failure to
-        // name, with the error it always produced.
-        return BackwardBounds::default();
-    }
-
-    let keys: Vec<(String, i32)> = wanted
-        .iter()
-        .map(|partition| (topic.to_owned(), *partition))
-        .collect();
-    let (earliest, latest) = tokio::join!(
-        crate::call(
-            "list_offsets",
-            admin.list_offsets(keys.clone(), kafka_admin::OffsetSpec::Earliest),
-        ),
-        crate::call(
-            "list_offsets",
-            admin.list_offsets(keys, kafka_admin::OffsetSpec::Latest),
-        ),
-    );
-    let (Ok(earliest), Ok(latest)) = (earliest, latest) else {
-        return BackwardBounds::default();
-    };
-
-    let mut low = std::collections::BTreeMap::new();
-    for ((_, partition), outcome) in earliest {
-        if let Ok(listed) = outcome
-            && let Some(offset) = listed.offset
-        {
-            low.insert(partition, offset);
-        }
-    }
-    let mut high = std::collections::BTreeMap::new();
-    for ((_, partition), outcome) in latest {
-        if let Ok(listed) = outcome
-            && let Some(offset) = listed.offset
-        {
-            high.insert(partition, offset);
-        }
-    }
-
-    let contributors = wanted
-        .into_iter()
-        .filter(
-            |partition| match (low.get(partition), high.get(partition)) {
-                // Log start meeting the high watermark is a partition with
-                // nothing in it — the case the whole exercise exists for.
-                (Some(start), Some(end)) => end > start,
-                // A partition mid-election answers per-item errors; keep it, and
-                // let the read itself decide what that failure means.
-                _ => true,
-            },
-        )
-        .collect();
-
-    BackwardBounds {
-        contributors: Some(contributors),
-        earliest: low,
-    }
+/// kaas-ui asked the question itself until kaas-lib 0.9: `tail` divided its
+/// limit across every partition before knowing which held anything, so a
+/// window of 500 over a topic with two idle partitions of three read ⌈500/3⌉
+/// = 167, and 167 < 500 read as "exhausted" with most of the topic still
+/// below it. That is kaas-rs/kaas-lib#17, and it landed.
+fn more_below(tails: &[kafka_read::PartitionTail]) -> bool {
+    tails.iter().any(|tail| !tail.reached_log_start)
 }
 
 /// The extent of what one read looked at, before anything was filtered out.
@@ -797,9 +677,9 @@ mod tests {
 
     /// The other half of the same rule, and it points the other way.
     ///
-    /// A backward read over-fetches — `tail` spreads its limit across
-    /// partitions with `div_ceil` — and the rows past the limit are cut before
-    /// anyone sees them. The next window has to start just below the oldest
+    /// A backward read over-fetches — a partition's last chunk is kept whole
+    /// rather than split — and the rows past the limit are cut before anyone
+    /// sees them. The next window has to start just below the oldest
     /// row *shown*, not below the oldest record read, or the cut records are
     /// skipped and never appear in any page.
     #[test]
@@ -815,53 +695,40 @@ mod tests {
         );
     }
 
-    /// The under-fill direction of the `div_ceil` rule, and the honest answer
-    /// to it.
-    ///
-    /// The bug these pin: `kaas-canary-v1` holds 89,478 records in one of its
+    /// The bug this pins: `kaas-canary-v1` holds 89,478 records in one of its
     /// three partitions and nothing in the other two, so a backward window of
     /// 500 read ⌈500/3⌉ = 167 from the one that could answer — and 167 < 500
     /// meant `has_more` was false forever, with most of the topic below the
-    /// window. See kaas-rs/kaas-lib#17 for the half that belongs downstream.
+    /// window. The budget can no longer answer the question; the walks do.
     #[test]
-    fn a_partition_read_down_to_its_log_start_is_exhausted() {
-        let bounds = BackwardBounds {
-            contributors: Some(vec![2]),
-            earliest: [(2, 11_000)].into_iter().collect(),
-        };
-        // The oldest record returned sits on the log start: nothing below.
-        assert_eq!(bounds.more_below([(2, Some(11_000))]), Some(false));
-        // One offset above it: one record below, and paging must continue.
-        assert_eq!(bounds.more_below([(2, Some(11_001))]), Some(true));
+    fn a_walk_stopped_short_of_the_log_start_means_there_is_more() {
+        // Two idle partitions, and the busy one still 78,000 records from the
+        // bottom of its retention.
+        assert!(more_below(&[
+            tail_of(0, true),
+            tail_of(1, true),
+            tail_of(2, false),
+        ]));
     }
 
     #[test]
-    fn a_partition_that_returned_nothing_claims_nothing_further() {
-        let bounds = BackwardBounds {
-            contributors: Some(vec![0, 1]),
-            earliest: [(0, 0), (1, 0)].into_iter().collect(),
-        };
-        assert_eq!(bounds.more_below([(0, None), (1, None)]), Some(false));
+    fn a_topic_read_down_to_its_log_start_is_exhausted() {
+        assert!(!more_below(&[tail_of(0, true), tail_of(1, true)]));
+        // No partitions at all — an unknown topic is `tail`'s failure to name,
+        // not a page that claims a next one.
+        assert!(!more_below(&[]));
     }
 
-    #[test]
-    fn unknown_bounds_fall_back_rather_than_guessing() {
-        // A failed `ListOffsets` must not invent an answer either way; the
-        // caller falls back to the budget heuristic that always existed.
-        let unknown = BackwardBounds::default();
-        assert_eq!(unknown.more_below([(0, Some(500))]), None);
-    }
-
-    #[test]
-    fn a_partition_with_no_known_log_start_is_measured_against_zero() {
-        // No record sits below offset 0, so an unknown bound can cost one
-        // extra empty page but can never end paging while records remain.
-        let bounds = BackwardBounds {
-            contributors: Some(vec![3]),
-            earliest: std::collections::BTreeMap::new(),
-        };
-        assert_eq!(bounds.more_below([(3, Some(1))]), Some(true));
-        assert_eq!(bounds.more_below([(3, Some(0))]), Some(false));
+    fn tail_of(partition: i32, reached_log_start: bool) -> kafka_read::PartitionTail {
+        kafka_read::PartitionTail {
+            partition,
+            records: Vec::new(),
+            malformed: 0,
+            fetches: 1,
+            log_start: 0,
+            log_end: 0,
+            reached_log_start,
+        }
     }
 
     #[test]

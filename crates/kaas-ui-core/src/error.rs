@@ -54,7 +54,7 @@ impl ErrorKind {
             Error::Transport { .. } | Error::ConnectionClosed { .. } => Self::Transport,
             Error::Timeout { .. } => Self::Timeout,
             Error::Authentication(_) => Self::Auth,
-            Error::Authorization(_) => Self::Authorization,
+            Error::Authorization { .. } => Self::Authorization,
             Error::Broker { .. } => Self::Broker,
             Error::Decode { .. } => Self::Decode,
             Error::ReadOnly { .. } => Self::ReadOnly,
@@ -81,7 +81,7 @@ pub fn http_status(error: &Error) -> u16 {
         Error::Timeout { .. } => 504,
         // Deliberately not 401. See the module comment.
         Error::Authentication(_) => 502,
-        Error::Authorization(_) => 403,
+        Error::Authorization { .. } => 403,
         Error::Broker { .. } => 400,
         // "kaas-lib is wrong" and "kaas-ui is wrong" are both ours to fix.
         Error::Decode { .. } | Error::ReadOnly { .. } => 500,

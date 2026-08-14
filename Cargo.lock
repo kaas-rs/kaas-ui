@@ -1841,10 +1841,11 @@ dependencies = [
 
 [[package]]
 name = "kafka-admin"
-version = "0.6.1"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3d8869f60916227fbcb67d3231e1fa8ed21f69db133d74ddc5beab1d13ca38b"
+checksum = "92f77387657f7314335416f71c3c2c622284e1345e29a6a19a6e29f9ed615390"
 dependencies = [
+ "base64 0.23.0",
  "bytes",
  "futures",
  "kafka-conn",
@@ -1857,9 +1858,9 @@ dependencies = [
 
 [[package]]
 name = "kafka-conn"
-version = "0.6.1"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ff1634f31ff5ebc0d08e8f20b48103df8124c0c8f261909c0eef6b42744aed2"
+checksum = "6f39f9402e395503c56df330435f64857a39b52b184bd819ca975ea0c7c94929"
 dependencies = [
  "base64 0.23.0",
  "bytes",
@@ -1876,7 +1877,7 @@ dependencies = [
  "rand 0.9.5",
  "rustls",
  "rustls-native-certs",
- "rustls-pemfile",
+ "rustls-pki-types",
  "serde_json",
  "sha2 0.11.0",
  "stringprep",
@@ -1890,9 +1891,9 @@ dependencies = [
 
 [[package]]
 name = "kafka-meta"
-version = "0.6.1"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ae0ea05b6e8a80e2e0e44cc11a114f4f616ab16336dfac86638e122a648c043"
+checksum = "b37d4e08816b3b08ff4b0538fb1dc85b9a877cd5af211d5ce65dac250558e752"
 dependencies = [
  "arc-swap",
  "bytes",
@@ -1926,9 +1927,9 @@ dependencies = [
 
 [[package]]
 name = "kafka-read"
-version = "0.6.1"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c4a7c84eae287361e02b5d7a671a74df8a16b251ea2c3d9e24b796a9eb931c51"
+checksum = "04bbce83a50722793940095034bf812884d742b19f853b0c7c1327e966551fb4"
 dependencies = [
  "anyhow",
  "bytes",
@@ -3063,15 +3064,6 @@ dependencies = [
  "rustls-pki-types",
  "schannel",
  "security-framework",
-]
-
-[[package]]
-name = "rustls-pemfile"
-version = "2.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dce314e5fee3f39953d46bb63bb8a46d40c2f8fb7cc5a3b6cab2bde9721d6e50"
-dependencies = [
- "rustls-pki-types",
 ]
 
 [[package]]
