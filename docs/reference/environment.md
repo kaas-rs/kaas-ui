@@ -32,13 +32,19 @@ Every phase's acceptance command below runs against them.
 | bootstrap (plain) | `kaas.kaas.svc.cluster.local:9092` | `kafka-cluster-kafka-bootstrap.strimzi.svc.cluster.local:9092` |
 | what it is | the `kaas` broker, 3 replicas, under development | Apache Kafka **4.2.0** via Strimzi, 3 dual-role nodes |
 | listeners | plain 9092, authed 9095, tls 9093 | plain 9092, tls 9093, **oauthbearer 9094** |
-| api keys advertised | **37** | **75** |
+| api keys advertised | **40** (was 37) | **75** |
 | topics | 13 | 17, of which 2 internal |
 | groups | 2, all reporting `group_type: ""` | 16, all `classic` |
 | authorizer | yes — 31 ACLs (was 24) | yes — it answers `DescribeAcls`, where this file recorded `SECURITY_DISABLED(54)` until Phase 7 asked it |
 | SCRAM credentials | `alice`, `throttled-user` | `alice` |
 | client quotas | none configured | none configured |
 | topic ids | **not reported** — `Fetch` stays on the name path | reported — `Fetch` runs v18 by id |
+
+**The api-key count moved too, and it was the row this file called stable.**
+`kaas` advertised 37 keys when this was written and advertises 40 now — it is a
+broker under development, and the number going up is the whole point of it. Read
+it as "far fewer than Strimzi's 75", which is the fact the capability work
+rests on, rather than as a constant.
 
 **The topic and group rows move; the rest does not.** Canaries connect and
 leave, benchmarks create and delete. Those two numbers were 21/14 topics and
@@ -155,7 +161,7 @@ agree with what it reports.
 
 ### The capability gap is the product's best test fixture
 
-`kaas` advertises a strict **subset** of Strimzi's api keys — 38 keys differ,
+`kaas` advertises a strict **subset** of Strimzi's api keys — 35 keys differ,
 none of them unique to `kaas`. Absent from `kaas` entirely:
 
 `DescribeCluster` (60), `DescribeTopicPartitions` (75), `ConsumerGroupDescribe`

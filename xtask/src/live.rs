@@ -502,6 +502,66 @@ async fn assertions() -> Result<Acceptance, String> {
         );
     }
 
+    // --- the table is per connection, and the page can ask each one ---------
+    //
+    // The claim phase 1 made and the capabilities page's broker picker rests
+    // on: `?broker=` reads the table from *that* broker and the answer names
+    // it. Asserted against every broker of one cluster, because a picker that
+    // silently returned the same connection's table under three labels would
+    // look exactly like a healthy cluster.
+    {
+        let target = ids.first().cloned().unwrap_or_default();
+        let detail = get(
+            &client,
+            &format!("/api/environments/{ENV}/clusters/{target}"),
+        )
+        .await?;
+        let nodes: Vec<i64> = detail["items"][0]["brokers"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|broker| broker["nodeId"].as_i64())
+            .collect();
+
+        let mut answered = Vec::new();
+        for node in &nodes {
+            let table = get(
+                &client,
+                &format!("/api/environments/{ENV}/clusters/{target}/capabilities?broker={node}"),
+            )
+            .await?;
+            answered.push(table["source"]["nodeId"].as_i64());
+        }
+        acceptance.check(
+            &format!("{target}: each broker answers for itself"),
+            if !nodes.is_empty() && answered == nodes.iter().map(|n| Some(*n)).collect::<Vec<_>>() {
+                Ok(format!("{} brokers", nodes.len()))
+            } else {
+                Err(format!("asked {nodes:?}, answered {answered:?}"))
+            },
+        );
+
+        // A node id that is not in the snapshot is absent rather than silently
+        // served by whichever connection was free.
+        let unknown = client
+            .get(url(&format!(
+                "/api/environments/{ENV}/clusters/{target}/capabilities?broker=9999"
+            )))
+            .send()
+            .await
+            .map_err(|e| e.to_string())?
+            .status();
+        acceptance.check(
+            &format!("{target}: an unknown broker id is 404, not another broker's table"),
+            if unknown == reqwest::StatusCode::NOT_FOUND {
+                Ok(String::new())
+            } else {
+                Err(format!("got {unknown}"))
+            },
+        );
+    }
+
     // --- topics -------------------------------------------------------------
     for id in &ids {
         let topics = get(

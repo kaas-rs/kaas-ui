@@ -137,7 +137,7 @@ Two consequences, both load-bearing:
 |---|---|---|
 | bootstrap | `kaas.kaas.svc.cluster.local:9092` | `kafka-cluster-kafka-bootstrap.strimzi.svc.cluster.local:9092` |
 | what | the kaas broker, 3 replicas | Apache Kafka 4.2.0 via Strimzi, 3 dual-role |
-| api keys | **37** | **75** |
+| api keys | **40** | **75** |
 | notable | 24 ACLs; no topic ids; **no `DescribeCluster`** | keys 88/89 unnameable by our codec; 8 keys ahead of it |
 
 The gap between them is the point, not an inconvenience: every degradation path

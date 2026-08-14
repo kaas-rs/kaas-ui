@@ -175,10 +175,27 @@ export function useCluster(env: string, id: string) {
   })
 }
 
-export function useCapabilities(env: string, id: string) {
+/**
+ * What one broker can be asked.
+ *
+ * `broker` names which one to read the table from; omitted, the server picks
+ * the lowest node id and says so in `source`. Callers that are deciding what to
+ * *render* — the sidebar, the admin tabs — leave it out on purpose: which tabs
+ * exist must not depend on which broker somebody clicked on another page. The
+ * capabilities page passes it, because comparing two brokers is the whole point
+ * of a table that is per connection.
+ */
+export function useCapabilities(
+  env: string,
+  id: string,
+  broker?: number | null
+) {
+  const query =
+    broker === undefined || broker === null ? "" : `?broker=${broker}`
   return useQuery({
-    queryKey: ["capabilities", env, id],
-    queryFn: () => get<Capabilities>(`${cluster(env, id)}/capabilities`),
+    queryKey: ["capabilities", env, id, broker ?? null],
+    queryFn: () =>
+      get<Capabilities>(`${cluster(env, id)}/capabilities${query}`),
     // Not cached forever: a rolling upgrade changes the answer, and the whole
     // point of the endpoint is that it is allowed to.
     staleTime: 30_000,
