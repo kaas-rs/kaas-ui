@@ -56,6 +56,7 @@ Running alongside all of them:
 |---|---|
 | [reference/environment.md](reference/environment.md) | the two live clusters this is developed against, and what they actually answer |
 | [reference/kaas-lib-api.md](reference/kaas-lib-api.md) | the library surface, mapped: which call backs which screen |
+| [reference/client-authentication.md](reference/client-authentication.md) | how to determine the way a principal authenticates, and what no cluster will answer |
 | [reference/http-contract.md](reference/http-contract.md) | envelope, error mapping, the full endpoint table |
 | [reference/design-system.md](reference/design-system.md) | the mdbook `rust` palette as an application design system |
 | [reference/upstream-asks.md](reference/upstream-asks.md) | kaas-lib changes the UI wants, sequenced against the phases |
