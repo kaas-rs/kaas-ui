@@ -6,7 +6,7 @@
     "license": {
       "name": "Apache-2.0"
     },
-    "version": "0.12.1"
+    "version": "0.12.2"
   },
   "paths": {
     "/api/environments": {
@@ -1265,7 +1265,7 @@
           "messages"
         ],
         "summary": "`GET /api/clusters/{id}/topics/{topic}/messages/tail`",
-        "description": "`TailSpec::limit` is a per-topic target that kaas-lib spreads across\npartitions with `div_ceil`, so asking for 20 on a 16-partition topic\ngenuinely fetches 32. \"The last n of a topic\" has no single answer across\npartitions, so this layer picks one and says so: **the n most recent by\ntimestamp**, merged across partitions and truncated after the fact.\n`total` reports how many were fetched before truncation.",
+        "description": "`TailSpec::limit` is a per-topic target, and kaas-lib keeps each\npartition's last chunk whole rather than splitting it, so asking for 20\nfetches somewhat more than 20. \"The last n of a topic\" has no single answer\nacross partitions, so this layer picks one and says so: **the n most recent\nby timestamp**, merged across partitions and truncated after the fact.\n`total` reports how many were fetched before truncation.",
         "operationId": "tail",
         "parameters": [
           {
