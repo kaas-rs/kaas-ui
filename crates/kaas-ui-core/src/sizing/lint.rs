@@ -1,12 +1,4 @@
-//! The sizing advisor's config lint.
-//!
-//! What a topic's *configuration* implies about its segments, checked against
-//! what its partitions actually hold. No sweep, no scan, no payload: this
-//! reads `DescribeConfigs` and `DescribeLogDirs` and nothing else, which is
-//! why it is the half of the advisor that ships first.
-//!
-//! Two properties it is built around, both learned the hard way elsewhere in
-//! this workspace:
+//! The six configuration rules.
 //!
 //! **Severity carries confidence, not importance.** Every rule here has a
 //! configuration half — cheap, always available, and on its own only a
@@ -16,55 +8,21 @@
 //! the partition is too small to have ever filled a segment. So the config
 //! half emits `info` and the pair emits `warn`. A lint that warned on the
 //! config alone would fire on most topics in the fleet and be turned off.
-//!
-//! **Nothing here knows a Kafka version.** Every threshold is read from the
-//! topic's own configuration — including the index ceiling, which is
-//! `segment.index.bytes` and `index.interval.bytes` doing arithmetic rather
-//! than a number this file believes about a release. That is rule 2, and it
-//! is also just better: a broker with a non-default index size gets an answer
-//! about itself.
-
-use serde::Serialize;
-use utoipa::ToSchema;
 
 use crate::dto::ConfigEntryDto;
 
-/// The configuration keys this module reasons about, spelled once.
-mod key {
-    pub const CLEANUP_POLICY: &str = "cleanup.policy";
-    pub const RETENTION_MS: &str = "retention.ms";
-    pub const RETENTION_BYTES: &str = "retention.bytes";
-    pub const SEGMENT_MS: &str = "segment.ms";
-    pub const SEGMENT_BYTES: &str = "segment.bytes";
-    pub const SEGMENT_INDEX_BYTES: &str = "segment.index.bytes";
-    pub const INDEX_INTERVAL_BYTES: &str = "index.interval.bytes";
-    pub const MESSAGE_TIMESTAMP_TYPE: &str = "message.timestamp.type";
-    pub const MIN_CLEANABLE_DIRTY_RATIO: &str = "min.cleanable.dirty.ratio";
-    pub const MAX_MESSAGE_BYTES: &str = "max.message.bytes";
-    pub const COMPRESSION_TYPE: &str = "compression.type";
-
-    /// What the report carries back, in the order it renders.
-    pub const REPORTED: &[&str] = &[
-        CLEANUP_POLICY,
-        RETENTION_MS,
-        RETENTION_BYTES,
-        SEGMENT_MS,
-        SEGMENT_BYTES,
-        SEGMENT_INDEX_BYTES,
-        INDEX_INTERVAL_BYTES,
-        MESSAGE_TIMESTAMP_TYPE,
-        MIN_CLEANABLE_DIRTY_RATIO,
-        MAX_MESSAGE_BYTES,
-        COMPRESSION_TYPE,
-    ];
-}
+use super::units::{holds, human_bytes, human_ms};
+use super::{
+    Diagnostic, DiagnosticCode, Severity, SizeEvidence, entry, is_explicit, key, limit, number,
+    policy,
+};
 
 /// Bytes in one offset-index entry: a relative offset and a file position,
 /// four bytes each.
 ///
 /// A property of the index format rather than of a release, which is why it
 /// can be a constant here at all.
-const INDEX_ENTRY_BYTES: i64 = 8;
+pub(super) const INDEX_ENTRY_BYTES: i64 = 8;
 
 /// How much larger than the mean a partition must be to be called skewed.
 ///
@@ -72,218 +30,26 @@ const INDEX_ENTRY_BYTES: i64 = 8;
 /// in this module divides by a partition count that could be zero.
 const SKEW_FACTOR: i64 = 2;
 
-/// How confident a diagnostic is, not how much it matters.
-///
-/// `Info` is "the configuration allows this"; `Warn` is "and the partitions
-/// show it happening". See the module docs — a lint that cannot tell those
-/// apart gets disabled.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub enum Severity {
-    /// The sizes confirm the configuration's implication.
-    Warn,
-    /// The configuration allows it; nothing measured says it is happening.
-    Info,
+/// Run every rule, worst first.
+pub(super) fn all(
+    entries: &[ConfigEntryDto],
+    leader_bytes: Option<&[(i32, i64)]>,
+) -> Vec<Diagnostic> {
+    let mut out = Vec::new();
+    retention_outlives_its_segment(entries, leader_bytes, &mut out);
+    retention_bytes_smaller_than_segment(entries, &mut out);
+    no_retention_at_all(entries, &mut out);
+    compacted_tail_never_cleaned(entries, leader_bytes, &mut out);
+    segment_above_index_ceiling(entries, &mut out);
+    skewed_partitions(leader_bytes, &mut out);
+    // Warnings first, and stable within a severity: the chips render in this
+    // order and a row that moves between refreshes reads as a change.
+    out.sort_by_key(|found| found.severity == Severity::Info);
+    out
 }
 
-/// What a diagnostic is about.
-///
-/// A stable name the UI keys on, so the prose below can be rewritten without
-/// breaking a chip, a filter or a link.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub enum DiagnosticCode {
-    /// `segment.ms` outlives `retention.ms`, so a record can be retained for
-    /// longer than the topic says.
-    RetentionOutlivesItsSegment,
-    /// `segment.bytes` is at least `retention.bytes`, so the size limit
-    /// cannot delete anything until a second segment exists.
-    RetentionBytesSmallerThanSegment,
-    /// Nothing deletes: no time limit, no size limit, no compaction.
-    NoRetentionAtAll,
-    /// A compacted topic's active segment is never cleaned, and this one is
-    /// not rolling.
-    CompactedTailNeverCleaned,
-    /// `segment.bytes` is above what the offset index can address, so the
-    /// index rolls the segment first and the setting does not govern.
-    SegmentAboveIndexCeiling,
-    /// One partition holds much more than its share.
-    SkewedPartitions,
-}
-
-/// One finding.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct Diagnostic {
-    /// What this is about.
-    pub code: DiagnosticCode,
-    /// How confident it is.
-    pub severity: Severity,
-    /// One line, for a chip.
-    pub summary: String,
-    /// The derivation, for the panel underneath it. Every number this names
-    /// came from the cluster; none is assumed.
-    pub detail: String,
-    /// The partitions the evidence came from, where it came from partitions.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub partitions: Vec<i32>,
-}
-
-/// One configuration value the report reasoned from.
-///
-/// Carried back rather than left for the caller to re-fetch, because a
-/// recommendation that does not show its inputs is not actionable — and
-/// because `is_explicit` is the difference between "1 GiB" and "1 GiB
-/// (default)", which is the difference between a decision and an inheritance.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct SettingValue {
-    /// The key.
-    pub name: String,
-    /// The effective value. `None` when the broker did not report the key at
-    /// all — which is not the same as an empty value.
-    pub value: Option<String>,
-    /// Whether somebody set it, rather than it being inherited.
-    pub is_explicit: bool,
-}
-
-/// What the partitions hold, when log directories answered.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct SizeEvidence {
-    /// The leader's copy of every measured partition, summed.
-    pub logical_bytes: i64,
-    /// The smallest measured partition.
-    pub smallest_partition_bytes: i64,
-    /// The largest.
-    pub largest_partition_bytes: i64,
-    /// How many partitions a broker reported a leader's copy for.
-    ///
-    /// Against the topic's partition count this says how much of the topic
-    /// the evidence covers — a fan-out that lost a broker measures fewer.
-    pub partitions_measured: usize,
-}
-
-/// The sizing report for one topic.
-#[derive(Debug, Clone, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct SizingReport {
-    /// The topic.
-    pub topic: String,
-    /// How many partitions it has, from metadata rather than from the sizes.
-    pub partitions: usize,
-    /// The configuration the diagnostics reasoned from.
-    pub settings: Vec<SettingValue>,
-    /// What the disks hold, when `DescribeLogDirs` answered.
-    ///
-    /// `None` means the sizes were not asked for or did not arrive, and every
-    /// diagnostic below is then a configuration-only suspicion. It never
-    /// means the topic is empty.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sizes: Option<SizeEvidence>,
-    /// What was found, worst first.
-    pub diagnostics: Vec<Diagnostic>,
-}
-
-impl SizingReport {
-    /// Lint one topic.
-    ///
-    /// `leader_bytes` is `(partition, the leader's copy)` for the partitions a
-    /// broker answered for — the log-dirs fan-out is allowed to be short, and
-    /// a short answer narrows the evidence rather than voiding it.
-    #[must_use]
-    pub fn build(
-        topic: impl Into<String>,
-        partitions: usize,
-        entries: &[ConfigEntryDto],
-        leader_bytes: Option<&[(i32, i64)]>,
-    ) -> Self {
-        let sizes = leader_bytes.and_then(evidence);
-        let mut diagnostics = Vec::new();
-
-        retention_outlives_its_segment(entries, leader_bytes, &mut diagnostics);
-        retention_bytes_smaller_than_segment(entries, &mut diagnostics);
-        no_retention_at_all(entries, &mut diagnostics);
-        compacted_tail_never_cleaned(entries, leader_bytes, &mut diagnostics);
-        segment_above_index_ceiling(entries, &mut diagnostics);
-        skewed_partitions(leader_bytes, &mut diagnostics);
-
-        // Warnings first, and stable within a severity: the chips render in
-        // this order and a row that moves between refreshes reads as a change.
-        diagnostics.sort_by_key(|found| found.severity == Severity::Info);
-
-        Self {
-            topic: topic.into(),
-            partitions,
-            settings: settings(entries),
-            sizes,
-            diagnostics,
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Reading the configuration
-// ---------------------------------------------------------------------------
-
-fn entry<'a>(entries: &'a [ConfigEntryDto], name: &str) -> Option<&'a ConfigEntryDto> {
-    entries.iter().find(|found| found.name == name)
-}
-
-/// A numeric setting's effective value.
-///
-/// `None` covers "not reported", "redacted" and "not a number" alike: all
-/// three mean this module cannot reason about it, and inventing a default
-/// here would be a version table by another name.
-fn number(entries: &[ConfigEntryDto], name: &str) -> Option<i64> {
-    entry(entries, name)?.value.as_deref()?.trim().parse().ok()
-}
-
-fn text<'a>(entries: &'a [ConfigEntryDto], name: &str) -> Option<&'a str> {
-    entry(entries, name)?.value.as_deref()
-}
-
-fn is_explicit(entries: &[ConfigEntryDto], name: &str) -> bool {
-    entry(entries, name).is_some_and(|found| found.is_explicit)
-}
-
-/// Whether the value is a real limit rather than "unlimited".
-///
-/// Kafka spells unlimited as a negative, and every rule below wants to skip
-/// that case rather than compare against it.
-fn limit(value: Option<i64>) -> Option<i64> {
-    value.filter(|found| *found > 0)
-}
-
-/// The cleanup policy, split into the two things it can say at once.
-fn policy(entries: &[ConfigEntryDto]) -> (bool, bool) {
-    let raw = text(entries, key::CLEANUP_POLICY).unwrap_or("delete");
-    let mut deletes = false;
-    let mut compacts = false;
-    for part in raw.split(',') {
-        match part.trim() {
-            "delete" => deletes = true,
-            "compact" => compacts = true,
-            _ => {}
-        }
-    }
-    (deletes, compacts)
-}
-
-fn settings(entries: &[ConfigEntryDto]) -> Vec<SettingValue> {
-    key::REPORTED
-        .iter()
-        .filter_map(|name| {
-            entry(entries, name).map(|found| SettingValue {
-                name: found.name.clone(),
-                value: found.value.clone(),
-                is_explicit: found.is_explicit,
-            })
-        })
-        .collect()
-}
-
-fn evidence(leader_bytes: &[(i32, i64)]) -> Option<SizeEvidence> {
+/// What the partitions hold, summarised.
+pub(super) fn evidence(leader_bytes: &[(i32, i64)]) -> Option<SizeEvidence> {
     let mut total: i64 = 0;
     let mut smallest = i64::MAX;
     let mut largest = i64::MIN;
@@ -299,7 +65,6 @@ fn evidence(leader_bytes: &[(i32, i64)]) -> Option<SizeEvidence> {
         partitions_measured: leader_bytes.len(),
     })
 }
-
 /// The partitions holding something, but less than one whole segment.
 ///
 /// The evidence that a byte roll has not fired inside the current window:
@@ -317,28 +82,6 @@ fn below_one_segment(leader_bytes: Option<&[(i32, i64)]>, segment_bytes: i64) ->
         .filter(|(_, bytes)| *bytes > 0 && *bytes < segment_bytes)
         .map(|(partition, _)| *partition)
         .collect()
-}
-
-/// "the one measured partition holds" / "2 of 5 measured partitions hold",
-/// with the segment clause and the pronoun that agree with it.
-///
-/// Prose assembled from numbers reads as machine output the moment it says
-/// "1 partitions", and a reader who notices that stops trusting the number in
-/// front of it.
-fn holds(stuck: usize, measured: usize) -> (String, &'static str, &'static str) {
-    let (segments, pronoun) = if stuck == 1 {
-        ("that segment stays open", "it")
-    } else {
-        ("those segments stay open", "them")
-    };
-    let phrase = if measured == 1 {
-        "the one measured partition holds".to_owned()
-    } else if stuck == measured {
-        format!("all {measured} measured partitions hold")
-    } else {
-        format!("{stuck} of {measured} measured partitions hold")
-    };
-    (phrase, segments, pronoun)
 }
 
 // ---------------------------------------------------------------------------
@@ -669,7 +412,7 @@ fn skewed_partitions(leader_bytes: Option<&[(i32, i64)]>, out: &mut Vec<Diagnost
 // ---------------------------------------------------------------------------
 
 /// `" (default)"` when nobody set the key, for splicing into prose.
-fn default_note(entries: &[ConfigEntryDto], name: &str) -> &'static str {
+pub(super) fn default_note(entries: &[ConfigEntryDto], name: &str) -> &'static str {
     if is_explicit(entries, name) {
         ""
     } else {
@@ -677,65 +420,10 @@ fn default_note(entries: &[ConfigEntryDto], name: &str) -> &'static str {
     }
 }
 
-const SECOND_MS: i64 = 1_000;
-const MINUTE_MS: i64 = 60 * SECOND_MS;
-const HOUR_MS: i64 = 60 * MINUTE_MS;
-const DAY_MS: i64 = 24 * HOUR_MS;
-
-/// A duration in the largest unit that leaves it above one.
-///
-/// Integer arithmetic throughout — `as_conversions` is denied at the
-/// workspace root and a rounded string is not worth an exception.
-fn human_ms(ms: i64) -> String {
-    if ms < 0 {
-        return "unlimited".to_owned();
-    }
-    for (unit, name) in [
-        (DAY_MS, "d"),
-        (HOUR_MS, "h"),
-        (MINUTE_MS, "min"),
-        (SECOND_MS, "s"),
-    ] {
-        if ms >= unit {
-            return scaled(ms, unit, name);
-        }
-    }
-    format!("{ms} ms")
-}
-
-const KIB: i64 = 1024;
-
-/// Bytes, in binary units.
-fn human_bytes(bytes: i64) -> String {
-    if bytes < 0 {
-        return "unlimited".to_owned();
-    }
-    let mut unit = KIB * KIB * KIB * KIB;
-    for name in ["TiB", "GiB", "MiB", "KiB"] {
-        if bytes >= unit {
-            return scaled(bytes, unit, name);
-        }
-        unit /= KIB;
-    }
-    format!("{bytes} B")
-}
-
-/// `value / unit` to one decimal place, without touching a float.
-///
-/// The tenth is dropped when it is zero, so a round number renders round.
-fn scaled(value: i64, unit: i64, name: &str) -> String {
-    let whole = value / unit;
-    let tenths = value.saturating_mul(10) / unit - whole.saturating_mul(10);
-    if tenths == 0 {
-        format!("{whole} {name}")
-    } else {
-        format!("{whole}.{tenths} {name}")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dto::ConfigEntryDto;
 
     fn setting(name: &str, value: &str, explicit: bool) -> ConfigEntryDto {
         ConfigEntryDto {
@@ -763,22 +451,23 @@ mod tests {
         ]
     }
 
-    fn codes(report: &SizingReport) -> Vec<DiagnosticCode> {
-        report.diagnostics.iter().map(|found| found.code).collect()
+    /// The rules, as the advisor runs them.
+    fn lint(entries: &[ConfigEntryDto], leader_bytes: Option<&[(i32, i64)]>) -> Vec<Diagnostic> {
+        all(entries, leader_bytes)
     }
 
-    fn found(report: &SizingReport, code: DiagnosticCode) -> &Diagnostic {
-        report
-            .diagnostics
-            .iter()
-            .find(|entry| entry.code == code)
-            .unwrap()
+    fn codes(found: &[Diagnostic]) -> Vec<DiagnosticCode> {
+        found.iter().map(|entry| entry.code).collect()
+    }
+
+    fn one(found: &[Diagnostic], code: DiagnosticCode) -> &Diagnostic {
+        found.iter().find(|entry| entry.code == code).unwrap()
     }
 
     #[test]
     fn a_quiet_topic_with_no_sizes_is_only_a_suspicion() {
-        let report = SizingReport::build("orders", 3, &quiet_topic(), None);
-        let diagnostic = found(&report, DiagnosticCode::RetentionOutlivesItsSegment);
+        let report = lint(&quiet_topic(), None);
+        let diagnostic = one(&report, DiagnosticCode::RetentionOutlivesItsSegment);
         assert_eq!(
             diagnostic.severity,
             Severity::Info,
@@ -789,9 +478,8 @@ mod tests {
 
     #[test]
     fn sizes_below_one_segment_promote_it_to_a_warning() {
-        let report =
-            SizingReport::build("orders", 3, &quiet_topic(), Some(&[(0, 4_096), (1, 8_192)]));
-        let diagnostic = found(&report, DiagnosticCode::RetentionOutlivesItsSegment);
+        let report = lint(&quiet_topic(), Some(&[(0, 4_096), (1, 8_192)]));
+        let diagnostic = one(&report, DiagnosticCode::RetentionOutlivesItsSegment);
         assert_eq!(diagnostic.severity, Severity::Warn);
         assert_eq!(diagnostic.partitions, vec![0, 1]);
     }
@@ -801,8 +489,8 @@ mod tests {
         // It has never rolled either, and it is holding nothing that could be
         // retained past its time. Warning here fires on every topic nobody
         // has produced to yet.
-        let report = SizingReport::build("orders", 2, &quiet_topic(), Some(&[(0, 0), (1, 0)]));
-        let diagnostic = found(&report, DiagnosticCode::RetentionOutlivesItsSegment);
+        let report = lint(&quiet_topic(), Some(&[(0, 0), (1, 0)]));
+        let diagnostic = one(&report, DiagnosticCode::RetentionOutlivesItsSegment);
         assert_eq!(diagnostic.severity, Severity::Info);
         assert!(diagnostic.partitions.is_empty());
         assert!(
@@ -814,8 +502,8 @@ mod tests {
 
     #[test]
     fn one_partition_holding_something_is_still_evidence() {
-        let report = SizingReport::build("orders", 2, &quiet_topic(), Some(&[(0, 4_096), (1, 0)]));
-        let diagnostic = found(&report, DiagnosticCode::RetentionOutlivesItsSegment);
+        let report = lint(&quiet_topic(), Some(&[(0, 4_096), (1, 0)]));
+        let diagnostic = one(&report, DiagnosticCode::RetentionOutlivesItsSegment);
         assert_eq!(diagnostic.severity, Severity::Warn);
         assert_eq!(diagnostic.partitions, vec![0]);
         assert!(
@@ -828,25 +516,13 @@ mod tests {
     }
 
     #[test]
-    fn prose_agrees_with_the_number_in_front_of_it() {
-        assert_eq!(holds(1, 1).0, "the one measured partition holds");
-        assert_eq!(holds(1, 1).2, "it");
-        assert_eq!(holds(1, 1).1, "that segment stays open");
-        assert_eq!(holds(3, 3).0, "all 3 measured partitions hold");
-        assert_eq!(holds(3, 3).2, "them");
-        assert_eq!(holds(1, 4).0, "1 of 4 measured partitions hold");
-    }
-
-    #[test]
     fn a_busy_topic_rolls_on_bytes_and_is_left_alone() {
         // Both partitions hold more than one segment, so the roll is firing.
-        let report = SizingReport::build(
-            "orders",
-            2,
+        let report = lint(
             &quiet_topic(),
             Some(&[(0, 3_221_225_472), (1, 2_147_483_648)]),
         );
-        let diagnostic = found(&report, DiagnosticCode::RetentionOutlivesItsSegment);
+        let diagnostic = one(&report, DiagnosticCode::RetentionOutlivesItsSegment);
         assert_eq!(diagnostic.severity, Severity::Info);
         assert!(diagnostic.detail.contains("size roll is firing"));
     }
@@ -863,8 +539,8 @@ mod tests {
             setting("segment.ms", "604800000", false),
             setting("segment.bytes", "1073741824", false),
         ];
-        let report = SizingReport::build("lamp", 1, &entries, Some(&[(0, 8_828)]));
-        let diagnostic = found(&report, DiagnosticCode::RetentionOutlivesItsSegment);
+        let report = lint(&entries, Some(&[(0, 8_828)]));
+        let diagnostic = one(&report, DiagnosticCode::RetentionOutlivesItsSegment);
         assert_eq!(diagnostic.severity, Severity::Info);
         assert!(
             diagnostic.summary.contains("twice that"),
@@ -880,7 +556,7 @@ mod tests {
             setting("retention.ms", "604800000", true),
             setting("segment.ms", "3600000", true),
         ];
-        let report = SizingReport::build("orders", 1, &entries, None);
+        let report = lint(&entries, None);
         assert!(!codes(&report).contains(&DiagnosticCode::RetentionOutlivesItsSegment));
     }
 
@@ -891,8 +567,8 @@ mod tests {
             setting("retention.bytes", "1073741824", true),
             setting("segment.bytes", "1073741824", false),
         ];
-        let report = SizingReport::build("orders", 1, &entries, None);
-        let diagnostic = found(&report, DiagnosticCode::RetentionBytesSmallerThanSegment);
+        let report = lint(&entries, None);
+        let diagnostic = one(&report, DiagnosticCode::RetentionBytesSmallerThanSegment);
         assert_eq!(diagnostic.severity, Severity::Warn);
     }
 
@@ -904,7 +580,7 @@ mod tests {
             setting("retention.bytes", "-1", false),
             setting("segment.ms", "604800000", false),
         ];
-        let report = SizingReport::build("orders", 1, &entries, None);
+        let report = lint(&entries, None);
         assert_eq!(codes(&report), vec![DiagnosticCode::NoRetentionAtAll]);
     }
 
@@ -915,7 +591,7 @@ mod tests {
             setting("retention.ms", "86400000", true),
             setting("segment.ms", "604800000", false),
         ];
-        let report = SizingReport::build("changelog", 1, &entries, None);
+        let report = lint(&entries, None);
         let codes = codes(&report);
         assert!(!codes.contains(&DiagnosticCode::RetentionOutlivesItsSegment));
         assert!(!codes.contains(&DiagnosticCode::NoRetentionAtAll));
@@ -929,7 +605,7 @@ mod tests {
             setting("segment.ms", "604800000", false),
             setting("segment.bytes", "1073741824", false),
         ];
-        let report = SizingReport::build("changelog", 1, &entries, Some(&[(0, 4_294_967_296i64)]));
+        let report = lint(&entries, Some(&[(0, 4_294_967_296i64)]));
         assert!(!codes(&report).contains(&DiagnosticCode::CompactedTailNeverCleaned));
     }
 
@@ -942,8 +618,8 @@ mod tests {
             setting("index.interval.bytes", "4096", false),
             setting("segment.bytes", "17179869184", true),
         ];
-        let report = SizingReport::build("orders", 1, &entries, None);
-        let diagnostic = found(&report, DiagnosticCode::SegmentAboveIndexCeiling);
+        let report = lint(&entries, None);
+        let diagnostic = one(&report, DiagnosticCode::SegmentAboveIndexCeiling);
         assert!(
             diagnostic.summary.contains("5 GiB"),
             "{}",
@@ -958,66 +634,54 @@ mod tests {
             setting("index.interval.bytes", "4096", false),
             setting("segment.bytes", "1073741824", false),
         ];
-        let report = SizingReport::build("orders", 1, &entries, None);
+        let report = lint(&entries, None);
         assert!(!codes(&report).contains(&DiagnosticCode::SegmentAboveIndexCeiling));
     }
 
     #[test]
     fn one_fat_partition_is_skew_and_an_even_spread_is_not() {
-        let even = SizingReport::build("orders", 3, &[], Some(&[(0, 100), (1, 110), (2, 90)]));
+        let even = lint(&[], Some(&[(0, 100), (1, 110), (2, 90)]));
         assert!(!codes(&even).contains(&DiagnosticCode::SkewedPartitions));
 
-        let lopsided = SizingReport::build("orders", 3, &[], Some(&[(0, 10), (1, 10), (2, 900)]));
-        let diagnostic = found(&lopsided, DiagnosticCode::SkewedPartitions);
+        let lopsided = lint(&[], Some(&[(0, 10), (1, 10), (2, 900)]));
+        let diagnostic = one(&lopsided, DiagnosticCode::SkewedPartitions);
         assert_eq!(diagnostic.partitions, vec![2]);
     }
 
     #[test]
     fn an_empty_topic_is_not_skewed() {
-        let report = SizingReport::build("orders", 2, &[], Some(&[(0, 0), (1, 0)]));
+        let report = lint(&[], Some(&[(0, 0), (1, 0)]));
         assert!(!codes(&report).contains(&DiagnosticCode::SkewedPartitions));
     }
 
     #[test]
     fn evidence_summarises_what_was_measured_not_what_exists() {
         // Three partitions, two measured: the fan-out lost a broker.
-        let report = SizingReport::build("orders", 3, &quiet_topic(), Some(&[(0, 10), (2, 30)]));
-        let sizes = report.sizes.unwrap();
+        let sizes = evidence(&[(0, 10), (2, 30)]).unwrap();
         assert_eq!(sizes.partitions_measured, 2);
         assert_eq!(sizes.logical_bytes, 40);
         assert_eq!(sizes.smallest_partition_bytes, 10);
         assert_eq!(sizes.largest_partition_bytes, 30);
-        assert_eq!(report.partitions, 3, "the count comes from metadata");
+        assert!(
+            evidence(&[]).is_none(),
+            "nothing measured is not zero bytes"
+        );
     }
 
     #[test]
-    fn settings_carry_whether_anybody_set_them() {
-        let report = SizingReport::build("orders", 1, &quiet_topic(), None);
-        let retention = report
-            .settings
-            .iter()
-            .find(|found| found.name == "retention.ms")
-            .unwrap();
-        assert!(retention.is_explicit);
-        let segment = report
-            .settings
-            .iter()
-            .find(|found| found.name == "segment.ms")
-            .unwrap();
-        assert!(!segment.is_explicit);
+    fn a_value_nobody_set_is_named_as_inherited_in_the_prose() {
+        let report = lint(&quiet_topic(), None);
         assert!(
-            found(&report, DiagnosticCode::RetentionOutlivesItsSegment)
+            one(&report, DiagnosticCode::RetentionOutlivesItsSegment)
                 .detail
-                .contains("(default)")
+                .contains("(default)"),
+            "a derivation that leans on a default must say it is one"
         );
     }
 
     #[test]
     fn a_topic_with_nothing_reported_lints_nothing_rather_than_guessing() {
-        let report = SizingReport::build("orders", 1, &[], None);
-        assert!(report.diagnostics.is_empty());
-        assert!(report.settings.is_empty());
-        assert!(report.sizes.is_none());
+        assert!(lint(&[], None).is_empty());
     }
 
     #[test]
@@ -1031,28 +695,11 @@ mod tests {
             setting("segment.index.bytes", "1024", false),
             setting("index.interval.bytes", "1024", false),
         ];
-        let report = SizingReport::build("orders", 1, &entries, None);
-        let severities: Vec<Severity> = report
-            .diagnostics
-            .iter()
-            .map(|found| found.severity)
-            .collect();
+        let report = lint(&entries, None);
+        let severities: Vec<Severity> = report.iter().map(|found| found.severity).collect();
         let mut sorted = severities.clone();
         sorted.sort_by_key(|severity| *severity == Severity::Info);
         assert_eq!(severities, sorted);
         assert!(severities.len() > 1, "this fixture trips several rules");
-    }
-
-    #[test]
-    fn durations_and_sizes_render_in_the_unit_a_person_reads() {
-        assert_eq!(human_ms(86_400_000), "1 d");
-        assert_eq!(human_ms(604_800_000), "7 d");
-        assert_eq!(human_ms(5_400_000), "1.5 h");
-        assert_eq!(human_ms(500), "500 ms");
-        assert_eq!(human_ms(-1), "unlimited");
-        assert_eq!(human_bytes(1_073_741_824), "1 GiB");
-        assert_eq!(human_bytes(1_610_612_736), "1.5 GiB");
-        assert_eq!(human_bytes(512), "512 B");
-        assert_eq!(human_bytes(-1), "unlimited");
     }
 }

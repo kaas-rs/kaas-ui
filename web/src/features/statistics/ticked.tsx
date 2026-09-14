@@ -1,10 +1,10 @@
 // Backticks in server prose, rendered as code.
 //
-// The diagnostics are written in `kaas-ui-core/src/sizing.rs`, where naming a
-// setting means writing `` `segment.ms` `` — the same convention the rest of
-// this repo's prose uses. Splitting on the backtick here keeps that one
-// spelling working in both places instead of making the Rust choose between
-// readable source and readable output.
+// The advice is written in `kaas-ui-core/src/sizing/`, where naming a setting
+// means writing `` `segment.ms` `` — the same convention the rest of this
+// repo's prose uses. Splitting on the backtick here keeps that one spelling
+// working in both places instead of making the Rust choose between readable
+// source and readable output.
 //
 // Deliberately not a markdown renderer. One delimiter, no nesting, no links:
 // the strings come from our own crate, and the moment this parses more than

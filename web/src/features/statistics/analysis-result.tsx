@@ -1,6 +1,6 @@
 import { AlertTriangle } from "lucide-react"
 
-import type { TopicAnalysis } from "@/api/types"
+import type { Profile, TopicAnalysis } from "@/api/types"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -15,13 +15,19 @@ import {
 import { HourlyChart } from "./hourly-chart"
 import { PartitionStatsTable } from "./partition-stats-table"
 import { SizeTable } from "./size-table"
+import { SizingAdviceSections } from "./sizing-advice"
 
 export function AnalysisResult({
   result,
   onRerun,
+  profile,
+  onProfile,
 }: {
   result: TopicAnalysis
   onRerun(): void
+  /** The sizing profile from the URL, or undefined for the topic's own signal. */
+  profile: Profile | undefined
+  onProfile(profile: Profile): void
 }) {
   const timeZone = displayTimeZone()
   const dateOrder = useResolvedDateOrder()
@@ -197,6 +203,18 @@ export function AnalysisResult({
       <Section title="Per partition">
         <PartitionStatsTable partitions={result.partitionStats} />
       </Section>
+
+      {/* The advice rides on this result rather than on a route of its own:
+          it needs the write rate the fold above just measured, and metadata
+          cannot supply one. A scan that could not be followed by the two
+          describes behind it leaves the statistics intact and this absent. */}
+      {result.sizing ? (
+        <SizingAdviceSections
+          advice={result.sizing}
+          profile={profile}
+          onProfile={onProfile}
+        />
+      ) : null}
     </div>
   )
 }

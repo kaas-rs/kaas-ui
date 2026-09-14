@@ -898,146 +898,6 @@ async fn assertions() -> Result<Acceptance, String> {
         );
     }
 
-    // --- sizing: the advisor's config lint -----------------------------------
-    //
-    // Shape, not content. Every assertion here holds whatever the topic
-    // happens to contain today, because the one live assertion this workspace
-    // has already lost was lost to a fixture that changed size — see
-    // docs/11-built.md. Whether `kaas-canary-v1` trips a rule depends on how
-    // Strimzi and kaas were configured this week; that its report is
-    // internally consistent does not.
-    for id in &ids {
-        let topic = "kaas-canary-v1";
-        let detail = get(
-            &client,
-            &format!("/api/environments/{ENV}/clusters/{id}/topics/{topic}"),
-        )
-        .await?;
-        let declared = detail["items"][0]["partitions"]
-            .as_array()
-            .map_or(0, Vec::len);
-
-        let report = get(
-            &client,
-            &format!("/api/environments/{ENV}/clusters/{id}/topics/{topic}/sizing"),
-        )
-        .await?;
-        let body = &report["items"][0];
-        let partitions = body["partitions"].as_u64().unwrap_or_default();
-
-        acceptance.check(
-            &format!("{id}: the sizing report counts partitions from metadata"),
-            if partitions as usize == declared && declared > 0 {
-                Ok(format!("{partitions} partitions"))
-            } else {
-                Err(format!(
-                    "report says {partitions}, describe says {declared}"
-                ))
-            },
-        );
-
-        // A short log-dirs fan-out narrows the evidence. It must never widen
-        // it: a report claiming more measured partitions than the topic has is
-        // a join that put one partition's bytes on another's row.
-        let measured = body["sizes"]["partitionsMeasured"].as_u64();
-        acceptance.check(
-            &format!("{id}: the evidence covers at most the partitions that exist"),
-            match measured {
-                Some(found) if found <= partitions => Ok(format!("{found} of {partitions}")),
-                Some(found) => Err(format!("{found} measured of {partitions} declared")),
-                None => Ok("no sizes read".to_owned()),
-            },
-        );
-
-        let diagnostics = body["diagnostics"].as_array().cloned().unwrap_or_default();
-        let named: Vec<u64> = diagnostics
-            .iter()
-            .filter_map(|found| found["partitions"].as_array())
-            .flatten()
-            .filter_map(Value::as_u64)
-            .collect();
-        acceptance.check(
-            &format!("{id}: every diagnostic names a partition that exists"),
-            if named.iter().all(|partition| *partition < partitions) {
-                Ok(format!(
-                    "{} findings, {} cited",
-                    diagnostics.len(),
-                    named.len()
-                ))
-            } else {
-                Err(format!("cited {named:?} of {partitions}"))
-            },
-        );
-
-        acceptance.check(
-            &format!("{id}: every diagnostic carries its derivation"),
-            if diagnostics.iter().all(|found| {
-                found["summary"].as_str().is_some_and(|s| !s.is_empty())
-                    && found["detail"].as_str().is_some_and(|s| !s.is_empty())
-            }) {
-                Ok(format!("{} findings", diagnostics.len()))
-            } else {
-                Err("a finding arrived without prose".into())
-            },
-        );
-
-        // The settings the findings reason from are on the report, so a
-        // reader never has to take the derivation on trust.
-        let keys: Vec<&str> = body["settings"]
-            .as_array()
-            .map(|entries| {
-                entries
-                    .iter()
-                    .filter_map(|entry| entry["name"].as_str())
-                    .collect()
-            })
-            .unwrap_or_default();
-        acceptance.check(
-            &format!("{id}: the report carries the settings it read"),
-            if keys.contains(&"retention.ms") && keys.contains(&"segment.ms") {
-                Ok(format!("{} keys", keys.len()))
-            } else {
-                Err(format!("settings were {keys:?}"))
-            },
-        );
-
-        // Without sizes there is no evidence, and the absence is said rather
-        // than rendered as an empty topic.
-        let cheap = get(
-            &client,
-            &format!("/api/environments/{ENV}/clusters/{id}/topics/{topic}/sizing?size=false"),
-        )
-        .await?;
-        acceptance.check(
-            &format!("{id}: ?size=false omits the evidence rather than inventing it"),
-            if cheap["items"][0]["sizes"].is_null() {
-                Ok(String::new())
-            } else {
-                Err("sizes arrived anyway".into())
-            },
-        );
-
-        // Severity is confidence: a finding that depends on what the
-        // partitions hold cannot be a warning when nothing was measured.
-        let unmeasured_warns = cheap["items"][0]["diagnostics"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default()
-            .iter()
-            .filter(|found| found["severity"] == "warn")
-            .filter_map(|found| found["code"].as_str().map(str::to_owned))
-            .filter(|code| code != "retentionBytesSmallerThanSegment")
-            .collect::<Vec<String>>();
-        acceptance.check(
-            &format!("{id}: nothing warns on evidence it did not read"),
-            if unmeasured_warns.is_empty() {
-                Ok(String::new())
-            } else {
-                Err(format!("{unmeasured_warns:?} warned with no sizes"))
-            },
-        );
-    }
-
     // --- analysis: the statistics tab's full-topic scan ----------------------
     //
     // `kaas-canary-v1` exists on both clusters and scans in seconds. The
@@ -1134,6 +994,158 @@ async fn assertions() -> Result<Acceptance, String> {
                 Ok(format!("{hours} hour(s)"))
             } else {
                 Err("no hourly buckets — timestamps were not read off records".to_owned())
+            },
+        );
+
+        // --- the sizing advisor, which rides on this result ----------------
+        //
+        // Shape, not content. Whether `kaas-canary-v1` looks bursty or
+        // compacted depends on how it was configured this week; that the
+        // advice is internally consistent with the fold it was derived from
+        // does not. The one live assertion this workspace has already lost
+        // was lost to a fixture that changed size — see docs/11-built.md.
+        let sizing = &result["sizing"];
+        // The fold holds one accumulator per partition it *saw a record on*,
+        // which on a topic a canary writes to unevenly is fewer than the
+        // topic has. The advice counts partitions from metadata instead —
+        // sizing a topic against the partitions that happened to be busy
+        // would recommend a count for a topic that does not exist.
+        let folded = result["partitionStats"].as_array().map_or(0, Vec::len);
+        let declared = get(
+            &client,
+            &format!("/api/environments/{ENV}/clusters/{id}/topics/kaas-canary-v1"),
+        )
+        .await?["items"][0]["partitions"]
+            .as_array()
+            .map_or(0, Vec::len);
+        acceptance.check(
+            &format!("{id}: the analysis carries sizing advice"),
+            match (
+                sizing["topic"].as_str(),
+                sizing["topology"]["partitions"].as_u64(),
+                sizing["measured"]["records"].as_u64(),
+            ) {
+                (Some("kaas-canary-v1"), Some(partitions), Some(records))
+                    if usize::try_from(partitions).unwrap_or(0) == declared
+                        && folded <= declared
+                        && Some(records) == result["totalStats"]["totalMsgs"].as_u64() =>
+                {
+                    Ok(format!(
+                        "{partitions} partitions ({folded} folded), {records} records"
+                    ))
+                }
+                other => Err(format!(
+                    "{other:?} against {declared} declared / {folded} folded"
+                )),
+            },
+        );
+
+        let profiles = sizing["profiles"].as_array().cloned().unwrap_or_default();
+        let matched: Vec<&str> = profiles
+            .iter()
+            .filter(|entry| entry["matched"] == true)
+            .filter_map(|entry| entry["profile"].as_str())
+            .collect();
+        acceptance.check(
+            &format!("{id}: all seven profiles arrive in one response"),
+            if profiles.len() == 7
+                && matched.len() == 1
+                && Some(matched[0]) == sizing["suggested"].as_str()
+            {
+                Ok(format!("suggested {}", matched[0]))
+            } else {
+                Err(format!(
+                    "{} profiles, matched {matched:?}, suggested {}",
+                    profiles.len(),
+                    sizing["suggested"]
+                ))
+            },
+        );
+
+        let missing: Vec<String> = profiles
+            .iter()
+            .filter_map(|entry| {
+                let settings: Vec<&str> = entry["rows"]
+                    .as_array()
+                    .map(|rows| {
+                        rows.iter()
+                            .filter_map(|row| row["setting"].as_str())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let wanted = [
+                    "replication factor",
+                    "partitions",
+                    "segment.bytes",
+                    "segment.ms",
+                ];
+                let absent: Vec<&str> = wanted
+                    .iter()
+                    .filter(|name| !settings.contains(name))
+                    .copied()
+                    .collect();
+                (!absent.is_empty()).then(|| format!("{} lacks {absent:?}", entry["profile"]))
+            })
+            .collect();
+        acceptance.check(
+            &format!("{id}: every profile answers for replication, partitions and segments"),
+            if missing.is_empty() {
+                Ok(format!("{} profiles", profiles.len()))
+            } else {
+                Err(missing.join("; "))
+            },
+        );
+
+        // A number without its derivation is not actionable, which is the
+        // whole claim the `why` column makes.
+        let silent = profiles
+            .iter()
+            .filter_map(|entry| entry["rows"].as_array())
+            .flatten()
+            .filter(|row| !row["why"].as_str().is_some_and(|why| why.len() > 40))
+            .count();
+        acceptance.check(
+            &format!("{id}: every recommendation shows its derivation"),
+            if silent == 0 {
+                Ok(format!(
+                    "{} rows",
+                    profiles
+                        .iter()
+                        .filter_map(|entry| entry["rows"].as_array())
+                        .map(Vec::len)
+                        .sum::<usize>()
+                ))
+            } else {
+                Err(format!("{silent} rows carry no why"))
+            },
+        );
+
+        // Kafka cannot lower a partition count. A profile that wants fewer
+        // has to say that rather than print a number somebody will try to
+        // apply.
+        let unapplicable: Vec<String> = profiles
+            .iter()
+            .filter_map(|entry| {
+                let row = entry["rows"]
+                    .as_array()?
+                    .iter()
+                    .find(|row| row["setting"] == "partitions")?;
+                let current: i64 = row["current"].as_str()?.parse().ok()?;
+                let recommended: i64 = row["recommended"].as_str()?.parse().ok()?;
+                let honest = recommended >= current
+                    || row["why"]
+                        .as_str()
+                        .is_some_and(|why| why.contains("cannot lower"));
+                (!honest)
+                    .then(|| format!("{} wants {recommended} from {current}", entry["profile"]))
+            })
+            .collect();
+        acceptance.check(
+            &format!("{id}: a lower partition count is named as impossible, not printed"),
+            if unapplicable.is_empty() {
+                Ok(String::new())
+            } else {
+                Err(unapplicable.join("; "))
             },
         );
 

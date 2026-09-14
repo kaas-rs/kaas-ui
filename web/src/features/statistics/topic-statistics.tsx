@@ -19,6 +19,7 @@
 
 import type {
   AnalysisProgress,
+  Profile,
   ResourceError,
   TopicAnalysis,
   TopicDetail,
@@ -43,11 +44,16 @@ export function TopicStatistics({
   clusterId,
   topic,
   info,
+  profile,
+  onProfile,
 }: {
   envId: string
   clusterId: string
   topic: string
   info: TopicDetail
+  /** The sizing profile, from the URL. */
+  profile: Profile | undefined
+  onProfile(profile: Profile): void
 }) {
   const {
     phase,
@@ -95,7 +101,12 @@ export function TopicStatistics({
         </Card>
       ) : null}
       {phase.kind === "done" ? (
-        <AnalysisResult result={phase.result} onRerun={start} />
+        <AnalysisResult
+          result={phase.result}
+          onRerun={start}
+          profile={profile}
+          onProfile={onProfile}
+        />
       ) : null}
     </div>
   )

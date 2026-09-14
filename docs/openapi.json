@@ -1489,65 +1489,6 @@
         }
       }
     },
-    "/api/environments/{env}/clusters/{id}/topics/{topic}/sizing": {
-      "get": {
-        "tags": [
-          "topics"
-        ],
-        "summary": "`GET /api/environments/{env}/clusters/{id}/topics/{topic}/sizing`",
-        "operationId": "sizing",
-        "parameters": [
-          {
-            "name": "env",
-            "in": "path",
-            "description": "Environment id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "id",
-            "in": "path",
-            "description": "Cluster id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "topic",
-            "in": "path",
-            "description": "Topic name",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "size",
-            "in": "query",
-            "description": "Read partition sizes. Defaults to true",
-            "required": false,
-            "schema": {
-              "type": "boolean"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Sizing report",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Envelope_SizingReport"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/environments/{env}/clusters/{id}/transactions": {
       "get": {
         "tags": [
@@ -2227,6 +2168,92 @@
           }
         }
       },
+      "Assumptions": {
+        "type": "object",
+        "description": "The numbers nothing in a log can supply.\n\nEvery one of these is a **default, not a measurement**, and the UI renders\nthem beside the recommendations for exactly that reason. The per-partition\ncapacities in particular span an order of magnitude across published\nfigures depending on record size, replication, acks and disk; these are\ndeliberately conservative, so a recommendation derived from them errs\ntoward more partitions rather than fewer.",
+        "required": [
+          "produceMibPerSecPerPartition",
+          "consumeMibPerSecPerConsumer",
+          "headroomPercent",
+          "segmentsPerRetention",
+          "throughputSegmentsPerRetention",
+          "compactedRollMinutes",
+          "overshootPercent",
+          "minSegmentMib",
+          "targetReplication",
+          "burstRatio",
+          "highThroughputMibPerSec",
+          "precisionWindowHours",
+          "smallRecordKib"
+        ],
+        "properties": {
+          "burstRatio": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The peak-over-mean above which one number cannot size a topic."
+          },
+          "compactedRollMinutes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How long a compacted topic's active segment may stay open, minutes."
+          },
+          "consumeMibPerSecPerConsumer": {
+            "type": "integer",
+            "format": "int64",
+            "description": "What one consumer instance is assumed to keep up with, MiB per second."
+          },
+          "headroomPercent": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Headroom over the measured peak, as a percentage."
+          },
+          "highThroughputMibPerSec": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The byte rate above which the throughput profile's signal fires, MiB\nper second."
+          },
+          "minSegmentMib": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The smallest segment worth recommending, MiB."
+          },
+          "overshootPercent": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How far past `retention.ms` a record may live, as a percentage, when\nthe profile is solving for a deletion deadline."
+          },
+          "precisionWindowHours": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How short a `retention.ms` has to be before missing it by a segment is\na compliance problem rather than an accounting detail, hours."
+          },
+          "produceMibPerSecPerPartition": {
+            "type": "integer",
+            "format": "int64",
+            "description": "What one partition is assumed to absorb, MiB per second."
+          },
+          "segmentsPerRetention": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many segments a retention window should be divided into."
+          },
+          "smallRecordKib": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The record size below which a topic reads as small-record, KiB."
+          },
+          "targetReplication": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The replica count to aim for, bounded by the broker count."
+          },
+          "throughputSegmentsPerRetention": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The same, for a profile that wants fewer and larger files."
+          }
+        }
+      },
       "Broker": {
         "type": "object",
         "description": "A broker, as the snapshot reports it — optionally enriched.",
@@ -2350,6 +2377,16 @@
           }
         ],
         "description": "Where the version table came from."
+      },
+      "Change": {
+        "type": "string",
+        "description": "Which way a row points.",
+        "enum": [
+          "increase",
+          "decrease",
+          "keep",
+          "review"
+        ]
       },
       "ClientQuota": {
         "type": "object",
@@ -2713,7 +2750,7 @@
       },
       "DiagnosticCode": {
         "type": "string",
-        "description": "What a diagnostic is about.\n\nA stable name the UI keys on, so the prose below can be rewritten without\nbreaking a chip, a filter or a link.",
+        "description": "What a diagnostic is about.\n\nA stable name the UI keys on, so the prose can be rewritten without\nbreaking a chip, a filter or a link.",
         "enum": [
           "retentionOutlivesItsSegment",
           "retentionBytesSmallerThanSegment",
@@ -4333,90 +4370,6 @@
           }
         }
       },
-      "Envelope_SizingReport": {
-        "type": "object",
-        "description": "What every data endpoint returns.",
-        "required": [
-          "items",
-          "errors"
-        ],
-        "properties": {
-          "errors": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ResourceError"
-            },
-            "description": "The resources that did not. Non-empty is still `200 OK`."
-          },
-          "items": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "description": "The sizing report for one topic.",
-              "required": [
-                "topic",
-                "partitions",
-                "settings",
-                "diagnostics"
-              ],
-              "properties": {
-                "diagnostics": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/Diagnostic"
-                  },
-                  "description": "What was found, worst first."
-                },
-                "partitions": {
-                  "type": "integer",
-                  "description": "How many partitions it has, from metadata rather than from the sizes.",
-                  "minimum": 0
-                },
-                "settings": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/SettingValue"
-                  },
-                  "description": "The configuration the diagnostics reasoned from."
-                },
-                "sizes": {
-                  "oneOf": [
-                    {
-                      "type": "null"
-                    },
-                    {
-                      "$ref": "#/components/schemas/SizeEvidence",
-                      "description": "What the disks hold, when `DescribeLogDirs` answered.\n\n`None` means the sizes were not asked for or did not arrive, and every\ndiagnostic below is then a configuration-only suspicion. It never\nmeans the topic is empty."
-                    }
-                  ]
-                },
-                "topic": {
-                  "type": "string",
-                  "description": "The topic."
-                }
-              }
-            },
-            "description": "The resources that answered."
-          },
-          "snapshotAgeMs": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int64",
-            "description": "Age of the metadata snapshot the answer was built from, where one was\ninvolved. This is what makes \"as of 4 seconds ago\" honest.",
-            "minimum": 0
-          },
-          "total": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "description": "How many resources matched before paging or truncation.\n\nPresent only where the endpoint pages. Filtering and sorting happen on\nthe server — a fleet with a five-thousand-topic cluster in it is real —\nso the browser needs to be told what it is looking at a window into.",
-            "minimum": 0
-          }
-        }
-      },
       "Envelope_TopicDetail": {
         "type": "object",
         "description": "What every data endpoint returns.",
@@ -5647,6 +5600,148 @@
           }
         }
       },
+      "Measured": {
+        "type": "object",
+        "description": "What the scan measured, in the units the advice reasons in.\n\nEvery field is `None` when its divisor was zero rather than `0.0`: an idle\ntopic has no write rate, and reporting one as zero would put a\nrecommendation of one partition on a topic nobody has produced to yet.",
+        "required": [
+          "records",
+          "complete",
+          "bucketMs",
+          "bytesPerRecordSource"
+        ],
+        "properties": {
+          "bucketMs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The resolution the peak was measured at.\n\nThe scan buckets by hour, so a burst inside one hour is invisible here\nand `peakRecordsPerSec` is an hourly average rather than an\ninstantaneous rate. Carried so the UI can say so rather than implying\na precision the fold does not have."
+          },
+          "bytesPerRecord": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Bytes on disk per record."
+          },
+          "bytesPerRecordSource": {
+            "type": "string",
+            "description": "Where that figure came from — log directories, or the payload sums."
+          },
+          "clock": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Which clock stamped the timestamps the rates were derived from."
+          },
+          "complete": {
+            "type": "boolean",
+            "description": "Whether the scan read the whole retained topic. A capped scan measures\na sample, and every rate below describes that sample."
+          },
+          "compressionRatio": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Payload bytes over on-disk bytes.\n\nAbove 1 means the log is smaller than what was produced into it, which\nis compression working. Near 1 on a compressible payload means it is\nnot turned on. Below 1 means per-record overhead outweighs the\npayload, which happens on very small records."
+          },
+          "distinctKeyFraction": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Distinct keys over records — compaction headroom, from a sketch."
+          },
+          "keyedFraction": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Records that carried a key."
+          },
+          "meanBytesPerSec": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Bytes per second across the window."
+          },
+          "meanRecordsPerSec": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Records per second across the whole window."
+          },
+          "partitionSkew": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The busiest partition's records over the mean partition's."
+          },
+          "payloadBytesPerRecord": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Key plus value bytes per record, before compression and framing."
+          },
+          "peakBytesPerSec": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Bytes per second in the busiest bucket."
+          },
+          "peakRecordsPerSec": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Records per second in the busiest bucket."
+          },
+          "peakToMean": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Peak over mean. Above the burst ratio, one number cannot size a topic."
+          },
+          "records": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Records the scan folded.",
+            "minimum": 0
+          },
+          "tombstoneFraction": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Records with a null value."
+          },
+          "windowMs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The span the folded records cover, milliseconds."
+          }
+        }
+      },
       "Message": {
         "type": "object",
         "description": "One record in the message browser.",
@@ -6127,6 +6222,60 @@
           }
         }
       },
+      "Profile": {
+        "type": "string",
+        "description": "What a topic is for, which nothing in its log records.",
+        "enum": [
+          "balanced",
+          "compactedChangelog",
+          "highThroughput",
+          "lowLatency",
+          "bursty",
+          "streamsInternal",
+          "retentionPrecision"
+        ]
+      },
+      "ProfileAdvice": {
+        "type": "object",
+        "description": "One profile's whole answer.",
+        "required": [
+          "profile",
+          "label",
+          "optimises",
+          "matched",
+          "signal",
+          "rows"
+        ],
+        "properties": {
+          "label": {
+            "type": "string",
+            "description": "Its name, for a chip."
+          },
+          "matched": {
+            "type": "boolean",
+            "description": "Whether this topic's signals point here."
+          },
+          "optimises": {
+            "type": "string",
+            "description": "What it optimises for, and what it trades away."
+          },
+          "profile": {
+            "$ref": "#/components/schemas/Profile",
+            "description": "Which profile."
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Recommendation"
+            },
+            "description": "The recommendations."
+          },
+          "signal": {
+            "type": "string",
+            "description": "Why it matched, or what would make it match."
+          }
+        }
+      },
       "QuotaComponent": {
         "type": "object",
         "description": "One component of a quota entity.",
@@ -6227,6 +6376,50 @@
           "topic": {
             "type": "string",
             "description": "The topic."
+          }
+        }
+      },
+      "Recommendation": {
+        "type": "object",
+        "description": "One row of a profile's table.",
+        "required": [
+          "setting",
+          "change",
+          "why"
+        ],
+        "properties": {
+          "caution": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What is irreversible about making the change."
+          },
+          "change": {
+            "$ref": "#/components/schemas/Change",
+            "description": "Which way the row points."
+          },
+          "current": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What is in force now, with `(default)` where nobody set it."
+          },
+          "recommended": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What this profile would set. `None` when the measurement did not\nsupport a number — the `why` then says which input was missing."
+          },
+          "setting": {
+            "type": "string",
+            "description": "The setting, spelled as the broker spells it."
+          },
+          "why": {
+            "type": "string",
+            "description": "The derivation: every input it used, and where each came from."
           }
         }
       },
@@ -6598,7 +6791,7 @@
       },
       "SettingValue": {
         "type": "object",
-        "description": "One configuration value the report reasoned from.\n\nCarried back rather than left for the caller to re-fetch, because a\nrecommendation that does not show its inputs is not actionable — and\nbecause `is_explicit` is the difference between \"1 GiB\" and \"1 GiB\n(default)\", which is the difference between a decision and an inheritance.",
+        "description": "One configuration value the advice reasoned from.\n\nCarried back rather than left for the caller to re-fetch, because a\nrecommendation that does not show its inputs is not actionable — and\nbecause `is_explicit` is the difference between \"1 GiB\" and \"1 GiB\n(default)\", which is the difference between a decision and an inheritance.",
         "required": [
           "name",
           "isExplicit"
@@ -6623,7 +6816,7 @@
       },
       "Severity": {
         "type": "string",
-        "description": "How confident a diagnostic is, not how much it matters.\n\n`Info` is \"the configuration allows this\"; `Warn` is \"and the partitions\nshow it happening\". See the module docs — a lint that cannot tell those\napart gets disabled.",
+        "description": "How confident a diagnostic is, not how much it matters.\n\n`Info` is \"the configuration allows this\"; `Warn` is \"and the partitions\nshow it happening\". See [`lint`] — a rule that cannot tell those apart\ngets disabled.",
         "enum": [
           "warn",
           "info"
@@ -6741,34 +6934,49 @@
           }
         }
       },
-      "SizingReport": {
+      "SizingAdvice": {
         "type": "object",
-        "description": "The sizing report for one topic.",
+        "description": "The whole advisor's output for one topic.",
         "required": [
           "topic",
-          "partitions",
+          "topology",
           "settings",
+          "measured",
+          "assumptions",
+          "suggested",
+          "suggestedBecause",
+          "profiles",
           "diagnostics"
         ],
         "properties": {
+          "assumptions": {
+            "$ref": "#/components/schemas/Assumptions",
+            "description": "The numbers nothing in a log can supply, with the defaults used."
+          },
           "diagnostics": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/Diagnostic"
             },
-            "description": "What was found, worst first."
+            "description": "The configuration lint, which needs no scan and is profile-independent."
           },
-          "partitions": {
-            "type": "integer",
-            "description": "How many partitions it has, from metadata rather than from the sizes.",
-            "minimum": 0
+          "measured": {
+            "$ref": "#/components/schemas/Measured",
+            "description": "What the scan measured, in the units the advice reasons in."
+          },
+          "profiles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProfileAdvice"
+            },
+            "description": "Every profile, each with its own recommendation. All seven are\ncomputed in one pass so switching between them costs no request."
           },
           "settings": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/SettingValue"
             },
-            "description": "The configuration the diagnostics reasoned from."
+            "description": "The configuration every recommendation below reasoned from."
           },
           "sizes": {
             "oneOf": [
@@ -6777,13 +6985,25 @@
               },
               {
                 "$ref": "#/components/schemas/SizeEvidence",
-                "description": "What the disks hold, when `DescribeLogDirs` answered.\n\n`None` means the sizes were not asked for or did not arrive, and every\ndiagnostic below is then a configuration-only suspicion. It never\nmeans the topic is empty."
+                "description": "What the disks hold, when `DescribeLogDirs` answered.\n\n`None` means the sizes did not arrive. It never means the topic is\nempty."
               }
             ]
+          },
+          "suggested": {
+            "$ref": "#/components/schemas/Profile",
+            "description": "The profile the signals point at. Never a silent choice — the UI opens\non this one and says why."
+          },
+          "suggestedBecause": {
+            "type": "string",
+            "description": "Why that one, in a sentence."
           },
           "topic": {
             "type": "string",
             "description": "The topic."
+          },
+          "topology": {
+            "$ref": "#/components/schemas/Topology",
+            "description": "What the cluster is, structurally: partitions, replicas, brokers."
           }
         }
       },
@@ -7254,6 +7474,17 @@
             "format": "double",
             "description": "How much of the planned offset range was consumed, where known."
           },
+          "sizing": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SizingAdvice",
+                "description": "What the numbers above imply about how this topic is configured.\n\nAttached after the fold, from two describes the scan's own cost makes\nfree by comparison. `None` when neither answered — the statistics\nstand on their own, and a missing recommendation is not a missing\nresult."
+              }
+            ]
+          },
           "startedAt": {
             "type": "integer",
             "format": "int64",
@@ -7490,6 +7721,32 @@
           "underReplicatedPartitionCount": {
             "type": "integer",
             "description": "Partitions whose ISR is short.",
+            "minimum": 0
+          }
+        }
+      },
+      "Topology": {
+        "type": "object",
+        "description": "The topic's shape, which is metadata rather than measurement.",
+        "required": [
+          "partitions",
+          "replicationFactor",
+          "brokers"
+        ],
+        "properties": {
+          "brokers": {
+            "type": "integer",
+            "description": "Brokers in the cluster, which bounds what a replication factor may be.",
+            "minimum": 0
+          },
+          "partitions": {
+            "type": "integer",
+            "description": "Partitions.",
+            "minimum": 0
+          },
+          "replicationFactor": {
+            "type": "integer",
+            "description": "The smallest replica count across them.",
             "minimum": 0
           }
         }

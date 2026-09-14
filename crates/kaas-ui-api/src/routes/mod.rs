@@ -16,7 +16,6 @@ pub mod health;
 pub mod me;
 pub mod messages;
 pub mod schemas;
-pub mod sizing;
 pub mod spec;
 pub mod topics;
 

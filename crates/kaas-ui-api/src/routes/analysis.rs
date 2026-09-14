@@ -34,6 +34,11 @@ use kaas_ui_core::dto::StreamPhase;
 use kafka_read::{ScanEvent, ScanSpec, StartPosition};
 use serde::Deserialize;
 
+use kaas_ui_core::dto::ConfigEntryDto;
+use kaas_ui_core::sizing::{SizingAdvice, Topology};
+use kafka_admin::ConfigResource;
+use kafka_admin::types::oks;
+
 use crate::streaming::{self, Principal};
 use kaas_ui_auth::Kind;
 
@@ -65,6 +70,13 @@ const RING_CAPACITY: usize = 64;
 
 /// How often to send a comment so proxies see traffic mid-scan.
 const KEEP_ALIVE: Duration = Duration::from_secs(15);
+
+/// How long the two describes behind the sizing advice may take.
+///
+/// Shorter than the request timeout everywhere else, because this runs after
+/// the scan has finished and the caller is already looking at a spinner they
+/// thought was done. Advice is worth a second; it is not worth twenty.
+const DESCRIBE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// What the analysis stream can say.
 #[derive(Debug)]
@@ -362,14 +374,84 @@ async fn pump(
     } else {
         fraction
     };
-    tx.push(Frame::Result(Box::new(builder.render(
-        started_at,
-        now_ms(),
-        stopped_by,
-        fraction,
-        errors,
-    ))));
+    let result = builder.render(started_at, now_ms(), stopped_by, fraction, errors);
+    // The advice rides on the result rather than on a route of its own,
+    // because it needs exactly what the fold just produced — a write-rate
+    // curve, a byte size per record, a peak against a mean. Two describes
+    // against a scan that has already read every record on the topic is
+    // rounding error, and the pump is where both are already in hand.
+    let result = match sizing(&admin, &topic, &result).await {
+        Some(advice) => result.with_sizing(advice),
+        // A describe that did not answer costs the advice, never the
+        // statistics: the numbers above are what the caller asked for.
+        None => result,
+    };
+    tx.push(Frame::Result(Box::new(result)));
     tx.push(Frame::Phase(StreamPhase::Done));
+}
+
+/// The sizing advice for a finished scan.
+///
+/// `None` only when the topic is no longer in the snapshot — everything else
+/// degrades: a describe that fails leaves its half of the inputs empty, and
+/// the advice says which recommendations it could not make.
+async fn sizing(
+    admin: &kafka_admin::Admin,
+    topic: &str,
+    scan: &kaas_ui_core::analysis::TopicAnalysis,
+) -> Option<SizingAdvice> {
+    let snapshot = admin.cluster().snapshot();
+    let info = snapshot.topic(topic)?;
+
+    let topology = Topology {
+        partitions: info.partitions.len(),
+        // The smallest replica count across partitions, which is the rule the
+        // topic list applies — a topic mid-reassignment is described by its
+        // weakest partition, not by its luckiest.
+        replication_factor: info
+            .partitions
+            .iter()
+            .map(|partition| partition.replicas.len())
+            .min()
+            .unwrap_or(0),
+        brokers: snapshot.brokers().len(),
+    };
+
+    let entries: Vec<ConfigEntryDto> = match tokio::time::timeout(
+        DESCRIBE_TIMEOUT,
+        admin.describe_configs_documented(vec![ConfigResource::topic(topic.to_owned())]),
+    )
+    .await
+    {
+        Ok(Ok(described)) => oks(&described)
+            .flat_map(|(_, found)| found.iter().map(ConfigEntryDto::from))
+            .collect(),
+        _ => Vec::new(),
+    };
+
+    // Leader copies only: `segment.bytes` counts bytes in one log, so a
+    // comparison against the replicated total is wrong by the replication
+    // factor. kaas-lib has already done that filtering.
+    let leader_bytes: Option<Vec<(i32, i64)>> =
+        match tokio::time::timeout(DESCRIBE_TIMEOUT, admin.topic_sizes()).await {
+            Ok(Ok(sizes)) => oks(&sizes)
+                .find(|(name, _)| *name == topic)
+                .map(|(_, size)| {
+                    size.partitions
+                        .iter()
+                        .map(|partition| (partition.partition, partition.logical_bytes))
+                        .collect()
+                }),
+            _ => None,
+        };
+
+    Some(SizingAdvice::build(
+        topic,
+        topology,
+        &entries,
+        leader_bytes.as_deref(),
+        scan,
+    ))
 }
 
 fn render_progress(

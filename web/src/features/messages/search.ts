@@ -62,6 +62,26 @@ const fields = z.object({
   valueCodec: z.enum(["auto", "string", "hex", "json"]).optional(),
   /** `{partition}-{offset}` — the same id everything else keys on. */
   selected: z.string().optional(),
+  /**
+   * Which sizing profile the statistics tab's advice is showing.
+   *
+   * In the URL for the same reason the seek is: a recommendation someone
+   * wants to paste into a review comment has to survive the paste. Absent
+   * means the profile the topic's own signals point at, which is the server's
+   * answer rather than a stored preference — so a link with no profile on it
+   * opens on whatever the topic looks like today.
+   */
+  profile: z
+    .enum([
+      "balanced",
+      "compactedChangelog",
+      "highThroughput",
+      "lowLatency",
+      "bursty",
+      "streamsInternal",
+      "retentionPrecision",
+    ])
+    .optional(),
 })
 
 type Fields = z.infer<typeof fields>
@@ -110,7 +130,6 @@ export type MessageSearch = Fields
 export const TOPIC_TABS = [
   "overview",
   "configs",
-  "sizing",
   "messages",
   "statistics",
 ] as const

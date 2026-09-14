@@ -431,6 +431,14 @@ export interface TopicAnalysis {
   totalStats: AnalysisStats
   partitionStats: AnalysisStats[]
   errors: ResourceError[]
+  /**
+   * What the numbers above imply about how this topic is configured.
+   *
+   * Attached after the fold, from two describes the scan's own cost makes
+   * free by comparison. Absent when neither answered — the statistics stand
+   * on their own, and a missing recommendation is not a missing result.
+   */
+  sizing?: SizingAdvice
 }
 
 export interface ConfigEntry {
@@ -487,20 +495,112 @@ export interface SizeEvidence {
   logicalBytes: number
   smallestPartitionBytes: number
   largestPartitionBytes: number
-  /** Against `SizingReport.partitions`, how much of the topic the evidence covers. */
+  /** Against `Topology.partitions`, how much of the topic the evidence covers. */
   partitionsMeasured: number
 }
 
-export interface SizingReport {
-  topic: string
-  /** From metadata, not from the sizes. */
+/** The topic's shape, which is metadata rather than measurement. */
+export interface Topology {
   partitions: number
+  replicationFactor: number
+  brokers: number
+}
+
+/**
+ * What the scan measured, in the units the advice reasons in.
+ *
+ * Every field is null where its divisor was zero rather than 0 — an idle topic
+ * has no write rate, and a zero would put a one-partition recommendation on a
+ * topic nobody has produced to yet.
+ */
+export interface Measured {
+  records: number
+  complete: boolean
+  windowMs: number | null
+  /** The resolution the peak was measured at: the scan buckets by hour. */
+  bucketMs: number
+  meanRecordsPerSec: number | null
+  peakRecordsPerSec: number | null
+  peakToMean: number | null
+  bytesPerRecord: number | null
+  bytesPerRecordSource: string
+  payloadBytesPerRecord: number | null
+  /** Payload over on-disk bytes. Above 1 is compression working. */
+  compressionRatio: number | null
+  meanBytesPerSec: number | null
+  peakBytesPerSec: number | null
+  partitionSkew: number | null
+  keyedFraction: number | null
+  distinctKeyFraction: number | null
+  tombstoneFraction: number | null
+  clock?: string
+}
+
+/** The numbers nothing in a log can supply. Defaults, and labelled as such. */
+export interface Assumptions {
+  produceMibPerSecPerPartition: number
+  consumeMibPerSecPerConsumer: number
+  headroomPercent: number
+  segmentsPerRetention: number
+  throughputSegmentsPerRetention: number
+  compactedRollMinutes: number
+  overshootPercent: number
+  minSegmentMib: number
+  targetReplication: number
+  burstRatio: number
+  highThroughputMibPerSec: number
+  precisionWindowHours: number
+  smallRecordKib: number
+}
+
+/** What a topic is for, which nothing in its log records. */
+export type Profile =
+  | "balanced"
+  | "compactedChangelog"
+  | "highThroughput"
+  | "lowLatency"
+  | "bursty"
+  | "streamsInternal"
+  | "retentionPrecision"
+
+/** Which way a row points. */
+export type Change = "increase" | "decrease" | "keep" | "review"
+
+export interface Recommendation {
+  setting: string
+  current: string | null
+  /** Null when the measurement did not support a number; `why` says which input was missing. */
+  recommended: string | null
+  change: Change
+  why: string
+  /** What is irreversible about making the change. */
+  caution?: string
+}
+
+export interface ProfileAdvice {
+  profile: Profile
+  label: string
+  optimises: string
+  /** Whether this topic's signals point here. */
+  matched: boolean
+  /** Why it matched, or what would make it match. */
+  signal: string
+  rows: Recommendation[]
+}
+
+export interface SizingAdvice {
+  topic: string
+  topology: Topology
   settings: SettingValue[]
-  /**
-   * Absent when log dirs were not asked or did not answer — never because the
-   * topic is empty. Every diagnostic is then configuration-only.
-   */
+  /** Absent when log dirs did not answer — never because the topic is empty. */
   sizes?: SizeEvidence
+  measured: Measured
+  assumptions: Assumptions
+  /** The profile the signals point at. The card opens here and says why. */
+  suggested: Profile
+  suggestedBecause: string
+  /** All seven, so switching between them costs no request. */
+  profiles: ProfileAdvice[]
   diagnostics: Diagnostic[]
 }
 

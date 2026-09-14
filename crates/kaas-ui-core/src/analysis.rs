@@ -483,6 +483,7 @@ impl TopicAnalysisBuilder {
                 .map(|(&partition, accumulator)| accumulator.render(Some(partition)))
                 .collect(),
             errors,
+            sizing: None,
         }
     }
 }
@@ -564,6 +565,26 @@ pub struct TopicAnalysis {
     /// the API uses, so a partition lost mid-scan is a named entry rather
     /// than a discarded result.
     pub errors: Vec<ResourceError>,
+    /// What the numbers above imply about how this topic is configured.
+    ///
+    /// Attached after the fold, from two describes the scan's own cost makes
+    /// free by comparison. `None` when neither answered — the statistics
+    /// stand on their own, and a missing recommendation is not a missing
+    /// result.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sizing: Option<crate::sizing::SizingAdvice>,
+}
+
+impl TopicAnalysis {
+    /// Attach the sizing advice derived from this result.
+    ///
+    /// Consuming, `#[must_use]`, `with_`: the pump owns the result and hands
+    /// it straight to the encoder, so there is no row to mutate in place.
+    #[must_use]
+    pub fn with_sizing(mut self, advice: crate::sizing::SizingAdvice) -> Self {
+        self.sizing = Some(advice);
+        self
+    }
 }
 
 /// One accumulator's numbers: the topic's, or one partition's.
