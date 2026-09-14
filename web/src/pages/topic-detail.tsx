@@ -16,6 +16,7 @@ import { ArrowLeft } from "lucide-react"
 import { useClusters, useTopic } from "@/api/client"
 import { MessageBrowser } from "@/features/messages/browser"
 import type { TopicSearch, TopicTab } from "@/features/messages/search"
+import { TopicSizing } from "@/features/sizing"
 import { TopicStatistics } from "@/features/statistics"
 import { ErrorChips, Mono, Spinner } from "@/components/domain"
 import { Button } from "@/components/ui/button"
@@ -128,6 +129,10 @@ export function TopicDetailPage({
         <TabsList>
           <TabsTrigger value="overview">overview</TabsTrigger>
           <TabsTrigger value="configs">configs</TabsTrigger>
+          {/* Not gated on `messages_read`: the sizing report is two describes
+              and no payload, so it is exactly as available as the configs it
+              reasons from. */}
+          <TabsTrigger value="sizing">sizing</TabsTrigger>
           {mayReadMessages ? (
             <TabsTrigger value="messages">messages</TabsTrigger>
           ) : null}
@@ -163,6 +168,9 @@ export function TopicDetailPage({
         </TabsContent>
         <TabsContent value="configs" className="mt-4">
           <TopicConfigs envId={envId} clusterId={clusterId} topic={topic} />
+        </TabsContent>
+        <TabsContent value="sizing" className="mt-4">
+          <TopicSizing envId={envId} clusterId={clusterId} topic={topic} />
         </TabsContent>
         {/* Radix unmounts the hidden panel, and the statistics component
             closes its stream on unmount — so leaving this tab cancels a

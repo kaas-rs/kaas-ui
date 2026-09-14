@@ -110,6 +110,7 @@ export type MessageSearch = Fields
 export const TOPIC_TABS = [
   "overview",
   "configs",
+  "sizing",
   "messages",
   "statistics",
 ] as const

@@ -367,8 +367,8 @@ pub fn router(state: AppState) -> Router {
 
 fn api_router() -> Router<AppState> {
     use routes::{
-        admin, analysis, capabilities, clusters, configs, groups, me, messages, schemas, spec,
-        topics,
+        admin, analysis, capabilities, clusters, configs, groups, me, messages, schemas, sizing,
+        spec, topics,
     };
 
     Router::new()
@@ -437,6 +437,14 @@ fn api_router() -> Router<AppState> {
         .route(
             "/environments/{env}/clusters/{id}/topics/{topic}/messages/{partition}/{offset}",
             get(messages::one),
+        )
+        // The sizing advisor: what this topic's configuration implies about
+        // its segments, checked against what its partitions hold. Two
+        // describes and no payload, so it is gated like the configs tab
+        // rather than like the statistics one.
+        .route(
+            "/environments/{env}/clusters/{id}/topics/{topic}/sizing",
+            get(sizing::sizing),
         )
         // The statistics tab: a full-topic scan folded into an aggregate,
         // over SSE. One GET — cancellation is closing the response, so the

@@ -20,6 +20,7 @@ import type {
   Producer,
   Reassignment,
   ScramUser,
+  SizingReport,
   SubjectDetail,
   SubjectList,
   TopicDetail,
@@ -364,6 +365,24 @@ export function useTopicConfigs(env: string, id: string, topic: string) {
     queryFn: () =>
       get<Envelope<ConfigResourceEntry>>(
         `${cluster(env, id)}/topics/${encode(topic)}/configs`
+      ),
+  })
+}
+
+/**
+ * The sizing advisor's report for one topic.
+ *
+ * No interval. A topic's configuration changes when somebody runs a script,
+ * and the partition sizes it is read against move slowly enough that a
+ * refresh loop would spend a `DescribeLogDirs` fan-out per cluster to redraw
+ * the same chips — the same reasoning the admin screens apply.
+ */
+export function useTopicSizing(env: string, id: string, topic: string) {
+  return useQuery({
+    queryKey: ["sizing", env, id, topic],
+    queryFn: () =>
+      get<Envelope<SizingReport>>(
+        `${cluster(env, id)}/topics/${encode(topic)}/sizing`
       ),
   })
 }

@@ -31,6 +31,7 @@ pub mod error;
 pub mod federated;
 pub mod health;
 pub mod registry;
+pub mod sizing;
 
 pub use config::{ClusterEntry, Config};
 pub use envelope::{Envelope, ResourceError};

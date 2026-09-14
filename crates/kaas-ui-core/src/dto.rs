@@ -901,14 +901,19 @@ impl TopicDetail {
         // entry per partition *some broker reported a copy of*, which is not
         // the same list as the describe's, and zipping the two would put one
         // partition's bytes on another's row.
-        let by_index: HashMap<i32, i64> = size
+        let by_index: HashMap<i32, (i64, i64)> = size
             .partitions
             .iter()
-            .map(|partition| (partition.partition, partition.replicated_bytes))
+            .map(|partition| {
+                (
+                    partition.partition,
+                    (partition.logical_bytes, partition.replicated_bytes),
+                )
+            })
             .collect();
         for partition in &mut self.partitions {
-            if let Some(bytes) = by_index.get(&partition.partition) {
-                partition.set_size(*bytes);
+            if let Some((logical, replicated)) = by_index.get(&partition.partition) {
+                partition.set_size(*logical, *replicated);
             }
         }
 
@@ -962,11 +967,22 @@ pub struct Partition {
     /// Every non-future copy of this partition summed, when `?size=true`
     /// asked for it — what the disks hold for this one partition.
     ///
-    /// The replicated figure rather than the leader's copy, because the
-    /// question a per-partition size answers is "which one is the big one",
-    /// and because the leader's copy reads `0` on a leaderless partition
-    /// rather than declining to answer.
+    /// The replicated figure is the one a "which partition is the big one"
+    /// question wants, which is why it is the one the table renders.
     pub replicated_bytes: Option<i64>,
+    /// The leader's copy alone, when `?size=true` asked for it.
+    ///
+    /// The figure segment sizing reasons about: `segment.bytes` counts bytes
+    /// in one log, not bytes across a replica set, so comparing a segment
+    /// against `replicated_bytes` is wrong by the replication factor.
+    ///
+    /// `None` rather than `0` when no reported copy was the leader's — a
+    /// leaderless partition, or a leader whose describe failed. kaas-lib
+    /// reports that case as zero and says to read it against the replicated
+    /// figure before calling it empty; this is that read, done once, here.
+    /// A genuinely empty partition keeps its `Some(0)`, because that is a
+    /// claim and the other case is the absence of one.
+    pub logical_bytes: Option<i64>,
     /// The worst follower's offset lag, when `?size=true` asked for log dirs.
     ///
     /// `None` when sizes were not fetched *and* on a partition with no
@@ -992,6 +1008,7 @@ impl Partition {
             earliest_offset: None,
             latest_offset: None,
             replicated_bytes: None,
+            logical_bytes: None,
             max_follower_lag: None,
         }
     }
@@ -1005,9 +1022,15 @@ impl Partition {
         self.latest_offset = latest;
     }
 
-    /// Attach the on-disk size, fetched separately for the same reason.
-    pub fn set_size(&mut self, replicated: i64) {
+    /// Attach the on-disk sizes, fetched separately for the same reason.
+    ///
+    /// `logical` is dropped rather than stored when it is zero against a
+    /// non-zero `replicated`: kaas-lib reports "no copy reported was the
+    /// leader's" as zero, and storing that would render a replicated
+    /// partition as an empty one.
+    pub fn set_size(&mut self, logical: i64, replicated: i64) {
         self.replicated_bytes = Some(replicated);
+        self.logical_bytes = (logical > 0 || replicated == 0).then_some(logical);
     }
 }
 

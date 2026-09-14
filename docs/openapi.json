@@ -1489,6 +1489,65 @@
         }
       }
     },
+    "/api/environments/{env}/clusters/{id}/topics/{topic}/sizing": {
+      "get": {
+        "tags": [
+          "topics"
+        ],
+        "summary": "`GET /api/environments/{env}/clusters/{id}/topics/{topic}/sizing`",
+        "operationId": "sizing",
+        "parameters": [
+          {
+            "name": "env",
+            "in": "path",
+            "description": "Environment id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Cluster id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "topic",
+            "in": "path",
+            "description": "Topic name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "description": "Read partition sizes. Defaults to true",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sizing report",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope_SizingReport"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/environments/{env}/clusters/{id}/transactions": {
       "get": {
         "tags": [
@@ -2615,6 +2674,54 @@
             "description": "Its type."
           }
         }
+      },
+      "Diagnostic": {
+        "type": "object",
+        "description": "One finding.",
+        "required": [
+          "code",
+          "severity",
+          "summary",
+          "detail"
+        ],
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/DiagnosticCode",
+            "description": "What this is about."
+          },
+          "detail": {
+            "type": "string",
+            "description": "The derivation, for the panel underneath it. Every number this names\ncame from the cluster; none is assumed."
+          },
+          "partitions": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "description": "The partitions the evidence came from, where it came from partitions."
+          },
+          "severity": {
+            "$ref": "#/components/schemas/Severity",
+            "description": "How confident it is."
+          },
+          "summary": {
+            "type": "string",
+            "description": "One line, for a chip."
+          }
+        }
+      },
+      "DiagnosticCode": {
+        "type": "string",
+        "description": "What a diagnostic is about.\n\nA stable name the UI keys on, so the prose below can be rewritten without\nbreaking a chip, a filter or a link.",
+        "enum": [
+          "retentionOutlivesItsSegment",
+          "retentionBytesSmallerThanSegment",
+          "noRetentionAtAll",
+          "compactedTailNeverCleaned",
+          "segmentAboveIndexCeiling",
+          "skewedPartitions"
+        ]
       },
       "Dropped": {
         "type": "object",
@@ -3916,6 +4023,14 @@
                   "format": "int32",
                   "description": "Leader epoch."
                 },
+                "logicalBytes": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int64",
+                  "description": "The leader's copy alone, when `?size=true` asked for it.\n\nThe figure segment sizing reasons about: `segment.bytes` counts bytes\nin one log, not bytes across a replica set, so comparing a segment\nagainst `replicated_bytes` is wrong by the replication factor.\n\n`None` rather than `0` when no reported copy was the leader's — a\nleaderless partition, or a leader whose describe failed. kaas-lib\nreports that case as zero and says to read it against the replicated\nfigure before calling it empty; this is that read, done once, here.\nA genuinely empty partition keeps its `Some(0)`, because that is a\nclaim and the other case is the absence of one."
+                },
                 "maxFollowerLag": {
                   "type": [
                     "integer",
@@ -3951,7 +4066,7 @@
                     "null"
                   ],
                   "format": "int64",
-                  "description": "Every non-future copy of this partition summed, when `?size=true`\nasked for it — what the disks hold for this one partition.\n\nThe replicated figure rather than the leader's copy, because the\nquestion a per-partition size answers is \"which one is the big one\",\nand because the leader's copy reads `0` on a leaderless partition\nrather than declining to answer."
+                  "description": "Every non-future copy of this partition summed, when `?size=true`\nasked for it — what the disks hold for this one partition.\n\nThe replicated figure is the one a \"which partition is the big one\"\nquestion wants, which is why it is the one the table renders."
                 },
                 "underReplicated": {
                   "type": "boolean",
@@ -4194,6 +4309,90 @@
                 "user": {
                   "type": "string",
                   "description": "The user name."
+                }
+              }
+            },
+            "description": "The resources that answered."
+          },
+          "snapshotAgeMs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Age of the metadata snapshot the answer was built from, where one was\ninvolved. This is what makes \"as of 4 seconds ago\" honest.",
+            "minimum": 0
+          },
+          "total": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "How many resources matched before paging or truncation.\n\nPresent only where the endpoint pages. Filtering and sorting happen on\nthe server — a fleet with a five-thousand-topic cluster in it is real —\nso the browser needs to be told what it is looking at a window into.",
+            "minimum": 0
+          }
+        }
+      },
+      "Envelope_SizingReport": {
+        "type": "object",
+        "description": "What every data endpoint returns.",
+        "required": [
+          "items",
+          "errors"
+        ],
+        "properties": {
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResourceError"
+            },
+            "description": "The resources that did not. Non-empty is still `200 OK`."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "The sizing report for one topic.",
+              "required": [
+                "topic",
+                "partitions",
+                "settings",
+                "diagnostics"
+              ],
+              "properties": {
+                "diagnostics": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Diagnostic"
+                  },
+                  "description": "What was found, worst first."
+                },
+                "partitions": {
+                  "type": "integer",
+                  "description": "How many partitions it has, from metadata rather than from the sizes.",
+                  "minimum": 0
+                },
+                "settings": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SettingValue"
+                  },
+                  "description": "The configuration the diagnostics reasoned from."
+                },
+                "sizes": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SizeEvidence",
+                      "description": "What the disks hold, when `DescribeLogDirs` answered.\n\n`None` means the sizes were not asked for or did not arrive, and every\ndiagnostic below is then a configuration-only suspicion. It never\nmeans the topic is empty."
+                    }
+                  ]
+                },
+                "topic": {
+                  "type": "string",
+                  "description": "The topic."
                 }
               }
             },
@@ -5697,6 +5896,14 @@
             "format": "int32",
             "description": "Leader epoch."
           },
+          "logicalBytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The leader's copy alone, when `?size=true` asked for it.\n\nThe figure segment sizing reasons about: `segment.bytes` counts bytes\nin one log, not bytes across a replica set, so comparing a segment\nagainst `replicated_bytes` is wrong by the replication factor.\n\n`None` rather than `0` when no reported copy was the leader's — a\nleaderless partition, or a leader whose describe failed. kaas-lib\nreports that case as zero and says to read it against the replicated\nfigure before calling it empty; this is that read, done once, here.\nA genuinely empty partition keeps its `Some(0)`, because that is a\nclaim and the other case is the absence of one."
+          },
           "maxFollowerLag": {
             "type": [
               "integer",
@@ -5732,7 +5939,7 @@
               "null"
             ],
             "format": "int64",
-            "description": "Every non-future copy of this partition summed, when `?size=true`\nasked for it — what the disks hold for this one partition.\n\nThe replicated figure rather than the leader's copy, because the\nquestion a per-partition size answers is \"which one is the big one\",\nand because the leader's copy reads `0` on a leaderless partition\nrather than declining to answer."
+            "description": "Every non-future copy of this partition summed, when `?size=true`\nasked for it — what the disks hold for this one partition.\n\nThe replicated figure is the one a \"which partition is the big one\"\nquestion wants, which is why it is the one the table renders."
           },
           "underReplicated": {
             "type": "boolean",
@@ -6389,6 +6596,71 @@
           "toTime"
         ]
       },
+      "SettingValue": {
+        "type": "object",
+        "description": "One configuration value the report reasoned from.\n\nCarried back rather than left for the caller to re-fetch, because a\nrecommendation that does not show its inputs is not actionable — and\nbecause `is_explicit` is the difference between \"1 GiB\" and \"1 GiB\n(default)\", which is the difference between a decision and an inheritance.",
+        "required": [
+          "name",
+          "isExplicit"
+        ],
+        "properties": {
+          "isExplicit": {
+            "type": "boolean",
+            "description": "Whether somebody set it, rather than it being inherited."
+          },
+          "name": {
+            "type": "string",
+            "description": "The key."
+          },
+          "value": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The effective value. `None` when the broker did not report the key at\nall — which is not the same as an empty value."
+          }
+        }
+      },
+      "Severity": {
+        "type": "string",
+        "description": "How confident a diagnostic is, not how much it matters.\n\n`Info` is \"the configuration allows this\"; `Warn` is \"and the partitions\nshow it happening\". See the module docs — a lint that cannot tell those\napart gets disabled.",
+        "enum": [
+          "warn",
+          "info"
+        ]
+      },
+      "SizeEvidence": {
+        "type": "object",
+        "description": "What the partitions hold, when log directories answered.",
+        "required": [
+          "logicalBytes",
+          "smallestPartitionBytes",
+          "largestPartitionBytes",
+          "partitionsMeasured"
+        ],
+        "properties": {
+          "largestPartitionBytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The largest."
+          },
+          "logicalBytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The leader's copy of every measured partition, summed."
+          },
+          "partitionsMeasured": {
+            "type": "integer",
+            "description": "How many partitions a broker reported a leader's copy for.\n\nAgainst the topic's partition count this says how much of the topic\nthe evidence covers — a fan-out that lost a broker measures fewer.",
+            "minimum": 0
+          },
+          "smallestPartitionBytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The smallest measured partition."
+          }
+        }
+      },
       "SizeStats": {
         "type": "object",
         "description": "Size statistics for one side of the record.\n\n`sum`, `min`, `max` and `avg` are exact; **the percentiles are sketch\nestimates** with a bounded relative error of ~±4%, and the UI must label\nthem so — a p99 read as exact gets used to justify a partitioning decision.",
@@ -6466,6 +6738,52 @@
             "format": "int64",
             "description": "Total bytes, exact.",
             "minimum": 0
+          }
+        }
+      },
+      "SizingReport": {
+        "type": "object",
+        "description": "The sizing report for one topic.",
+        "required": [
+          "topic",
+          "partitions",
+          "settings",
+          "diagnostics"
+        ],
+        "properties": {
+          "diagnostics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Diagnostic"
+            },
+            "description": "What was found, worst first."
+          },
+          "partitions": {
+            "type": "integer",
+            "description": "How many partitions it has, from metadata rather than from the sizes.",
+            "minimum": 0
+          },
+          "settings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SettingValue"
+            },
+            "description": "The configuration the diagnostics reasoned from."
+          },
+          "sizes": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SizeEvidence",
+                "description": "What the disks hold, when `DescribeLogDirs` answered.\n\n`None` means the sizes were not asked for or did not arrive, and every\ndiagnostic below is then a configuration-only suspicion. It never\nmeans the topic is empty."
+              }
+            ]
+          },
+          "topic": {
+            "type": "string",
+            "description": "The topic."
           }
         }
       },

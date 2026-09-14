@@ -898,6 +898,146 @@ async fn assertions() -> Result<Acceptance, String> {
         );
     }
 
+    // --- sizing: the advisor's config lint -----------------------------------
+    //
+    // Shape, not content. Every assertion here holds whatever the topic
+    // happens to contain today, because the one live assertion this workspace
+    // has already lost was lost to a fixture that changed size — see
+    // docs/11-built.md. Whether `kaas-canary-v1` trips a rule depends on how
+    // Strimzi and kaas were configured this week; that its report is
+    // internally consistent does not.
+    for id in &ids {
+        let topic = "kaas-canary-v1";
+        let detail = get(
+            &client,
+            &format!("/api/environments/{ENV}/clusters/{id}/topics/{topic}"),
+        )
+        .await?;
+        let declared = detail["items"][0]["partitions"]
+            .as_array()
+            .map_or(0, Vec::len);
+
+        let report = get(
+            &client,
+            &format!("/api/environments/{ENV}/clusters/{id}/topics/{topic}/sizing"),
+        )
+        .await?;
+        let body = &report["items"][0];
+        let partitions = body["partitions"].as_u64().unwrap_or_default();
+
+        acceptance.check(
+            &format!("{id}: the sizing report counts partitions from metadata"),
+            if partitions as usize == declared && declared > 0 {
+                Ok(format!("{partitions} partitions"))
+            } else {
+                Err(format!(
+                    "report says {partitions}, describe says {declared}"
+                ))
+            },
+        );
+
+        // A short log-dirs fan-out narrows the evidence. It must never widen
+        // it: a report claiming more measured partitions than the topic has is
+        // a join that put one partition's bytes on another's row.
+        let measured = body["sizes"]["partitionsMeasured"].as_u64();
+        acceptance.check(
+            &format!("{id}: the evidence covers at most the partitions that exist"),
+            match measured {
+                Some(found) if found <= partitions => Ok(format!("{found} of {partitions}")),
+                Some(found) => Err(format!("{found} measured of {partitions} declared")),
+                None => Ok("no sizes read".to_owned()),
+            },
+        );
+
+        let diagnostics = body["diagnostics"].as_array().cloned().unwrap_or_default();
+        let named: Vec<u64> = diagnostics
+            .iter()
+            .filter_map(|found| found["partitions"].as_array())
+            .flatten()
+            .filter_map(Value::as_u64)
+            .collect();
+        acceptance.check(
+            &format!("{id}: every diagnostic names a partition that exists"),
+            if named.iter().all(|partition| *partition < partitions) {
+                Ok(format!(
+                    "{} findings, {} cited",
+                    diagnostics.len(),
+                    named.len()
+                ))
+            } else {
+                Err(format!("cited {named:?} of {partitions}"))
+            },
+        );
+
+        acceptance.check(
+            &format!("{id}: every diagnostic carries its derivation"),
+            if diagnostics.iter().all(|found| {
+                found["summary"].as_str().is_some_and(|s| !s.is_empty())
+                    && found["detail"].as_str().is_some_and(|s| !s.is_empty())
+            }) {
+                Ok(format!("{} findings", diagnostics.len()))
+            } else {
+                Err("a finding arrived without prose".into())
+            },
+        );
+
+        // The settings the findings reason from are on the report, so a
+        // reader never has to take the derivation on trust.
+        let keys: Vec<&str> = body["settings"]
+            .as_array()
+            .map(|entries| {
+                entries
+                    .iter()
+                    .filter_map(|entry| entry["name"].as_str())
+                    .collect()
+            })
+            .unwrap_or_default();
+        acceptance.check(
+            &format!("{id}: the report carries the settings it read"),
+            if keys.contains(&"retention.ms") && keys.contains(&"segment.ms") {
+                Ok(format!("{} keys", keys.len()))
+            } else {
+                Err(format!("settings were {keys:?}"))
+            },
+        );
+
+        // Without sizes there is no evidence, and the absence is said rather
+        // than rendered as an empty topic.
+        let cheap = get(
+            &client,
+            &format!("/api/environments/{ENV}/clusters/{id}/topics/{topic}/sizing?size=false"),
+        )
+        .await?;
+        acceptance.check(
+            &format!("{id}: ?size=false omits the evidence rather than inventing it"),
+            if cheap["items"][0]["sizes"].is_null() {
+                Ok(String::new())
+            } else {
+                Err("sizes arrived anyway".into())
+            },
+        );
+
+        // Severity is confidence: a finding that depends on what the
+        // partitions hold cannot be a warning when nothing was measured.
+        let unmeasured_warns = cheap["items"][0]["diagnostics"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .filter(|found| found["severity"] == "warn")
+            .filter_map(|found| found["code"].as_str().map(str::to_owned))
+            .filter(|code| code != "retentionBytesSmallerThanSegment")
+            .collect::<Vec<String>>();
+        acceptance.check(
+            &format!("{id}: nothing warns on evidence it did not read"),
+            if unmeasured_warns.is_empty() {
+                Ok(String::new())
+            } else {
+                Err(format!("{unmeasured_warns:?} warned with no sizes"))
+            },
+        );
+    }
+
     // --- analysis: the statistics tab's full-topic scan ----------------------
     //
     // `kaas-canary-v1` exists on both clusters and scans in seconds. The

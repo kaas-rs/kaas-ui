@@ -322,6 +322,15 @@ export interface Partition {
   /** Every non-future copy summed. Null until `?size=true` answers. */
   replicatedBytes: number | null
   /**
+   * The leader's copy alone. Null until `?size=true` answers, and on a
+   * partition no broker reported a leader's copy for — never 0 for that case,
+   * because 0 is a claim that the partition is empty.
+   *
+   * The figure to compare against `segment.bytes`: a segment counts bytes in
+   * one log, so `replicatedBytes` is wrong by the replication factor.
+   */
+  logicalBytes: number | null
+  /**
    * The worst follower's offset lag. Null until `?size=true` answers, and on
    * a partition with no followers; 0 is a claim that every follower is
    * caught up.
@@ -439,6 +448,60 @@ export interface ConfigResourceEntry {
   resourceType: string
   name: string
   entries: ConfigEntry[]
+}
+
+/** How confident a sizing diagnostic is, not how much it matters. */
+export type Severity = "warn" | "info"
+
+/**
+ * What a sizing diagnostic is about.
+ *
+ * The stable half of a finding: the prose moves, this does not, so a chip or
+ * a link may key on it.
+ */
+export type DiagnosticCode =
+  | "retentionOutlivesItsSegment"
+  | "retentionBytesSmallerThanSegment"
+  | "noRetentionAtAll"
+  | "compactedTailNeverCleaned"
+  | "segmentAboveIndexCeiling"
+  | "skewedPartitions"
+
+export interface Diagnostic {
+  code: DiagnosticCode
+  severity: Severity
+  summary: string
+  /** The derivation. Every number in it came from the cluster. */
+  detail: string
+  /** The partitions the evidence came from. Absent when it came from configuration alone. */
+  partitions?: number[]
+}
+
+export interface SettingValue {
+  name: string
+  value: string | null
+  isExplicit: boolean
+}
+
+export interface SizeEvidence {
+  logicalBytes: number
+  smallestPartitionBytes: number
+  largestPartitionBytes: number
+  /** Against `SizingReport.partitions`, how much of the topic the evidence covers. */
+  partitionsMeasured: number
+}
+
+export interface SizingReport {
+  topic: string
+  /** From metadata, not from the sizes. */
+  partitions: number
+  settings: SettingValue[]
+  /**
+   * Absent when log dirs were not asked or did not answer — never because the
+   * topic is empty. Every diagnostic is then configuration-only.
+   */
+  sizes?: SizeEvidence
+  diagnostics: Diagnostic[]
 }
 
 export interface LogDirReplica {
