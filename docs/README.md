@@ -84,6 +84,6 @@ than by reading docs, and they shape everything above:
    acceptance commands run against real brokers, not containers — see
    [reference/environment.md](reference/environment.md).
 3. **The capability difference between the two clusters is large and real** —
-   `kaas` advertises 37 api keys, Strimzi 75. Every degradation path in PLAN.md
+   `kaas` advertises 40 api keys, Strimzi 75. Every degradation path in PLAN.md
    §5 and §7 has a live fixture from day one, which is why Phase 1 built the
    degradation components rather than deferring them.
