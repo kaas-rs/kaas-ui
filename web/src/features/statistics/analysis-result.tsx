@@ -76,114 +76,6 @@ export function AnalysisResult({
         </p>
       ) : null}
 
-      {/* The overview: what the run was, and the headline numbers it
-          produced, in one card above the rail rather than inside either
-          sub-page. Both of them describe this scan — the advisor's rates come
-          out of the same fold — so "capped", "analysed at" and the way back
-          to `analyse again` belong to the page, not to one of its pages. */}
-      <Section title="Overview">
-        <Card className="space-y-4 px-5 py-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="text-ink-muted flex flex-wrap items-center gap-2 text-[12px]">
-              <Badge
-                variant={
-                  result.stoppedBy === "end"
-                    ? "outline"
-                    : result.stoppedBy === "messageCap"
-                      ? "secondary"
-                      : "destructive"
-                }
-              >
-                {
-                  {
-                    end: "complete",
-                    messageCap: "capped",
-                    timeCap: "time-capped",
-                    error: "partial",
-                  }[result.stoppedBy]
-                }
-              </Badge>
-              <span>
-                analysed{" "}
-                {formatTimestamp(result.startedAt, timeZone, dateOrder)}
-                {" · "}took {duration(result.finishedAt - result.startedAt)}
-              </span>
-            </div>
-            <Button size="sm" variant="outline" onClick={onRerun}>
-              analyse again
-            </Button>
-          </div>
-          <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-[13px] sm:grid-cols-4">
-            <Stat
-              label="messages scanned"
-              value={count(totals.totalMsgs)}
-              hint="records read and folded — on a compacted or transactional topic this is legitimately below the offset span"
-            />
-            <Stat
-              label="payload bytes"
-              value={bytes(
-                (totals.keySize?.sum ?? 0) + (totals.valueSize?.sum ?? 0)
-              )}
-              note="keys + values"
-              hint="the bytes actually carried by keys and values, before replication — not the on-disk size"
-            />
-            <Stat
-              label="≈ unique keys"
-              value={count(totals.approxUniqKeys)}
-              note="estimate"
-              hint="distinct keys, from a cardinality sketch (±1.6%) — against messages scanned it reads as compaction headroom"
-            />
-            <Stat
-              label="≈ unique values"
-              value={count(totals.approxUniqValues)}
-              note="estimate"
-              hint="distinct values, from the same sketch — far below the message count means repeated payloads"
-            />
-            <Stat
-              label="null keys"
-              value={count(totals.nullKeys)}
-              hint="records written without a key; they partition round-robin and can never be compacted together"
-            />
-            <Stat
-              label="tombstones"
-              value={count(totals.nullValues)}
-              note="null values"
-              hint="records with a null value — deletion markers on a compacted topic, and not the same as an empty value"
-            />
-            <Stat
-              label="no timestamp"
-              value={count(totals.missingTimestamps)}
-              note={
-                totals.missingTimestamps > 0
-                  ? "excluded from the chart"
-                  : undefined
-              }
-              hint="records whose producer set no timestamp; counted here rather than plotted as 1970"
-            />
-            <Stat
-              label="malformed batches"
-              value={count(totals.malformedBatches)}
-              tone={totals.malformedBatches > 0 ? "warn" : undefined}
-              hint="batches that would not decode at the protocol level — skipped and counted, the scan continues past them"
-            />
-          </dl>
-          {totals.minTimestamp !== undefined &&
-          totals.maxTimestamp !== undefined ? (
-            <p className="text-[12px] text-ink-muted">
-              written between{" "}
-              <span className="font-mono">
-                {formatTimestamp(totals.minTimestamp, timeZone, dateOrder)}
-              </span>{" "}
-              and{" "}
-              <span className="font-mono">
-                {formatTimestamp(totals.maxTimestamp, timeZone, dateOrder)}
-              </span>
-              {result.clock ? <> · {result.clock}</> : null}
-            </p>
-          ) : null}
-        </Card>
-      </Section>
-
       {/* The rail first in the DOM and on the right on a wide screen:
           `flex-row-reverse` gets the placement without costing a screen
           reader — or a phone, where it lands above the content it steers. */}
@@ -196,6 +88,123 @@ export function AnalysisResult({
         <div className="min-w-0 flex-1 space-y-6">
           {view === "statistics" ? (
             <>
+              {/* The overview: what the run was, and the headline numbers it
+                  produced, in one card. The banners above it carry the same warning
+                  to whichever sub-page is open, so the advisor does not lose the fact
+                  that a scan was capped by not having this card on it. */}
+              <Section title="Overview">
+                <Card className="space-y-4 px-5 py-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="text-ink-muted flex flex-wrap items-center gap-2 text-[12px]">
+                      <Badge
+                        variant={
+                          result.stoppedBy === "end"
+                            ? "outline"
+                            : result.stoppedBy === "messageCap"
+                              ? "secondary"
+                              : "destructive"
+                        }
+                      >
+                        {
+                          {
+                            end: "complete",
+                            messageCap: "capped",
+                            timeCap: "time-capped",
+                            error: "partial",
+                          }[result.stoppedBy]
+                        }
+                      </Badge>
+                      <span>
+                        analysed{" "}
+                        {formatTimestamp(result.startedAt, timeZone, dateOrder)}
+                        {" · "}took{" "}
+                        {duration(result.finishedAt - result.startedAt)}
+                      </span>
+                    </div>
+                    <Button size="sm" variant="outline" onClick={onRerun}>
+                      analyse again
+                    </Button>
+                  </div>
+                  <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-[13px] sm:grid-cols-4">
+                    <Stat
+                      label="messages scanned"
+                      value={count(totals.totalMsgs)}
+                      hint="records read and folded — on a compacted or transactional topic this is legitimately below the offset span"
+                    />
+                    <Stat
+                      label="payload bytes"
+                      value={bytes(
+                        (totals.keySize?.sum ?? 0) +
+                          (totals.valueSize?.sum ?? 0)
+                      )}
+                      note="keys + values"
+                      hint="the bytes actually carried by keys and values, before replication — not the on-disk size"
+                    />
+                    <Stat
+                      label="≈ unique keys"
+                      value={count(totals.approxUniqKeys)}
+                      note="estimate"
+                      hint="distinct keys, from a cardinality sketch (±1.6%) — against messages scanned it reads as compaction headroom"
+                    />
+                    <Stat
+                      label="≈ unique values"
+                      value={count(totals.approxUniqValues)}
+                      note="estimate"
+                      hint="distinct values, from the same sketch — far below the message count means repeated payloads"
+                    />
+                    <Stat
+                      label="null keys"
+                      value={count(totals.nullKeys)}
+                      hint="records written without a key; they partition round-robin and can never be compacted together"
+                    />
+                    <Stat
+                      label="tombstones"
+                      value={count(totals.nullValues)}
+                      note="null values"
+                      hint="records with a null value — deletion markers on a compacted topic, and not the same as an empty value"
+                    />
+                    <Stat
+                      label="no timestamp"
+                      value={count(totals.missingTimestamps)}
+                      note={
+                        totals.missingTimestamps > 0
+                          ? "excluded from the chart"
+                          : undefined
+                      }
+                      hint="records whose producer set no timestamp; counted here rather than plotted as 1970"
+                    />
+                    <Stat
+                      label="malformed batches"
+                      value={count(totals.malformedBatches)}
+                      tone={totals.malformedBatches > 0 ? "warn" : undefined}
+                      hint="batches that would not decode at the protocol level — skipped and counted, the scan continues past them"
+                    />
+                  </dl>
+                  {totals.minTimestamp !== undefined &&
+                  totals.maxTimestamp !== undefined ? (
+                    <p className="text-[12px] text-ink-muted">
+                      written between{" "}
+                      <span className="font-mono">
+                        {formatTimestamp(
+                          totals.minTimestamp,
+                          timeZone,
+                          dateOrder
+                        )}
+                      </span>{" "}
+                      and{" "}
+                      <span className="font-mono">
+                        {formatTimestamp(
+                          totals.maxTimestamp,
+                          timeZone,
+                          dateOrder
+                        )}
+                      </span>
+                      {result.clock ? <> · {result.clock}</> : null}
+                    </p>
+                  ) : null}
+                </Card>
+              </Section>
+
               <Section title="Record sizes">
                 <Card>
                   <CardContent className="space-y-2">
