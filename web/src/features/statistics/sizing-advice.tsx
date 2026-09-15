@@ -268,10 +268,19 @@ function Chosen({ advice, chosen }: { advice: Advice; chosen: ProfileAdvice }) {
  */
 function Rows({ rows }: { rows: Recommendation[] }) {
   return (
-    <div className="rounded-md border">
+    // Inset rather than outlined. A bordered table on a raised card is
+    // raised-on-raised — the same value either side of a hairline, which is
+    // the least contrast the palette can produce. Sunken puts it a step
+    // *below* the card it sits in, which is what it is, and the row hover
+    // then has somewhere to go: up, to the card's own value.
+    //
+    // Darkening the ground costs the text contrast it gains on the edges,
+    // which is why `why` is full ink here rather than muted — on light,
+    // muted ink on the sunken value is the weakest pairing on the page.
+    <div className="border-line-strong bg-surface-sunken overflow-hidden rounded-md border">
       <Table>
-        <TableHeader>
-          <TableRow>
+        <TableHeader className="[&_tr]:border-line-strong">
+          <TableRow className="hover:bg-transparent">
             <HintHead
               label="setting"
               hint="spelled as the broker spells it, except the replication factor, which is not a topic config at all"
@@ -290,9 +299,9 @@ function Rows({ rows }: { rows: Recommendation[] }) {
             />
           </TableRow>
         </TableHeader>
-        <TableBody>
+        <TableBody className="[&_tr]:border-line-strong">
           {rows.map((row) => (
-            <TableRow key={row.setting}>
+            <TableRow key={row.setting} className="hover:bg-surface-raised">
               <TableCell className="font-mono align-top whitespace-nowrap">
                 {row.setting}
               </TableCell>
@@ -303,7 +312,7 @@ function Rows({ rows }: { rows: Recommendation[] }) {
                 <span className="font-mono">{row.recommended ?? "—"}</span>
                 <ChangeBadge change={row.change} />
               </TableCell>
-              <TableCell className="text-ink-muted max-w-prose align-top text-[12px] leading-relaxed">
+              <TableCell className="max-w-prose align-top text-[12px] leading-relaxed">
                 <Ticked text={row.why} />
                 {row.caution ? (
                   <p className="text-warn-ink mt-1.5">
@@ -323,8 +332,11 @@ function Rows({ rows }: { rows: Recommendation[] }) {
 function ChangeBadge({ change }: { change: Change }) {
   if (change === "keep") return null
   const label = { increase: "raise", decrease: "lower", review: "look" }[change]
+  // Outlined, not filled: `secondary` is the sunken surface, which is the
+  // ground this table now sits on — a filled badge there is a badge nobody
+  // can see. An edge reads against any of the three surfaces.
   return (
-    <Badge variant="secondary" className="ml-2">
+    <Badge variant="outline" className="border-line-strong ml-2">
       {label}
     </Badge>
   )
