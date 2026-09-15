@@ -7,7 +7,7 @@ import { ErrorChips, Section, Stat } from "@/components/domain"
 import { bytes, count, duration } from "@/lib/format"
 import {
   displayTimeZone,
-  formatTimestamp,
+  formatClock,
   useResolvedDateOrder,
 } from "@/lib/settings"
 
@@ -153,45 +153,41 @@ export function AnalysisResult({
                     hint="batches that would not decode at the protocol level — skipped and counted, the scan continues past them"
                   />
                 </dl>
-                {/* When the scan ran, what it covered, and the way to run
-                    it again — one footer rather than a header strip. The
-                    run's own timing sits above the window it measured
-                    because the two are read together: "563 ms" means
-                    something different against a day of records than against
-                    a minute of them. Whether it completed is said by the
-                    banners above the rail, and only when the answer is
-                    interesting. */}
-                <div className="text-ink-muted flex flex-wrap items-end justify-between gap-3 text-[12px]">
-                  <div className="space-y-1">
-                    <p>
-                      analysed{" "}
-                      {formatTimestamp(result.startedAt, timeZone, dateOrder)}
-                      {" · "}took{" "}
-                      {duration(result.finishedAt - result.startedAt)}
-                    </p>
+                {/* One line: the window the records span, the clock that
+                    stamped them, and when this run happened. To the second
+                    rather than the millisecond — a millisecond tells two
+                    records apart and says nothing about a range or a clock.
+
+                    The record timestamps are mono because the broker said
+                    them; "analysed … in …" is ours, so it is not. */}
+                <div className="text-ink-muted flex flex-wrap items-center justify-between gap-x-4 gap-y-2 text-[12px]">
+                  <p>
                     {totals.minTimestamp !== undefined &&
                     totals.maxTimestamp !== undefined ? (
-                      <p>
-                        written between{" "}
+                      <>
                         <span className="font-mono">
-                          {formatTimestamp(
+                          {formatClock(
                             totals.minTimestamp,
                             timeZone,
                             dateOrder
                           )}
-                        </span>{" "}
-                        and{" "}
+                        </span>
+                        {" → "}
                         <span className="font-mono">
-                          {formatTimestamp(
+                          {formatClock(
                             totals.maxTimestamp,
                             timeZone,
                             dateOrder
                           )}
                         </span>
                         {result.clock ? <> · {result.clock}</> : null}
-                      </p>
+                        {" · "}
+                      </>
                     ) : null}
-                  </div>
+                    analysed{" "}
+                    {formatClock(result.startedAt, timeZone, dateOrder)} in{" "}
+                    {duration(result.finishedAt - result.startedAt)}
+                  </p>
                   <Button size="sm" variant="outline" onClick={onRerun}>
                     analyse again
                   </Button>
