@@ -23,8 +23,15 @@ import type {
   SizingAdvice as Advice,
 } from "@/api/types"
 import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
+import { Label } from "@/components/ui/label"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import {
   Table,
   TableBody,
@@ -58,26 +65,30 @@ export function SizingAdviceSections({
         <MeasuredCard advice={advice} />
       </Section>
 
+      {/* One card, not four. Picking a profile, reading what it optimises
+          for, reading the rows it produced and checking the assumptions
+          underneath them are one act — split across cards, the reader has to
+          remember which profile the table two cards down belongs to. */}
       <Section title="Sizing advice">
-        <div className="space-y-4">
-          <Card>
-            <CardContent className="space-y-4">
-              <Profiles
-                profiles={advice.profiles}
-                chosen={chosen?.profile}
-                suggested={advice.suggested}
-                onProfile={onProfile}
-              />
-              {chosen ? (
+        <Card>
+          <CardContent className="space-y-5">
+            <ProfileSelect
+              profiles={advice.profiles}
+              chosen={chosen?.profile}
+              suggested={advice.suggested}
+              onProfile={onProfile}
+            />
+            {chosen ? (
+              <>
                 <Chosen advice={advice} chosen={chosen} />
-              ) : (
-                <Empty>the server offered no profiles</Empty>
-              )}
-            </CardContent>
-          </Card>
-          {chosen ? <Rows rows={chosen.rows} /> : null}
-          <AssumptionsNote advice={advice} />
-        </div>
+                <Rows rows={chosen.rows} />
+              </>
+            ) : (
+              <Empty>the server offered no profiles</Empty>
+            )}
+            <Assumptions advice={advice} />
+          </CardContent>
+        </Card>
       </Section>
 
       <Section title="Configuration findings">
@@ -180,7 +191,16 @@ function MeasuredCard({ advice }: { advice: Advice }) {
   )
 }
 
-function Profiles({
+/**
+ * The profile picker.
+ *
+ * A select rather than seven chips: these are alternatives to be read one at
+ * a time, not filters to be toggled, and a row of seven long labels is most
+ * of a card spent on options the reader is not taking. The one the topic's
+ * own signals point at is marked in the list, so choosing differently is a
+ * decision made against something rather than in the dark.
+ */
+function ProfileSelect({
   profiles,
   chosen,
   suggested,
@@ -192,23 +212,30 @@ function Profiles({
   onProfile(profile: Profile): void
 }) {
   return (
-    <div className="flex flex-wrap gap-2">
-      {profiles.map((entry) => (
-        <Button
-          key={entry.profile}
-          size="sm"
-          variant={entry.profile === chosen ? "default" : "outline"}
-          onClick={() => onProfile(entry.profile)}
+    <Label className="text-ink-faint gap-2 text-xs font-normal">
+      optimise for
+      <Select
+        value={chosen}
+        onValueChange={(next) => onProfile(next as Profile)}
+      >
+        <SelectTrigger
+          className="w-full sm:w-[17rem]"
+          aria-label="sizing profile"
         >
-          {entry.label}
-          {entry.profile === suggested ? (
-            <span className="ml-1.5 text-[10px] tracking-wide uppercase opacity-70">
-              signal
-            </span>
-          ) : null}
-        </Button>
-      ))}
-    </div>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {profiles.map((entry) => (
+            <SelectItem key={entry.profile} value={entry.profile}>
+              {entry.label}
+              {entry.profile === suggested ? (
+                <span className="text-ink-faint">· signal</span>
+              ) : null}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </Label>
   )
 }
 
@@ -311,7 +338,7 @@ function ChangeBadge({ change }: { change: Change }) {
  * capacities in particular are conservative guesses that span an order of
  * magnitude in the published figures.
  */
-function AssumptionsNote({ advice }: { advice: Advice }) {
+function Assumptions({ advice }: { advice: Advice }) {
   const a = advice.assumptions
   const items: Array<[string, string]> = [
     [
@@ -328,26 +355,24 @@ function AssumptionsNote({ advice }: { advice: Advice }) {
     ["precision window", `${a.precisionWindowHours} h`],
   ]
   return (
-    <Card>
-      <CardContent className="space-y-3">
-        <p className="text-ink-muted text-[12px] leading-relaxed">
-          <strong>Assumed, not measured.</strong> Nothing in a log says what one
-          partition can absorb or what one consumer keeps up with, so these are
-          defaults — deliberately conservative, which makes every partition
-          recommendation above err high rather than low. The cluster holds{" "}
-          {advice.topology.brokers} broker(s), which is what bounds the replica
-          count.
-        </p>
-        <dl className="grid grid-cols-2 gap-x-6 gap-y-1.5 text-[12px] sm:grid-cols-4">
-          {items.map(([label, value]) => (
-            <div key={label}>
-              <dt className="text-ink-faint">{label}</dt>
-              <dd className="font-mono">{value}</dd>
-            </div>
-          ))}
-        </dl>
-      </CardContent>
-    </Card>
+    <div className="space-y-3 border-t pt-4">
+      <p className="text-ink-muted text-[12px] leading-relaxed">
+        <strong>Assumed, not measured.</strong> Nothing in a log says what one
+        partition can absorb or what one consumer keeps up with, so these are
+        defaults — deliberately conservative, which makes every partition
+        recommendation above err high rather than low. The cluster holds{" "}
+        {advice.topology.brokers} broker(s), which is what bounds the replica
+        count.
+      </p>
+      <dl className="grid grid-cols-2 gap-x-6 gap-y-1.5 text-[12px] sm:grid-cols-4">
+        {items.map(([label, value]) => (
+          <div key={label}>
+            <dt className="text-ink-faint">{label}</dt>
+            <dd className="font-mono">{value}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
   )
 }
 
