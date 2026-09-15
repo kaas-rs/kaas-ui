@@ -1,9 +1,13 @@
 // The sub-page rail: navigation, not tabs.
 //
-// A right-hand column on a wide screen and a scrollable row above the content
-// on a narrow one, from one flex container — `flex-row-reverse` puts it on the
+// A right-hand column at `sm` and up, and a scrollable row above the content
+// below that, from one flex container — `flex-row-reverse` puts it on the
 // right visually while leaving it *first* in the DOM, which is what a screen
 // reader and a phone both want.
+//
+// The switch is `sm`, not `lg`: a 1024px floor meant every split window and
+// every half-screen browser got the phone layout, which is a rail on top —
+// the one place it was not meant to be.
 //
 // Rendered from `ANALYSIS_VIEW_ENTRIES`, so a new sub-page needs nothing here.
 
@@ -28,7 +32,7 @@ export function AnalysisRail({
   return (
     <nav
       aria-label="analysis views"
-      className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1 lg:sticky lg:top-4 lg:mx-0 lg:w-52 lg:shrink-0 lg:flex-col lg:overflow-visible lg:px-0 lg:pb-0"
+      className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1 sm:sticky sm:top-4 sm:mx-0 sm:w-40 sm:shrink-0 sm:flex-col sm:overflow-visible sm:px-0 sm:pb-0 lg:w-52"
     >
       {ANALYSIS_VIEW_ENTRIES.map((entry) => (
         <RailItem
@@ -62,7 +66,7 @@ function RailItem({
       disabled={!available}
       onClick={() => onSelect(entry.id)}
       className={cn(
-        "focus-visible:ring-rust flex w-40 shrink-0 flex-col items-start gap-0.5 rounded-md border px-3 py-2 text-left transition-colors focus-visible:ring-2 focus-visible:outline-none lg:w-full lg:shrink",
+        "focus-visible:ring-rust flex w-40 shrink-0 flex-col items-start gap-0.5 rounded-md border px-3 py-2 text-left transition-colors focus-visible:ring-2 focus-visible:outline-none sm:w-full sm:shrink",
         // The accent is a *surface* colour here — an edge on the selected
         // item, which is what the design system sanctions it for.
         active

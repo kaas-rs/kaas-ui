@@ -75,10 +75,10 @@ export function AnalysisResult({
         </p>
       ) : null}
 
-      {/* The rail first in the DOM and on the right on a wide screen:
+      {/* The rail first in the DOM and on the right from `sm` up:
           `flex-row-reverse` gets the placement without costing a screen
           reader — or a phone, where it lands above the content it steers. */}
-      <div className="flex flex-col gap-6 lg:flex-row-reverse lg:items-start">
+      <div className="flex flex-col gap-6 sm:flex-row-reverse sm:items-start">
         <AnalysisRail
           result={result}
           active={view}
