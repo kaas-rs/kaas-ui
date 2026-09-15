@@ -61,9 +61,12 @@ export function SizingAdviceSections({
 
   return (
     <>
-      <Section title="What the rates say">
+      {/* No heading: the card opens the sub-page and its own first line
+          already says these are measured rates. A word above it saying so
+          is the heading restating the card. */}
+      <section className="mb-8">
         <MeasuredCard advice={advice} />
-      </Section>
+      </section>
 
       {/* One card, not four. Picking a profile, reading what it optimises
           for, reading the rows it produced and checking the assumptions
