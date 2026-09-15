@@ -16,14 +16,20 @@
 // Two numbers lie unless labelled: the unique counts and the percentiles are
 // sketch estimates, and every rendering of them here carries the ≈ and a note
 // saying so. A p99 read as exact gets used to justify a partitioning decision.
+//
+// The finished result is more than one page. A rail on the right of
+// `AnalysisResult` navigates between sub-pages — the fold's own numbers, and
+// the sizing advisor derived from them — and which one is open lives in the
+// URL beside the tab. The list is `./views.ts`; adding to it touches neither
+// this file nor the rail.
 
 import type {
   AnalysisProgress,
-  Profile,
   ResourceError,
   TopicAnalysis,
   TopicDetail,
 } from "@/api/types"
+import type { TopicSearch } from "@/features/messages/search"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { ErrorChips } from "@/components/domain"
@@ -44,16 +50,22 @@ export function TopicStatistics({
   clusterId,
   topic,
   info,
-  profile,
-  onProfile,
+  search,
+  onSearch,
 }: {
   envId: string
   clusterId: string
   topic: string
   info: TopicDetail
-  /** The sizing profile, from the URL. */
-  profile: Profile | undefined
-  onProfile(profile: Profile): void
+  /**
+   * The topic page's URL state, passed whole rather than field by field.
+   *
+   * The same shape the message browser takes, and for the same reason: this
+   * panel owns a sub-page *and* a sizing profile, and a third would otherwise
+   * be a third pair of props through two components.
+   */
+  search: TopicSearch
+  onSearch(next: Partial<TopicSearch>): void
 }) {
   const {
     phase,
@@ -104,8 +116,8 @@ export function TopicStatistics({
         <AnalysisResult
           result={phase.result}
           onRerun={start}
-          profile={profile}
-          onProfile={onProfile}
+          search={search}
+          onSearch={onSearch}
         />
       ) : null}
     </div>

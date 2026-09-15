@@ -17,6 +17,11 @@
 import type { SearchSchemaInput } from "@tanstack/react-router"
 import { z } from "zod"
 
+import {
+  ANALYSIS_VIEWS,
+  DEFAULT_ANALYSIS_VIEW,
+} from "@/features/statistics/views"
+
 import { DEFAULT_SEEK_MODE, SEEK_MODE_NAMES, type SeekMode } from "./seek-modes"
 
 const modes = SEEK_MODE_NAMES as [SeekMode, ...SeekMode[]]
@@ -62,6 +67,16 @@ const fields = z.object({
   valueCodec: z.enum(["auto", "string", "hex", "json"]).optional(),
   /** `{partition}-{offset}` — the same id everything else keys on. */
   selected: z.string().optional(),
+  /**
+   * Which sub-page of the statistics tab is open.
+   *
+   * Alongside the tab rather than inside it: `?tab=statistics&view=advisor`
+   * is one link, and the rail is navigation between destinations rather than
+   * a control someone toggles. `.catch` covers a hand-edited value and a
+   * sub-page that has since been renamed, landing on the default instead of
+   * an error boundary — the same rule `tab` follows below.
+   */
+  view: z.enum(ANALYSIS_VIEWS).catch(DEFAULT_ANALYSIS_VIEW),
   /**
    * Which sizing profile the statistics tab's advice is showing.
    *

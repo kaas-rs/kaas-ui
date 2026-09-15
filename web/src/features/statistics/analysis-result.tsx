@@ -1,6 +1,6 @@
 import { AlertTriangle } from "lucide-react"
 
-import type { Profile, TopicAnalysis } from "@/api/types"
+import type { TopicAnalysis } from "@/api/types"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -12,26 +12,31 @@ import {
   useResolvedDateOrder,
 } from "@/lib/settings"
 
+import type { TopicSearch } from "@/features/messages/search"
+
+import { AnalysisRail } from "./analysis-rail"
 import { HourlyChart } from "./hourly-chart"
 import { PartitionStatsTable } from "./partition-stats-table"
 import { SizeTable } from "./size-table"
 import { SizingAdviceSections } from "./sizing-advice"
+import { resolveAnalysisView } from "./views"
 
 export function AnalysisResult({
   result,
   onRerun,
-  profile,
-  onProfile,
+  search,
+  onSearch,
 }: {
   result: TopicAnalysis
   onRerun(): void
-  /** The sizing profile from the URL, or undefined for the topic's own signal. */
-  profile: Profile | undefined
-  onProfile(profile: Profile): void
+  /** The topic page's URL state — the same object the message browser reads. */
+  search: TopicSearch
+  onSearch(next: Partial<TopicSearch>): void
 }) {
   const timeZone = displayTimeZone()
   const dateOrder = useResolvedDateOrder()
   const totals = result.totalStats
+  const view = resolveAnalysisView(search.view, result)
 
   const fractionNote =
     result.scannedFraction !== undefined
@@ -103,118 +108,152 @@ export function AnalysisResult({
               analyse again
             </Button>
           </div>
-          <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-[13px] sm:grid-cols-4">
-            <Stat
-              label="messages scanned"
-              value={count(totals.totalMsgs)}
-              hint="records read and folded — on a compacted or transactional topic this is legitimately below the offset span"
-            />
-            <Stat
-              label="payload bytes"
-              value={bytes(
-                (totals.keySize?.sum ?? 0) + (totals.valueSize?.sum ?? 0)
-              )}
-              note="keys + values"
-              hint="the bytes actually carried by keys and values, before replication — not the on-disk size"
-            />
-            <Stat
-              label="≈ unique keys"
-              value={count(totals.approxUniqKeys)}
-              note="estimate"
-              hint="distinct keys, from a cardinality sketch (±1.6%) — against messages scanned it reads as compaction headroom"
-            />
-            <Stat
-              label="≈ unique values"
-              value={count(totals.approxUniqValues)}
-              note="estimate"
-              hint="distinct values, from the same sketch — far below the message count means repeated payloads"
-            />
-            <Stat
-              label="null keys"
-              value={count(totals.nullKeys)}
-              hint="records written without a key; they partition round-robin and can never be compacted together"
-            />
-            <Stat
-              label="tombstones"
-              value={count(totals.nullValues)}
-              note="null values"
-              hint="records with a null value — deletion markers on a compacted topic, and not the same as an empty value"
-            />
-            <Stat
-              label="no timestamp"
-              value={count(totals.missingTimestamps)}
-              note={
-                totals.missingTimestamps > 0
-                  ? "excluded from the chart"
-                  : undefined
-              }
-              hint="records whose producer set no timestamp; counted here rather than plotted as 1970"
-            />
-            <Stat
-              label="malformed batches"
-              value={count(totals.malformedBatches)}
-              tone={totals.malformedBatches > 0 ? "warn" : undefined}
-              hint="batches that would not decode at the protocol level — skipped and counted, the scan continues past them"
-            />
-          </dl>
-          {totals.minTimestamp !== undefined &&
-          totals.maxTimestamp !== undefined ? (
-            <p className="text-[12px] text-ink-muted">
-              written between{" "}
-              <span className="font-mono">
-                {formatTimestamp(totals.minTimestamp, timeZone, dateOrder)}
-              </span>{" "}
-              and{" "}
-              <span className="font-mono">
-                {formatTimestamp(totals.maxTimestamp, timeZone, dateOrder)}
-              </span>
-              {result.clock ? <> · {result.clock}</> : null}
-            </p>
-          ) : null}
         </CardContent>
       </Card>
 
-      <Section title="Record sizes">
-        <Card>
-          <CardContent className="space-y-2">
-            <SizeTable keySize={totals.keySize} valueSize={totals.valueSize} />
-            <p className="text-[11px] text-ink-faint">
-              min, avg, max and sum are exact; the percentiles are sketch
-              estimates with a bounded ±4% relative error.
-            </p>
-          </CardContent>
-        </Card>
-      </Section>
-
-      {totals.hourlyMsgCounts.length > 0 ? (
-        <Section title="Messages per hour">
-          <Card>
-            <CardContent className="space-y-2">
-              <HourlyChart
-                stats={totals}
-                timeZone={timeZone}
-                clock={result.clock ?? null}
-              />
-            </CardContent>
-          </Card>
-        </Section>
-      ) : null}
-
-      <Section title="Per partition">
-        <PartitionStatsTable partitions={result.partitionStats} />
-      </Section>
-
-      {/* The advice rides on this result rather than on a route of its own:
-          it needs the write rate the fold above just measured, and metadata
-          cannot supply one. A scan that could not be followed by the two
-          describes behind it leaves the statistics intact and this absent. */}
-      {result.sizing ? (
-        <SizingAdviceSections
-          advice={result.sizing}
-          profile={profile}
-          onProfile={onProfile}
+      {/* The rail first in the DOM and on the right on a wide screen:
+          `flex-row-reverse` gets the placement without costing a screen
+          reader — or a phone, where it lands above the content it steers. */}
+      <div className="flex flex-col gap-6 lg:flex-row-reverse lg:items-start">
+        <AnalysisRail
+          result={result}
+          active={view}
+          onSelect={(next) => onSearch({ view: next })}
         />
-      ) : null}
+        <div className="min-w-0 flex-1 space-y-6">
+          {view === "statistics" ? (
+            <>
+              <Card>
+                <CardContent className="space-y-4">
+                  <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-[13px] sm:grid-cols-4">
+                    <Stat
+                      label="messages scanned"
+                      value={count(totals.totalMsgs)}
+                      hint="records read and folded — on a compacted or transactional topic this is legitimately below the offset span"
+                    />
+                    <Stat
+                      label="payload bytes"
+                      value={bytes(
+                        (totals.keySize?.sum ?? 0) +
+                          (totals.valueSize?.sum ?? 0)
+                      )}
+                      note="keys + values"
+                      hint="the bytes actually carried by keys and values, before replication — not the on-disk size"
+                    />
+                    <Stat
+                      label="≈ unique keys"
+                      value={count(totals.approxUniqKeys)}
+                      note="estimate"
+                      hint="distinct keys, from a cardinality sketch (±1.6%) — against messages scanned it reads as compaction headroom"
+                    />
+                    <Stat
+                      label="≈ unique values"
+                      value={count(totals.approxUniqValues)}
+                      note="estimate"
+                      hint="distinct values, from the same sketch — far below the message count means repeated payloads"
+                    />
+                    <Stat
+                      label="null keys"
+                      value={count(totals.nullKeys)}
+                      hint="records written without a key; they partition round-robin and can never be compacted together"
+                    />
+                    <Stat
+                      label="tombstones"
+                      value={count(totals.nullValues)}
+                      note="null values"
+                      hint="records with a null value — deletion markers on a compacted topic, and not the same as an empty value"
+                    />
+                    <Stat
+                      label="no timestamp"
+                      value={count(totals.missingTimestamps)}
+                      note={
+                        totals.missingTimestamps > 0
+                          ? "excluded from the chart"
+                          : undefined
+                      }
+                      hint="records whose producer set no timestamp; counted here rather than plotted as 1970"
+                    />
+                    <Stat
+                      label="malformed batches"
+                      value={count(totals.malformedBatches)}
+                      tone={totals.malformedBatches > 0 ? "warn" : undefined}
+                      hint="batches that would not decode at the protocol level — skipped and counted, the scan continues past them"
+                    />
+                  </dl>
+                  {totals.minTimestamp !== undefined &&
+                  totals.maxTimestamp !== undefined ? (
+                    <p className="text-[12px] text-ink-muted">
+                      written between{" "}
+                      <span className="font-mono">
+                        {formatTimestamp(
+                          totals.minTimestamp,
+                          timeZone,
+                          dateOrder
+                        )}
+                      </span>{" "}
+                      and{" "}
+                      <span className="font-mono">
+                        {formatTimestamp(
+                          totals.maxTimestamp,
+                          timeZone,
+                          dateOrder
+                        )}
+                      </span>
+                      {result.clock ? <> · {result.clock}</> : null}
+                    </p>
+                  ) : null}
+                </CardContent>
+              </Card>
+
+              <Section title="Record sizes">
+                <Card>
+                  <CardContent className="space-y-2">
+                    <SizeTable
+                      keySize={totals.keySize}
+                      valueSize={totals.valueSize}
+                    />
+                    <p className="text-[11px] text-ink-faint">
+                      min, avg, max and sum are exact; the percentiles are
+                      sketch estimates with a bounded ±4% relative error.
+                    </p>
+                  </CardContent>
+                </Card>
+              </Section>
+
+              {totals.hourlyMsgCounts.length > 0 ? (
+                <Section title="Messages per hour">
+                  <Card>
+                    <CardContent className="space-y-2">
+                      <HourlyChart
+                        stats={totals}
+                        timeZone={timeZone}
+                        clock={result.clock ?? null}
+                      />
+                    </CardContent>
+                  </Card>
+                </Section>
+              ) : null}
+
+              <Section title="Per partition">
+                <PartitionStatsTable partitions={result.partitionStats} />
+              </Section>
+            </>
+          ) : null}
+
+          {/* The advice rides on this result rather than on a route of its
+              own: it needs the write rate the fold measured, and metadata
+              cannot supply one. A scan the two describes behind it could not
+              follow leaves the statistics intact and this sub-page absent —
+              which is what the rail says in place of its hint. */}
+          {view === "advisor" && result.sizing ? (
+            <SizingAdviceSections
+              advice={result.sizing}
+              profile={search.profile}
+              onProfile={(profile) => onSearch({ profile })}
+            />
+          ) : null}
+        </div>
+      </div>
     </div>
   )
 }

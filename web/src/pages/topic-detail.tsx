@@ -173,8 +173,8 @@ export function TopicDetailPage({
             clusterId={clusterId}
             topic={topic}
             info={info}
-            profile={search.profile}
-            onProfile={(profile) => setSearch({ profile })}
+            search={search}
+            onSearch={setSearch}
           />
         </TabsContent>
         {/* The panel is given a height rather than left to grow: the list is
