@@ -1,7 +1,6 @@
 import { AlertTriangle } from "lucide-react"
 
 import type { TopicAnalysis } from "@/api/types"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { ErrorChips, Section, Stat } from "@/components/domain"
@@ -100,37 +99,6 @@ export function AnalysisResult({
                   below is the ordinary raised one, so this reads as the top of
                   the page without a second border weight or a shadow. */}
               <Card className="bg-rust/10 border-rust/40 space-y-4 px-5 py-4">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="text-ink-muted flex flex-wrap items-center gap-2 text-[12px]">
-                    <Badge
-                      variant={
-                        result.stoppedBy === "end"
-                          ? "outline"
-                          : result.stoppedBy === "messageCap"
-                            ? "secondary"
-                            : "destructive"
-                      }
-                    >
-                      {
-                        {
-                          end: "complete",
-                          messageCap: "capped",
-                          timeCap: "time-capped",
-                          error: "partial",
-                        }[result.stoppedBy]
-                      }
-                    </Badge>
-                    <span>
-                      analysed{" "}
-                      {formatTimestamp(result.startedAt, timeZone, dateOrder)}
-                      {" · "}took{" "}
-                      {duration(result.finishedAt - result.startedAt)}
-                    </span>
-                  </div>
-                  <Button size="sm" variant="outline" onClick={onRerun}>
-                    analyse again
-                  </Button>
-                </div>
                 <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-[13px] sm:grid-cols-4">
                   <Stat
                     label="messages scanned"
@@ -185,28 +153,49 @@ export function AnalysisResult({
                     hint="batches that would not decode at the protocol level — skipped and counted, the scan continues past them"
                   />
                 </dl>
-                {totals.minTimestamp !== undefined &&
-                totals.maxTimestamp !== undefined ? (
-                  <p className="text-[12px] text-ink-muted">
-                    written between{" "}
-                    <span className="font-mono">
-                      {formatTimestamp(
-                        totals.minTimestamp,
-                        timeZone,
-                        dateOrder
-                      )}
-                    </span>{" "}
-                    and{" "}
-                    <span className="font-mono">
-                      {formatTimestamp(
-                        totals.maxTimestamp,
-                        timeZone,
-                        dateOrder
-                      )}
-                    </span>
-                    {result.clock ? <> · {result.clock}</> : null}
-                  </p>
-                ) : null}
+                {/* When the scan ran, what it covered, and the way to run
+                    it again — one footer rather than a header strip. The
+                    run's own timing sits above the window it measured
+                    because the two are read together: "563 ms" means
+                    something different against a day of records than against
+                    a minute of them. Whether it completed is said by the
+                    banners above the rail, and only when the answer is
+                    interesting. */}
+                <div className="text-ink-muted flex flex-wrap items-end justify-between gap-3 text-[12px]">
+                  <div className="space-y-1">
+                    <p>
+                      analysed{" "}
+                      {formatTimestamp(result.startedAt, timeZone, dateOrder)}
+                      {" · "}took{" "}
+                      {duration(result.finishedAt - result.startedAt)}
+                    </p>
+                    {totals.minTimestamp !== undefined &&
+                    totals.maxTimestamp !== undefined ? (
+                      <p>
+                        written between{" "}
+                        <span className="font-mono">
+                          {formatTimestamp(
+                            totals.minTimestamp,
+                            timeZone,
+                            dateOrder
+                          )}
+                        </span>{" "}
+                        and{" "}
+                        <span className="font-mono">
+                          {formatTimestamp(
+                            totals.maxTimestamp,
+                            timeZone,
+                            dateOrder
+                          )}
+                        </span>
+                        {result.clock ? <> · {result.clock}</> : null}
+                      </p>
+                    ) : null}
+                  </div>
+                  <Button size="sm" variant="outline" onClick={onRerun}>
+                    analyse again
+                  </Button>
+                </div>
               </Card>
 
               <Section title="Record sizes">
