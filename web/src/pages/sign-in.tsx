@@ -17,6 +17,7 @@ import {
 import { LogIn } from "lucide-react"
 
 import { withBase } from "@/api/base"
+import { KaasLogo } from "@/components/kaas-logo"
 import type { LoginConnector } from "@/api/types"
 
 export function SignInPage({
@@ -33,13 +34,7 @@ export function SignInPage({
             cluster chip. Not a link: there is nowhere behind this to go, and a
             brand that navigates to the page you are on is a dead control. */}
         <div className="flex items-center gap-2 self-center font-medium">
-          <div
-            className="flex size-6 items-center justify-center rounded-md font-mono text-sm font-semibold"
-            style={{ background: "var(--rust)", color: "#3B2E2A" }}
-            aria-hidden
-          >
-            k
-          </div>
+          <KaasLogo className="size-6" />
           kaas-ui
         </div>
 

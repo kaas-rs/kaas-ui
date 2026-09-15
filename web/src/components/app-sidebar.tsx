@@ -14,6 +14,7 @@ import type { ComponentProps } from "react"
 import { Link } from "@tanstack/react-router"
 
 import { useIdentity } from "@/api/client"
+import { KaasLogo } from "@/components/kaas-logo"
 import { NavMain } from "@/components/nav-main"
 import { NavUser } from "@/components/nav-user"
 import {
@@ -47,12 +48,7 @@ export function AppSidebar({ ...props }: ComponentProps<typeof Sidebar>) {
           <SidebarMenuItem>
             <SidebarMenuButton asChild size="lg">
               <Link to="/">
-                <div
-                  className="flex aspect-square size-8 items-center justify-center rounded-md font-mono text-[15px] font-semibold"
-                  style={{ background: "var(--rust)", color: "#3B2E2A" }}
-                >
-                  k
-                </div>
+                <KaasLogo className="size-8" />
                 <div className="grid flex-1 text-left leading-tight">
                   <span className="truncate font-semibold">kaas-ui</span>
                   <span className="truncate text-[11px] opacity-70">

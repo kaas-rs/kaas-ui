@@ -4,6 +4,15 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
+    <!-- Through the bundler on purpose. Vite rewrites this to the
+         fingerprinted `/assets/kaas-logo-<hash>.svg`, which is the one shape
+         the server already knows how to move under a path prefix — see
+         `rebase` in `crates/kaas-ui-server/src/assets.rs`. Left in
+         `public/` instead it would sit at the bundle root, where absolute
+         404s behind a proxy and relative resolves against the document, so a
+         hard refresh on /clusters/kaas/topics/orders asks three levels down
+         and gets the browser's default. -->
+    <link rel="icon" type="image/svg+xml" href="/src/assets/kaas-logo.svg" />
     <title>kaas-ui</title>
     <script>
       // Resolve the theme before first paint, so a dark-mode user never sees a
