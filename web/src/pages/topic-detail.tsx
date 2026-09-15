@@ -60,6 +60,13 @@ export function TopicDetailPage({
    * act of looking at a topic, and a back button that walks a reader out
    * through forty row selections is not a back button. Changing tab is the
    * exception — that is a place someone can want to come back to.
+   *
+   * The scroll follows the same flag, which is why they share one argument. A
+   * replacing write keeps the reader where they were: picking a sizing profile
+   * halfway down the advisor, or seeking the message browser, is a change to
+   * what is on screen and not a move to somewhere else — and the router's
+   * default of scrolling to the top throws away the position that the change
+   * was made from. A pushing write *is* a move, so it lands at the top.
    */
   const setSearch = useCallback(
     (next: Partial<TopicSearch>, replace = true) => {
@@ -68,6 +75,7 @@ export function TopicDetailPage({
         params: { envId, clusterId, topic },
         search: (previous) => ({ ...previous, ...next }),
         replace,
+        resetScroll: !replace,
       })
     },
     [navigate, clusterId, topic]
