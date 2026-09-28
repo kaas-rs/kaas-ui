@@ -30,11 +30,12 @@ export function SignInPage({
   return (
     <div className="bg-muted flex min-h-svh flex-col items-center justify-center gap-6 p-6 md:p-10">
       <div className="flex w-full max-w-sm flex-col gap-6">
-        {/* The same mark the sidebar wears, at the size the shell uses for a
-            cluster chip. Not a link: there is nowhere behind this to go, and a
-            brand that navigates to the page you are on is a dead control. */}
+        {/* The same mark the sidebar wears, at twice the size the shell uses
+            for a cluster chip — here it is the page's only brand. Not a link:
+            there is nowhere behind this to go, and a brand that navigates to
+            the page you are on is a dead control. */}
         <div className="flex items-center gap-2 self-center font-medium">
-          <KaasLogo className="size-6" />
+          <KaasLogo className="size-12" />
           kaas-ui
         </div>
 
