@@ -642,6 +642,44 @@ mod tests {
         );
     }
 
+    /// `view` on `public-*` is a view of `public-*`, and the routes have to ask
+    /// with the name for that to hold.
+    ///
+    /// The unnamed question — "may this caller view *some* topic here?" — is
+    /// still yes, which is what gates the list before it is filtered. The
+    /// defect this pins is asking only that: topic detail, offsets and
+    /// configuration, and group detail and offsets, all used to, so a role
+    /// scoped to `public-*` could describe `payments` by typing its URL.
+    #[test]
+    fn a_value_pattern_scopes_view_too_when_the_name_is_asked() {
+        let policy = Policy::enforcing(vec![Role {
+            name: "support".to_owned(),
+            subjects: vec!["*".to_owned()],
+            clusters: vec!["*".to_owned()],
+            cluster_labels: BTreeMap::new(),
+            permissions: vec![
+                Permission {
+                    resource: Resource::Topic,
+                    value: Some("public-*".to_owned()),
+                    actions: vec![Action::View],
+                },
+                Permission {
+                    resource: Resource::Consumer,
+                    value: Some("public-*".to_owned()),
+                    actions: vec![Action::View],
+                },
+            ],
+        }]);
+        let access = policy.access(&member(&[]));
+        let none = labels(&[]);
+
+        for resource in [Resource::Topic, Resource::Consumer] {
+            assert!(access.may("kaas", &none, resource, Action::View, None));
+            assert!(access.may("kaas", &none, resource, Action::View, Some("public-orders")));
+            assert!(!access.may("kaas", &none, resource, Action::View, Some("payments")));
+        }
+    }
+
     #[test]
     fn clusters_are_matched_by_id_and_optionally_by_label() {
         let mut role = view_topics("prod", &["*"], &["prod-*"]);

@@ -30,7 +30,21 @@ pub async fn list(
     caller.require(&id, &handle.labels, Resource::Consumer, Action::View, None)?;
     let listings = call("list_groups", admin.list_groups()).await?;
 
-    let mut groups: Vec<GroupSummary> = listings.iter().map(GroupSummary::from).collect();
+    // The gate above says some group is visible here; a `value` pattern says
+    // which.
+    let mut groups: Vec<GroupSummary> = listings
+        .iter()
+        .map(GroupSummary::from)
+        .filter(|group| {
+            caller.access().may(
+                &id,
+                &handle.labels,
+                Resource::Consumer,
+                Action::View,
+                Some(&group.group_id),
+            )
+        })
+        .collect();
     groups.sort_by(|a, b| a.group_id.cmp(&b.group_id));
 
     Ok(Json(Envelope::new(groups)))
@@ -59,7 +73,13 @@ pub async fn detail(
     Path((env, id, group)): Path<(String, String, String)>,
 ) -> ApiResult<Json<Envelope<GroupDetail>>> {
     let (handle, admin) = state.connected(&env, &id, &caller)?;
-    caller.require(&id, &handle.labels, Resource::Consumer, Action::View, None)?;
+    caller.require(
+        &id,
+        &handle.labels,
+        Resource::Consumer,
+        Action::View,
+        Some(&group),
+    )?;
     let described = call("describe_groups", admin.describe_groups([group])).await?;
     Ok(Json(Envelope::from_per_item(
         described,
@@ -91,7 +111,13 @@ pub async fn offsets(
     Path((env, id, group)): Path<(String, String, String)>,
 ) -> ApiResult<Json<Envelope<GroupOffset>>> {
     let (handle, admin) = state.connected(&env, &id, &caller)?;
-    caller.require(&id, &handle.labels, Resource::Consumer, Action::View, None)?;
+    caller.require(
+        &id,
+        &handle.labels,
+        Resource::Consumer,
+        Action::View,
+        Some(&group),
+    )?;
 
     let committed = call("fetch_offsets", admin.fetch_offsets(&group, None)).await?;
 

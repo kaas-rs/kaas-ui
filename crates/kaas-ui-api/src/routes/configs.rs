@@ -101,6 +101,15 @@ pub async fn topic_configs(
         Action::View,
         None,
     )?;
+    // And the topic itself, or configuration becomes a way to read the shape
+    // of a topic a `value` pattern keeps out of view.
+    caller.require(
+        &id,
+        &handle.labels,
+        Resource::Topic,
+        Action::View,
+        Some(&topic),
+    )?;
     describe(&admin, vec![ConfigResource::topic(topic)]).await
 }
 

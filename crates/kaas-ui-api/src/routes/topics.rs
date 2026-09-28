@@ -100,6 +100,18 @@ pub async fn list(
         if names.is_empty() {
             return Err(ApiError::bad_request("?name= was empty"));
         }
+        // Each name against the role's `value` pattern, before anything is
+        // asked of the broker. Refusing on the pattern alone says nothing
+        // about whether the topic exists, which filtering the answer would.
+        for name in &names {
+            caller.require(
+                &id,
+                &handle.labels,
+                Resource::Topic,
+                Action::View,
+                Some(name),
+            )?;
+        }
         let described = call("describe_topics", admin.describe_topics(names)).await?;
         let envelope =
             Envelope::from_per_item(described, Clone::clone, |_, info| TopicSummary::of(&info));
@@ -111,6 +123,17 @@ pub async fn list(
         .topics()
         .iter()
         .filter(|topic| query.internal || !topic.internal)
+        // `view` on `public-*` is a view of `public-*`: the gate above only
+        // established that some topic is visible here, not which.
+        .filter(|topic| {
+            caller.access().may(
+                &id,
+                &handle.labels,
+                Resource::Topic,
+                Action::View,
+                Some(&topic.name),
+            )
+        })
         .filter(|topic| match &query.search {
             Some(needle) => topic
                 .name
@@ -362,7 +385,13 @@ pub async fn detail(
     Query(query): Query<DetailQuery>,
 ) -> ApiResult<Json<Envelope<TopicDetail>>> {
     let (handle, admin) = state.connected(&env, &id, &caller)?;
-    caller.require(&id, &handle.labels, Resource::Topic, Action::View, None)?;
+    caller.require(
+        &id,
+        &handle.labels,
+        Resource::Topic,
+        Action::View,
+        Some(&topic),
+    )?;
 
     let described = call("describe_topics", admin.describe_topics([topic.clone()])).await?;
     let mut envelope =
@@ -455,7 +484,13 @@ pub async fn offsets(
     Path((env, id, topic)): Path<(String, String, String)>,
 ) -> ApiResult<Json<Envelope<PartitionOffsets>>> {
     let (handle, admin) = state.connected(&env, &id, &caller)?;
-    caller.require(&id, &handle.labels, Resource::Topic, Action::View, None)?;
+    caller.require(
+        &id,
+        &handle.labels,
+        Resource::Topic,
+        Action::View,
+        Some(&topic),
+    )?;
 
     let snapshot = admin.cluster().snapshot();
     let info = snapshot
