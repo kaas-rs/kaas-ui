@@ -33,7 +33,7 @@ kafka-read  = "0.10"
 
 # HTTP
 axum       = { version = "0.8", features = ["macros", "http2"] }
-axum-extra = { version = "0.10", features = ["cookie-private"] }
+axum-extra = { version = "0.12", features = ["cookie-private"] }
 # The cookie crate's clock type, for Max-Age. Already in the tree beneath it.
 time       = { version = "0.3", default-features = false }
 hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
@@ -42,8 +42,8 @@ tower      = "0.5"
 # OIDC. `rustls-tls` rather than native: the image is distroless and carries no
 # OpenSSL, and rustls is already in the tree for the broker connections.
 openidconnect = { version = "4", default-features = false, features = ["reqwest", "rustls-tls"] }
-tower-http = { version = "0.6", features = ["trace", "compression-gzip", "set-header"] }
-utoipa     = { version = "5.5", features = ["axum_extras"] }
+tower-http = { version = "0.7", features = ["trace", "compression-gzip", "set-header"] }
+utoipa     = { version = "6", features = ["axum_extras"] }
 
 # async + runtime
 tokio        = { version = "1.53", features = ["full"] }
@@ -77,7 +77,7 @@ bytes      = "1.12"
 # turns the two-line musl builder in the Dockerfile into a cmake project. TLS
 # comes from the `reqwest` features below instead, on the one copy of reqwest
 # the whole graph shares.
-schema_registry_converter = { version = "4.10", default-features = false, features = [
+schema_registry_converter = { version = "5", default-features = false, features = [
     "futures",
     "avro",
     "json",
@@ -85,7 +85,7 @@ schema_registry_converter = { version = "4.10", default-features = false, featur
 ] }
 # The value types the three decoders hand back. Pulled in beside the converter
 # rather than instead of it: converting them to JSON is ours, decoding is not.
-apache-avro = { version = "0.21", default-features = false }
+apache-avro = { version = "0.22", default-features = false }
 protofish   = "0.5"
 # The schema browser's own calls — subjects, versions, compatibility — which
 # the converter's API does not cover. Pinned to the major the converter
@@ -104,7 +104,7 @@ protofish   = "0.5"
 # encoding of a body that carries a credential.
 reqwest = { version = "0.13", default-features = false, features = ["json", "form", "rustls-no-provider"] }
 # Only to install that provider, once, behind a `Once`.
-rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rustls = { version = "0.23.45", default-features = false, features = ["ring", "std"] }
 
 # internal
 kaas-ui-auth  = { path = "crates/kaas-ui-auth" }

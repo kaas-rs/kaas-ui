@@ -21,6 +21,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 fn main() -> ExitCode {
+    // The workspace's reqwest is built without a provider. Ours is the only
+    // process-wide install, so a failure cannot mean anything but "already done".
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     let task = std::env::args().nth(1).unwrap_or_default();
     let rest: Vec<String> = std::env::args().skip(2).collect();
 

@@ -1958,11 +1958,11 @@
           "keySize": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/SizeStats",
                 "description": "Key size statistics, over records that have a key."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -2039,11 +2039,11 @@
           "valueSize": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/SizeStats",
                 "description": "Value size statistics, over records that have a value."
+              },
+              {
+                "type": "null"
               }
             ]
           }
@@ -2085,11 +2085,11 @@
           "kind": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ErrorKind",
                 "description": "Its taxonomy, where it came from a cluster."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -2104,11 +2104,11 @@
           "unsupportedApi": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/UnsupportedApiDetail",
                 "description": "Both version ranges, when an api was unsupported."
+              },
+              {
+                "type": "null"
               }
             ]
           }
@@ -2602,11 +2602,11 @@
           "description": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ClusterDescriptionDto",
                 "description": "`DescribeCluster`, where it answered."
+              },
+              {
+                "type": "null"
               }
             ]
           }
@@ -3236,11 +3236,11 @@
                 "description": {
                   "oneOf": [
                     {
-                      "type": "null"
-                    },
-                    {
                       "$ref": "#/components/schemas/ClusterDescriptionDto",
                       "description": "`DescribeCluster`, where it answered."
+                    },
+                    {
+                      "type": "null"
                     }
                   ]
                 }
@@ -3917,11 +3917,11 @@
                 "key": {
                   "oneOf": [
                     {
-                      "type": "null"
-                    },
-                    {
                       "$ref": "#/components/schemas/Payload",
                       "description": "The key, rendered."
+                    },
+                    {
+                      "type": "null"
                     }
                   ]
                 },
@@ -3956,11 +3956,11 @@
                 "value": {
                   "oneOf": [
                     {
-                      "type": "null"
-                    },
-                    {
                       "$ref": "#/components/schemas/Payload",
                       "description": "The value, rendered. `None` is a tombstone, which is not the same as\nan empty value."
+                    },
+                    {
+                      "type": "null"
                     }
                   ]
                 }
@@ -4579,11 +4579,11 @@
                 "schemas": {
                   "oneOf": [
                     {
-                      "type": "null"
-                    },
-                    {
                       "$ref": "#/components/schemas/TopicSchemas",
                       "description": "Which subjects in the cluster's registry name this topic, when\n`?schemas=true` was asked for.\n\n`None` is \"not answered\" and not \"none registered\": the question was not\nasked, the cluster reads no registry, or the registry would not hand\nover its subject list. A topic with no schema is `Some` with both sides\nempty, which is what lets a column say `—` on the topics that have none\nwithout saying it on the ones nobody asked about."
+                    },
+                    {
+                      "type": "null"
                     }
                   ]
                 },
@@ -5246,11 +5246,11 @@
           "value": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/Payload",
                 "description": "Header value."
+              },
+              {
+                "type": "null"
               }
             ]
           }
@@ -5765,11 +5765,11 @@
           "key": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/Payload",
                 "description": "The key, rendered."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -5804,11 +5804,11 @@
           "value": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/Payload",
                 "description": "The value, rendered. `None` is a tombstone, which is not the same as\nan empty value."
+              },
+              {
+                "type": "null"
               }
             ]
           }
@@ -5903,11 +5903,11 @@
           "resolved": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ResolvedSeek",
                 "description": "What a time-mode instant resolved to, and `None` for the other five\nmodes. See [`resolve`]."
+              },
+              {
+                "type": "null"
               }
             ]
           }
@@ -6107,33 +6107,33 @@
           "note": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/PayloadNote",
                 "description": "Why this is not what was asked for."
+              },
+              {
+                "type": "null"
               }
             ]
           },
           "raw": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/RawBytes",
                 "description": "The original bytes, for a codec change with no refetch."
+              },
+              {
+                "type": "null"
               }
             ]
           },
           "schema": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/SchemaRef",
                 "description": "Which schema decoded it, when a registry was involved."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -6633,11 +6633,11 @@
           "unsupportedApi": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/UnsupportedApiDetail",
                 "description": "Both version ranges, when the failure was an unsupported api."
+              },
+              {
+                "type": "null"
               }
             ]
           }
@@ -6981,11 +6981,11 @@
           "sizes": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/SizeEvidence",
                 "description": "What the disks hold, when `DescribeLogDirs` answered.\n\n`None` means the sizes did not arrive. It never means the topic is\nempty."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -7084,11 +7084,11 @@
           "key": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/Payload",
                 "description": "The key, cut to [`PREVIEW_CHARS`]. `None` is a keyless record."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -7118,11 +7118,11 @@
           "value": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/Payload",
                 "description": "The value, cut to [`PREVIEW_CHARS`]. `None` is a **tombstone**, which\nis not the same as an empty value — compaction turns on the difference."
+              },
+              {
+                "type": "null"
               }
             ]
           }
@@ -7210,11 +7210,11 @@
           "registry": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/RegistryCard",
                 "description": "The registry answering."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -7258,11 +7258,11 @@
           "registry": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/RegistryCard",
                 "description": "The registry answering, or `None` where this cluster references none."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -7335,11 +7335,11 @@
           "format": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/SchemaFormat",
                 "description": "Which of the three formats the newest version is."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -7477,11 +7477,11 @@
           "sizing": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/SizingAdvice",
                 "description": "What the numbers above imply about how this topic is configured.\n\nAttached after the fold, from two describes the scan's own cost makes\nfree by comparison. `None` when neither answered — the statistics\nstand on their own, and a missing recommendation is not a missing\nresult."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -7703,11 +7703,11 @@
           "schemas": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/TopicSchemas",
                 "description": "Which subjects in the cluster's registry name this topic, when\n`?schemas=true` was asked for.\n\n`None` is \"not answered\" and not \"none registered\": the question was not\nasked, the cluster reads no registry, or the registry would not hand\nover its subject list. A topic with no schema is `Some` with both sides\nempty, which is what lets a column say `—` on the topics that have none\nwithout saying it on the ones nobody asked about."
+              },
+              {
+                "type": "null"
               }
             ]
           },

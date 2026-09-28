@@ -15,7 +15,10 @@ kaas-ui-api  = { workspace = true }
 # proving anything the day the ceiling moved.
 kaas-ui-core = { workspace = true }
 
-reqwest    = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "cookies"] }
+# The workspace's copy, so the tree holds one reqwest. It brings no crypto
+# provider of its own; `main` installs ring's, as kaas-ui-serde does.
+reqwest    = { workspace = true }
+rustls     = { workspace = true }
 serde_json = { workspace = true }
 tokio      = { workspace = true }
 
