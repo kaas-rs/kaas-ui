@@ -34,7 +34,7 @@ export function SignInPage({
             for a cluster chip — here it is the page's only brand. Not a link:
             there is nowhere behind this to go, and a brand that navigates to
             the page you are on is a dead control. */}
-        <div className="flex items-center gap-2 self-center font-medium">
+        <div className="flex items-center gap-2 self-center text-[1.5em] font-bold">
           <KaasLogo className="size-12" />
           kaas-ui
         </div>
