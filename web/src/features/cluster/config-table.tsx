@@ -61,12 +61,7 @@ export function ConfigTable({
                         </span>
                       </TooltipTrigger>
                       <TooltipContent className="max-w-lg">
-                        <span
-                          // The broker's own documentation, which is HTML.
-                          dangerouslySetInnerHTML={{
-                            __html: entry.documentation.replace(/<[^>]*>/g, ""),
-                          }}
-                        />
+                        <span>{plainText(entry.documentation)}</span>
                       </TooltipContent>
                     </Tooltip>
                   ) : (
@@ -109,5 +104,20 @@ export function ConfigTable({
         </p>
       ) : null}
     </>
+  )
+}
+
+/**
+ * The broker's documentation is HTML — `<code>` tags and `&lt;` entities —
+ * and this is its text, rendered by React as text.
+ *
+ * Not `innerHTML` with the tags stripped: the documentation comes from
+ * whatever answers on a cluster's port, and a regex is not an HTML parser.
+ * `DOMParser` builds an inert document — no script runs and nothing loads —
+ * so the entities decode and no markup survives to be interpreted.
+ */
+function plainText(html: string): string {
+  return (
+    new DOMParser().parseFromString(html, "text/html").body.textContent ?? ""
   )
 }
