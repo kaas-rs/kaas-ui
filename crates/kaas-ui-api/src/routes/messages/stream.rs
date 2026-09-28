@@ -140,6 +140,18 @@ pub async fn stream(
     // Taken before anything expensive happens, and released by dropping the
     // permit — which is the only release there is, because a stream that ends
     // by the client vanishing runs no teardown of its own.
+    //
+    // A signed-in caller is charged as themselves. `X-Forwarded-For` is only
+    // the fallback: its first hop is whatever the client wrote, so keying on
+    // it would let one user evict another's streams by naming their address.
+    let principal = if caller.principal().is_authenticated() {
+        Principal {
+            key: format!("sub:{}", caller.principal().subject()),
+            distinguishable: true,
+        }
+    } else {
+        principal
+    };
     let permit = state
         .streams()
         .acquire(&principal)

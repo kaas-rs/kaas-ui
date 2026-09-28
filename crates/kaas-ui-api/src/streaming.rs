@@ -372,8 +372,9 @@ impl Drop for StreamPermit {
 
 /// Who a stream is charged to, and whether that actually names anybody.
 ///
-/// There is no authentication yet — Phase 4 is where a user appears — so the
-/// key is the nearest honest stand-in: the first `X-Forwarded-For` hop.
+/// A signed-in caller is charged by subject — the stream handler overrides
+/// this — so what is extracted here is the fallback for an open deployment:
+/// the first `X-Forwarded-For` hop, which the client can write.
 /// **It is a resource-accounting key, not a security boundary.**
 ///
 /// `distinguishable` is the important half, and it is the difference between a
