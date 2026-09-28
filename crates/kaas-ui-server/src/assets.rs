@@ -75,6 +75,12 @@ fn file(path: &str, base: &str) -> Option<Response> {
         "no-cache"
     };
 
+    // The document is where a policy takes effect; a script or a stylesheet
+    // carrying one is ignored by the browser. Computed before the body takes
+    // the bytes.
+    let policy = (path == "index.html")
+        .then(|| content_security_policy(&String::from_utf8_lossy(&asset.data)));
+
     let body = if path == "index.html" && !base.is_empty() {
         match std::str::from_utf8(&asset.data) {
             Ok(html) => Body::from(rebase(html, base)),
@@ -86,13 +92,82 @@ fn file(path: &str, base: &str) -> Option<Response> {
         Body::from(asset.data.into_owned())
     };
 
+    let mut response = Response::builder()
+        .header(header::CONTENT_TYPE, mime.as_ref())
+        .header(header::CACHE_CONTROL, cache_control);
+    if let Some(policy) = policy {
+        response = response.header(header::CONTENT_SECURITY_POLICY, policy);
+    }
+
     Some(
-        Response::builder()
-            .header(header::CONTENT_TYPE, mime.as_ref())
-            .header(header::CACHE_CONTROL, cache_control)
+        response
             .body(body)
             .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response()),
     )
+}
+
+/// The policy `index.html` is served under.
+///
+/// **Script is the bundle and nothing else.** The one inline script — the
+/// theme resolver that has to run before first paint — is allowed by its hash,
+/// computed from the embedded file rather than written down, so editing it
+/// cannot silently break the page and no `'unsafe-inline'` is needed to keep
+/// it working. Any other inline script, which is what an injection would be,
+/// does not run.
+///
+/// Style keeps `'unsafe-inline'`: Radix positions popovers with inline styles
+/// and a policy that refused them would be a broken tooltip rather than a
+/// defence. Style injection is not script execution.
+///
+/// `connect-src` names GitHub because the footer asks its API which kaas-lib
+/// release is newest — the one request the frontend makes off this origin.
+/// `frame-ancestors 'none'` is the clickjacking defence; `X-Frame-Options` is
+/// set beside it for browsers that predate it.
+fn content_security_policy(html: &str) -> String {
+    let hashes: String = inline_scripts(html)
+        .map(|script| {
+            use base64::Engine as _;
+            use sha2::Digest as _;
+            let digest = sha2::Sha256::digest(script.as_bytes());
+            format!(
+                " 'sha256-{}'",
+                base64::engine::general_purpose::STANDARD.encode(digest)
+            )
+        })
+        .collect();
+    format!(
+        "default-src 'self'; \
+         script-src 'self'{hashes}; \
+         style-src 'self' 'unsafe-inline'; \
+         img-src 'self' data:; \
+         font-src 'self' data:; \
+         connect-src 'self' https://api.github.com; \
+         object-src 'none'; \
+         base-uri 'self'; \
+         form-action 'self'; \
+         frame-ancestors 'none'"
+    )
+}
+
+/// The bodies of every `<script>` without a `src`, exactly as a browser hashes
+/// them: the text between the tags, whitespace and all.
+fn inline_scripts(html: &str) -> impl Iterator<Item = &str> {
+    let mut rest = html;
+    std::iter::from_fn(move || {
+        loop {
+            let open = rest.find("<script")?;
+            let after_open = rest.get(open..)?;
+            let tag_end = after_open.find('>')?;
+            let tag = after_open.get(..tag_end)?;
+            let body_start = after_open.get(tag_end + 1..)?;
+            let close = body_start.find("</script>")?;
+            let body = body_start.get(..close)?;
+            rest = body_start.get(close..)?;
+            if !tag.contains("src=") {
+                return Some(body);
+            }
+        }
+    })
 }
 
 /// Point `index.html` at a prefix.
@@ -164,6 +239,43 @@ mod tests {
         // time. It has no assets and no head; rewriting it must not mangle it.
         let placeholder = "<!doctype html>\n<meta charset=\"utf-8\">\n<title>not built</title>";
         assert_eq!(rebase(placeholder, "/proxy/8099"), placeholder);
+    }
+
+    #[test]
+    fn only_inline_scripts_are_hashed() {
+        let html = "<head><script>boot()</script>\
+                    <script type=\"module\" src=\"/assets/index.js\"></script></head>";
+        let found: Vec<&str> = inline_scripts(html).collect();
+        assert_eq!(found, ["boot()"]);
+    }
+
+    #[test]
+    fn the_policy_allows_the_inline_script_by_hash_and_nothing_else_inline() {
+        // `echo -n 'boot()' | openssl dgst -sha256 -binary | base64`
+        let policy = content_security_policy("<script>boot()</script>");
+        assert!(
+            policy.contains(
+                "script-src 'self' 'sha256-MeZS89WlF0u+o0hCvHTBt4q1WHU+U+sJKgbdRUc36mY='"
+            ),
+            "{policy}"
+        );
+        assert!(!policy.contains("unsafe-eval"), "{policy}");
+        assert!(policy.contains("frame-ancestors 'none'"), "{policy}");
+        let script_src = policy
+            .split(';')
+            .find(|directive| directive.trim().starts_with("script-src"))
+            .expect("a script-src");
+        assert!(!script_src.contains("unsafe-inline"), "{policy}");
+    }
+
+    #[test]
+    fn index_html_carries_a_policy_and_assets_do_not_need_one() {
+        let index = file("index.html", "").expect("index.html is always embedded");
+        assert!(
+            index
+                .headers()
+                .contains_key(header::CONTENT_SECURITY_POLICY)
+        );
     }
 
     #[test]

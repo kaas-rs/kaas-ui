@@ -66,6 +66,9 @@ clap               = { version = "4.5", features = ["derive", "env"] }
 rust-embed = "8.12"
 mime_guess = "2"
 bytes      = "1.12"
+# The CSP hash of index.html's one inline script. Both already in the tree.
+sha2       = "0.10"
+base64     = "0.22"
 
 # payload decoding. One library resolves schema ids and decodes all three
 # registry-backed formats, because all three are the same Confluent wire

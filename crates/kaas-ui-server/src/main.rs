@@ -26,11 +26,13 @@ use std::time::Duration;
 
 use arc_swap::ArcSwap;
 use axum::Router;
+use axum::http::{HeaderName, HeaderValue, header};
 use clap::Parser;
 use kaas_ui_api::AppState;
 use kaas_ui_auth::{Policy, Provider};
 use kaas_ui_core::{Config, Registry};
 use tower_http::compression::CompressionLayer;
+use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
@@ -151,6 +153,28 @@ fn build_router(
         // hand-written one would silently reintroduce that — a live view whose
         // records arrive in bursts of a hundred, seconds late.
         .layer(CompressionLayer::new())
+        // Beneath every response, including the API's and Dex's. Each only
+        // fills a gap, so a header Dex chose for its own pages is left alone;
+        // the page's `Content-Security-Policy` is set where the page is, in
+        // `assets`, because it depends on what the bundle contains.
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::X_CONTENT_TYPE_OPTIONS,
+            HeaderValue::from_static("nosniff"),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::X_FRAME_OPTIONS,
+            HeaderValue::from_static("DENY"),
+        ))
+        // Topic names and filter strings ride in this app's URLs, and neither
+        // is anyone else's business.
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::REFERRER_POLICY,
+            HeaderValue::from_static("same-origin"),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            HeaderName::from_static("cross-origin-opener-policy"),
+            HeaderValue::from_static("same-origin"),
+        ))
         .layer(TraceLayer::new_for_http()))
 }
 
@@ -377,6 +401,22 @@ environments:
 
         assert_eq!(get(app.clone(), "/dex/auth").await, StatusCode::BAD_GATEWAY);
         assert_eq!(get(app, "/health").await, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn every_response_carries_the_browser_hardening_headers() {
+        let app = build_router(state(), None, String::new()).expect("the router builds");
+        for path in ["/health", "/api/me", "/"] {
+            let response = app
+                .clone()
+                .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            let headers = response.headers();
+            assert_eq!(headers["x-content-type-options"], "nosniff", "{path}");
+            assert_eq!(headers["x-frame-options"], "DENY", "{path}");
+            assert_eq!(headers["referrer-policy"], "same-origin", "{path}");
+        }
     }
 
     #[tokio::test]

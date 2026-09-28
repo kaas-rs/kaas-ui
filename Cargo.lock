@@ -1901,6 +1901,7 @@ version = "0.13.5"
 dependencies = [
  "arc-swap",
  "axum",
+ "base64 0.22.1",
  "clap",
  "hyper-util",
  "kaas-ui-api",
@@ -1909,6 +1910,7 @@ dependencies = [
  "mime_guess",
  "rust-embed",
  "serde_json",
+ "sha2 0.10.9",
  "tokio",
  "tower",
  "tower-http 0.7.1",
