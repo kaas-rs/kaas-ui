@@ -782,7 +782,15 @@ fn principal_of(claims: &IdTokenClaims<GroupClaims, CoreGenderClaim>) -> Princip
     if let Some(username) = claims.preferred_username() {
         aliases.push(username.as_str().to_owned());
     }
-    if let Some(email) = claims.email() {
+    // **Only a verified address is a name to grant access by.** A role naming
+    // `ada@example.test` means the person who owns that mailbox, and an
+    // unverified `email` is whatever someone typed into a profile form — on
+    // any connector that relays one, it would let a stranger claim a role by
+    // spelling an address. Absent counts as unverified. It still renders:
+    // `name` above falls back to it, and a display name grants nothing.
+    if let Some(email) = claims.email()
+        && claims.email_verified() == Some(true)
+    {
         aliases.push(email.as_str().to_owned());
     }
 
@@ -1184,6 +1192,7 @@ mod tests {
                 "sub": "CgVhZG1pbhIIbWljcm9zb2Z0",
                 "preferred_username": "ada",
                 "email": "ada@example.test",
+                "email_verified": true,
                 "groups": ["platform-team", "kafka-readers"]
             }"#,
         ));
@@ -1223,6 +1232,7 @@ mod tests {
                 "iat": 1893452400,
                 "sub": "sub-1",
                 "email": "ada@example.test",
+                "email_verified": true,
                 "groups": ["platform-team"]
             }"#,
         ));
@@ -1250,6 +1260,7 @@ mod tests {
                 "iat": 1893452400,
                 "sub": "CgVhZG1pbhIFbG9jYWw",
                 "email": "admin@kaas-ui.test",
+                "email_verified": true,
                 "name": "acceptance-admin"
             }"#,
         ));
@@ -1261,6 +1272,34 @@ mod tests {
         // never grant access — but it is what renders.
         assert_eq!(who.display_name(), "acceptance-admin");
         assert!(!who.identifiers().any(|id| id == "acceptance-admin"));
+    }
+
+    /// An address the provider did not vouch for names nobody.
+    ///
+    /// A role's `subjects` entry is a claim about who owns a mailbox; a
+    /// connector relaying a profile field nobody confirmed would otherwise let
+    /// anyone type their way into it.
+    #[test]
+    fn an_unverified_email_is_not_an_identifier() {
+        for verified in [r#""email_verified": false,"#, ""] {
+            let who = principal_of(&claims_of(&format!(
+                r#"{{
+                    "iss": "https://kaas.smeding.cloud/dex",
+                    "aud": "kaas-ui",
+                    "exp": 1893456000,
+                    "iat": 1893452400,
+                    {verified}
+                    "sub": "sub-1",
+                    "email": "benjamin@smdng.nl"
+                }}"#
+            )));
+            assert!(
+                !who.identifiers().any(|id| id == "benjamin@smdng.nl"),
+                "matched on an unverified email ({verified:?})"
+            );
+            // It still renders, which is harmless: names grant nothing.
+            assert_eq!(who.display_name(), "benjamin@smdng.nl");
+        }
     }
 
     /// `preferred_username` wins the display name, then `name`, then `email`.
