@@ -80,24 +80,24 @@ happened to be able to read.
 
 ### The OAUTHBEARER listener, and what kaas-ui needs to use it
 
-Strimzi's `internal` listener on **9094** is `SASL_SSL` with OAUTHBEARER
-validated against an Entra tenant's JKWS, and `authorization: simple` behind
-it — `StandardAuthorizer`, default-deny. It is a different service from the
-one everything else here dials:
+Strimzi's `oauth` listener on **9096** is `SASL_SSL` with OAUTHBEARER
+validated against an Entra tenant's JWKS, and `authorization: simple` behind
+it — `StandardAuthorizer`, default-deny. kaas serves the same listener under
+the same name and port, and both clusters line their listeners up the same
+way, so only the host differs between them:
 
 ```
-kafka-cluster-kafka-internal-bootstrap.strimzi.svc.cluster.local:9094   ← OAUTHBEARER
-kafka-cluster-kafka-bootstrap.strimzi.svc.cluster.local:9092            ← plaintext, anonymous
+kafka-cluster-kafka-bootstrap.strimzi.svc.cluster.local:9093   ← mtls   (client certificate)
+kafka-cluster-kafka-bootstrap.strimzi.svc.cluster.local:9095   ← scram  (SASL/SCRAM-SHA-512)
+kafka-cluster-kafka-bootstrap.strimzi.svc.cluster.local:9096   ← oauth  (SASL/OAUTHBEARER)
 ```
 
-Note the `-internal-` segment. `kafka-cluster-kafka-bootstrap` serves
-9091/9092/9093 and nothing on 9094, so getting the service name wrong reads as
-"connection refused" rather than as an auth problem.
+There is no anonymous listener on either cluster.
 
 ```yaml
 kafka_clusters:
   - id: strimzi
-    bootstrap: ["kafka-cluster-kafka-internal-bootstrap.strimzi.svc.cluster.local:9094"]
+    bootstrap: ["kafka-cluster-kafka-bootstrap.strimzi.svc.cluster.local:9096"]
     tls:
       # `kafka-cluster-cluster-ca-cert`, key `ca.crt` — the *cluster* CA, not
       # the clients CA. Hostname verification stays on: the listener
