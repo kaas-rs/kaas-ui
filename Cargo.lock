@@ -1832,7 +1832,7 @@ dependencies = [
 
 [[package]]
 name = "kaas-ui-api"
-version = "0.13.6"
+version = "0.14.0"
 dependencies = [
  "arc-swap",
  "async-stream",
@@ -1857,7 +1857,7 @@ dependencies = [
 
 [[package]]
 name = "kaas-ui-auth"
-version = "0.13.6"
+version = "0.14.0"
 dependencies = [
  "arc-swap",
  "humantime",
@@ -1874,7 +1874,7 @@ dependencies = [
 
 [[package]]
 name = "kaas-ui-core"
-version = "0.13.6"
+version = "0.14.0"
 dependencies = [
  "arc-swap",
  "bytes",
@@ -1899,7 +1899,7 @@ dependencies = [
 
 [[package]]
 name = "kaas-ui-serde"
-version = "0.13.6"
+version = "0.14.0"
 dependencies = [
  "apache-avro",
  "arc-swap",
@@ -1918,7 +1918,7 @@ dependencies = [
 
 [[package]]
 name = "kaas-ui-server"
-version = "0.13.6"
+version = "0.14.0"
 dependencies = [
  "arc-swap",
  "axum",
@@ -4534,7 +4534,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.13.6"
+version = "0.14.0"
 dependencies = [
  "kaas-ui-api",
  "kaas-ui-core",
