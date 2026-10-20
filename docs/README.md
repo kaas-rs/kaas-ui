@@ -33,6 +33,8 @@ cargo xtask login   # 11 assertions, a real login. Needs the dex-test app
 | 6 — schema registry | **done** — one registry per environment, Avro/Protobuf/JSON Schema, the codec chip, the schema browser, the payload filter over decoded values |
 | 7 — read-only admin | **done** — ACLs, quotas, SCRAM users, reassignments, the transaction inspector, and the `CapabilityTab` the design system named in Phase 1 |
 | 8 — cross-cluster | not started — fleet topic search, cluster comparison, capability diff |
+| 9 — Connect and MM2 | proposed — Connect clusters, MirrorMaker 2 flows; writes behind Phase 10's gate |
+| 10 — administration | proposed — writes under ceiling + RBAC + GitOps ownership; read-only stays the default |
 
 Phase *n* is milestone M*n* in PLAN.md §8. One numbering, not two.
 
@@ -43,6 +45,8 @@ Phase *n* is milestone M*n* in PLAN.md §8. One numbering, not two.
 | [00](00-foundations.md) | **Foundations** | workspace, dependency pins, how kaas-lib is consumed, the invariants CI enforces |
 | [11](11-built.md) | **What is built** | phases 0–6: what each decided differently from its plan, what was measured, what is still unproven |
 | [09](09-phase-8-cross-cluster.md) | **Phase 8 — cross-cluster** | fleet topic search, cluster comparison, capability diff |
+| [12](12-phase-9-connect-and-mm2.md) | **Phase 9 — Connect and MirrorMaker 2** | connectors, tasks, redacted configs, replication flows |
+| [13](13-phase-10-administration.md) | **Phase 10 — administration under RBAC** | the write gate, the action catalogue, GitOps ownership, kaas-lib's mutation ceiling |
 
 Running alongside all of them:
 
