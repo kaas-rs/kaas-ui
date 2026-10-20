@@ -36,6 +36,22 @@ struct Assets;
 pub async fn serve(uri: Uri, base: String) -> Response {
     let path = uri.path().trim_start_matches('/');
 
+    // An API path that no route claimed is a missing endpoint, never a page.
+    // Answering it with index.html is a 200 carrying the wrong document: the
+    // client's JSON parse fails on `<!doctype` and the real cause — a server
+    // older than the frontend calling it — is nowhere in the message.
+    if path == "api" || path.starts_with("api/") {
+        return (
+            StatusCode::NOT_FOUND,
+            [(header::CONTENT_TYPE, "application/json")],
+            format!(
+                r#"{{"message":"no such API route: /{}. A frontend newer than this server calls it — restart the server on the current build.","kind":"invalid"}}"#,
+                path.replace(['"', '\\'], "")
+            ),
+        )
+            .into_response();
+    }
+
     if let Some(response) = file(path, &base) {
         return response;
     }
@@ -212,6 +228,31 @@ mod tests {
   </head>
   <body><div id="root"></div></body>
 </html>"#;
+
+    #[tokio::test]
+    async fn an_unrouted_api_path_is_a_json_404_not_the_frontend() {
+        let response = serve(
+            Uri::from_static("/api/environments/dev/clusters/x/nope"),
+            String::new(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .map(|v| v.as_bytes()),
+            Some(&b"application/json"[..])
+        );
+        // A client-side route that merely starts with the letters is still a page.
+        let page = serve(Uri::from_static("/apis-overview"), String::new()).await;
+        assert_ne!(
+            page.headers()
+                .get(header::CONTENT_TYPE)
+                .map(|v| v.as_bytes()),
+            Some(&b"application/json"[..])
+        );
+    }
 
     #[test]
     fn a_prefix_reaches_both_the_assets_and_the_base_element() {
