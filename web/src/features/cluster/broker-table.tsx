@@ -1,10 +1,9 @@
 import { useState } from "react"
 
-import { useLogDirs } from "@/api/client"
+import { useBrokerTls, useLogDirs } from "@/api/client"
 import { HintHead, Spinner } from "@/components/domain"
 import { count } from "@/lib/format"
 import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import {
   Table,
@@ -19,14 +18,27 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import type { Broker } from "@/api/types"
+import { ExpandLink } from "./expand-link"
 import { LogDirsTable } from "./log-dirs-table"
+import { TlsCell, TlsDetail, brokerError } from "./tls-panel"
 
 /**
- * The broker list, with an expandable per-broker log-dirs view.
+ * The broker list, with one expandable panel below it: a broker's certificate
+ * chain or its log dirs, never both — opening one closes the other, so the
+ * panel under the table always answers the last thing clicked.
  *
- * Which broker's log dirs are open is this table's own state: the fan-out is
- * per broker and lazy, so nothing is fetched until someone asks.
+ * Log dirs are fetched per broker and lazily, so nothing is read until someone
+ * asks. Certificates
+ * are fetched up front instead — one request, read off connections that
+ * mostly exist already — because the expiry is worth seeing without asking.
+ * The cluster card's summary reads the same query, so it is still one request.
  */
+/** The one panel open below the table, and whose it is. */
+interface Panel {
+  kind: "tls" | "logDirs"
+  nodeId: number
+}
+
 export function BrokerTable({
   envId,
   clusterId,
@@ -36,8 +48,22 @@ export function BrokerTable({
   clusterId: string
   brokers: Broker[]
 }) {
-  const [logDirBroker, setLogDirBroker] = useState<number | null>(null)
-  const logDirs = useLogDirs(envId, clusterId, logDirBroker)
+  const [open, setOpen] = useState<Panel | null>(null)
+  const isOpen = (kind: Panel["kind"], nodeId: number) =>
+    open?.kind === kind && open.nodeId === nodeId
+  const toggle = (kind: Panel["kind"], nodeId: number) =>
+    setOpen(isOpen(kind, nodeId) ? null : { kind, nodeId })
+
+  const logDirs = useLogDirs(
+    envId,
+    clusterId,
+    open?.kind === "logDirs" ? open.nodeId : null
+  )
+  const tls = useBrokerTls(envId, clusterId)
+  const tlsItems = tls.data?.items ?? []
+  const tlsErrors = tls.data?.errors ?? []
+  const tlsFor = (nodeId: number) =>
+    tlsItems.find((item) => item.nodeId === nodeId)
 
   return (
     <>
@@ -77,6 +103,10 @@ export function BrokerTable({
                 hint="broker, controller, or both on a dual-role node"
               />
               <HintHead
+                label="certificate"
+                hint="the earliest expiry in the chain this broker presented to kaas-ui — click for the chain"
+              />
+              <HintHead
                 label="log dirs"
                 hint="its data directories and what they hold — fetched per broker, on ask"
               />
@@ -105,18 +135,21 @@ export function BrokerTable({
                   <BrokerRoleBadges broker={broker} />
                 </TableCell>
                 <TableCell>
-                  <Button
-                    variant="link"
-                    size="sm"
-                    className="h-auto p-0 text-[12px]"
-                    onClick={() =>
-                      setLogDirBroker(
-                        logDirBroker === broker.nodeId ? null : broker.nodeId
-                      )
-                    }
+                  <TlsCell
+                    tls={tlsFor(broker.nodeId)}
+                    error={brokerError(tlsErrors, broker.nodeId)}
+                    loading={tls.isLoading}
+                    open={isOpen("tls", broker.nodeId)}
+                    onToggle={() => toggle("tls", broker.nodeId)}
+                  />
+                </TableCell>
+                <TableCell>
+                  <ExpandLink
+                    open={isOpen("logDirs", broker.nodeId)}
+                    onToggle={() => toggle("logDirs", broker.nodeId)}
                   >
-                    {logDirBroker === broker.nodeId ? "hide" : "show"}
-                  </Button>
+                    show
+                  </ExpandLink>
                 </TableCell>
               </TableRow>
             ))}
@@ -124,17 +157,25 @@ export function BrokerTable({
         </Table>
       </div>
 
-      {logDirBroker !== null ? (
+      {open?.kind === "tls" ? (
+        <div className="mt-4">
+          <TlsDetail
+            nodeId={open.nodeId}
+            tls={tlsFor(open.nodeId)}
+            error={brokerError(tlsErrors, open.nodeId)}
+          />
+        </div>
+      ) : open?.kind === "logDirs" ? (
         <div className="mt-4">
           {logDirs.isLoading ? (
-            <Spinner label={`reading log dirs on broker ${logDirBroker}`} />
+            <Spinner label={`reading log dirs on broker ${open.nodeId}`} />
           ) : logDirs.error ? (
             <Card className="p-4 text-[13px] text-danger">
-              broker {logDirBroker}: {String(logDirs.error)}
+              broker {open.nodeId}: {String(logDirs.error)}
             </Card>
           ) : (
             <LogDirsTable
-              broker={logDirBroker}
+              broker={open.nodeId}
               dirs={logDirs.data?.items ?? []}
             />
           )}

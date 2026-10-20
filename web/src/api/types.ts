@@ -620,6 +620,52 @@ export interface LogDir {
   error: string | null
 }
 
+/**
+ * One broker's TLS session, as kaas-ui's own connection to it negotiated.
+ *
+ * Per broker because that is all there is: Kafka has no api that returns a
+ * certificate, so the only one kaas-ui knows is the one presented to it, on
+ * the listener it dials. A broker that refused the handshake has no row — it
+ * is an `errors` entry naming what was rejected.
+ */
+export interface BrokerTls {
+  nodeId: number
+  /** The advertised address dialled. */
+  peer: string
+  /** `null` on a plaintext listener: a configuration, not a failure. */
+  session: TlsSession | null
+}
+
+export interface TlsSession {
+  protocolVersion: string
+  cipherSuite: string
+  /** What the leaf was verified against. Compare SANs to this, not to the host. */
+  serverName: string
+  /** Leaf first, as the broker sent it. */
+  chain: Certificate[]
+}
+
+export interface Certificate {
+  subject: string
+  issuer: string
+  serial: string
+  /** Milliseconds since the epoch. */
+  notBefore: number
+  notAfter: number
+  dnsNames: string[]
+  ipAddresses: string[]
+  /** Empty when the extension is absent. */
+  keyUsage: string[]
+  /** Empty when the extension is absent — which means "any purpose". */
+  extendedKeyUsage: string[]
+  /** `null` when basicConstraints is absent: not the same claim as `false`. */
+  isCa: boolean | null
+  publicKey: string
+  signatureAlgorithm: string
+  selfSigned: boolean
+  sha256Fingerprint: string
+}
+
 export interface GroupSummary {
   groupId: string
   state: string

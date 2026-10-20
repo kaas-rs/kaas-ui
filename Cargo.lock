@@ -853,8 +853,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7c1832837b905bbfb5101e07cc24c8deddf52f93225eee6ead5f4d63d53ddcb"
 dependencies = [
  "const-oid 0.9.6",
+ "der_derive",
+ "flagset",
  "pem-rfc7468",
  "zeroize",
+]
+
+[[package]]
+name = "der_derive"
+version = "0.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8034092389675178f570469e6c3b0465d3d30b4505c294a6550db47f3c17ad18"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -1062,6 +1075,12 @@ name = "find-msvc-tools"
 version = "0.1.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aedcfb3409746eddb02b9e19ebda1c3394f759a152e48ee875a0844d1b955484"
+
+[[package]]
+name = "flagset"
+version = "0.4.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b7ac824320a75a52197e8f2d787f6a38b6718bb6897a35142d749af3c0e8f4fe"
 
 [[package]]
 name = "flate2"
@@ -1870,10 +1889,12 @@ dependencies = [
  "reqwest 0.13.5",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
  "utoipa",
+ "x509-cert",
 ]
 
 [[package]]
@@ -1920,9 +1941,9 @@ dependencies = [
 
 [[package]]
 name = "kafka-admin"
-version = "0.10.0"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52583e94d937acb0097af5237c7f94b9f944712be484ab351b7a813c2da8b789"
+checksum = "4b5a35cef7ea652c80226ae3ca0dc0613ca369bb074b90cc5a97cef87342879d"
 dependencies = [
  "base64 0.23.1",
  "bytes",
@@ -1937,9 +1958,9 @@ dependencies = [
 
 [[package]]
 name = "kafka-conn"
-version = "0.10.0"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3fdb5b341e6951180fb52ca76d89160214613e1e99dad8bca1128823dba29ba4"
+checksum = "ec80ba097bda8b4ff067c64fda9a5462d99fed875411e88ee72905733795dcc1"
 dependencies = [
  "base64 0.23.1",
  "bytes",
@@ -1970,9 +1991,9 @@ dependencies = [
 
 [[package]]
 name = "kafka-meta"
-version = "0.10.0"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3fbd0ed5ad9306bc5ae5ae9147a1f26bc1813abcc122b7ec9a042e73e028d04e"
+checksum = "da7b63b12ec1bd1fbb40e92a655960d4a7bf4d73c315121985f7cdd33cf12164"
 dependencies = [
  "arc-swap",
  "bytes",
@@ -2006,9 +2027,9 @@ dependencies = [
 
 [[package]]
 name = "kafka-read"
-version = "0.10.0"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9aa647754d4da30d6a34f612bb9887fe136c410a9edf076307f505e98a753f92"
+checksum = "c7901a93565ea0eee7cead0005f1b09d9b0732e72ec9b442dcf5ab3a5a19c249"
 dependencies = [
  "anyhow",
  "bytes",
@@ -4499,6 +4520,17 @@ name = "writeable"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
+
+[[package]]
+name = "x509-cert"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1301e935010a701ae5f8655edc0ad17c44bad3ac5ce8c39185f75453b720ae94"
+dependencies = [
+ "const-oid 0.9.6",
+ "der",
+ "spki",
+]
 
 [[package]]
 name = "xtask"

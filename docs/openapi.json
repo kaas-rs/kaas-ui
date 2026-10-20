@@ -684,6 +684,54 @@
         }
       }
     },
+    "/api/environments/{env}/clusters/{id}/tls": {
+      "get": {
+        "tags": [
+          "clusters"
+        ],
+        "summary": "`GET /api/clusters/{id}/tls`",
+        "description": "The certificate each broker presented to kaas-ui's own connection, one row\nper broker in the snapshot. Per broker because that is the only shape the\nanswer has — see `kaas_ui_core::tls` — and per-item because one broker\nrefusing the handshake is exactly the case this page exists for: its row\nis an error naming what rustls rejected, and the others still render.\n\nDials brokers kaas-ui has not connected to yet, as `capabilities` and\n`log-dirs` do; brokers are dialled concurrently, so a dead one costs its\nown timeout and nobody else's.",
+        "operationId": "tls",
+        "parameters": [
+          {
+            "name": "env",
+            "in": "path",
+            "description": "Environment id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Cluster id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Each broker's TLS session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Envelope_BrokerTls"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such cluster"
+          },
+          "503": {
+            "description": "Configured but not connected"
+          }
+        }
+      }
+    },
     "/api/environments/{env}/clusters/{id}/topics": {
       "get": {
         "tags": [
@@ -2310,6 +2358,36 @@
           }
         }
       },
+      "BrokerTls": {
+        "type": "object",
+        "description": "One broker's TLS session, as kaas-ui's connection to it negotiated.",
+        "required": [
+          "nodeId",
+          "peer"
+        ],
+        "properties": {
+          "nodeId": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Node id."
+          },
+          "peer": {
+            "type": "string",
+            "description": "The address dialled — the advertised listener."
+          },
+          "session": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TlsSessionDto",
+                "description": "`None` on a plaintext listener. Not an error: absence of TLS is a\nconfiguration, and the UI says so rather than warning."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
       "Capabilities": {
         "type": "object",
         "description": "The capability answer.",
@@ -2377,6 +2455,100 @@
           }
         ],
         "description": "Where the version table came from."
+      },
+      "CertificateDto": {
+        "type": "object",
+        "description": "The fields of one certificate that decide whether a Kafka client connects.",
+        "required": [
+          "subject",
+          "issuer",
+          "serial",
+          "notBefore",
+          "notAfter",
+          "dnsNames",
+          "ipAddresses",
+          "keyUsage",
+          "extendedKeyUsage",
+          "publicKey",
+          "signatureAlgorithm",
+          "selfSigned",
+          "sha256Fingerprint"
+        ],
+        "properties": {
+          "dnsNames": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "DNS subject alternative names. Hostname verification reads these and\nnothing else — the subject CN is ignored when they are present."
+          },
+          "extendedKeyUsage": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Extended key usage purposes. A broker's leaf needs `serverAuth`."
+          },
+          "ipAddresses": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "IP-address subject alternative names."
+          },
+          "isCa": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "From basicConstraints. `None` when the extension is absent, which is\nnot the same claim as `false`."
+          },
+          "issuer": {
+            "type": "string",
+            "description": "Issuer distinguished name, RFC 4514."
+          },
+          "keyUsage": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Key usage bits, by RFC 5280 name. Empty when the extension is absent."
+          },
+          "notAfter": {
+            "type": "integer",
+            "format": "int64",
+            "description": "End of validity, milliseconds since the epoch."
+          },
+          "notBefore": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Start of validity, milliseconds since the epoch."
+          },
+          "publicKey": {
+            "type": "string",
+            "description": "Key algorithm and size, e.g. `RSA 2048` or `EC secp256r1`."
+          },
+          "selfSigned": {
+            "type": "boolean",
+            "description": "Subject equals issuer."
+          },
+          "serial": {
+            "type": "string",
+            "description": "Serial number, colon-separated hex."
+          },
+          "sha256Fingerprint": {
+            "type": "string",
+            "description": "SHA-256 of the DER, colon-separated hex — what `openssl x509\n-fingerprint -sha256` prints, so the two can be compared by eye."
+          },
+          "signatureAlgorithm": {
+            "type": "string",
+            "description": "Signature algorithm, e.g. `sha256WithRSAEncryption`."
+          },
+          "subject": {
+            "type": "string",
+            "description": "Subject distinguished name, RFC 4514."
+          }
+        }
       },
       "Change": {
         "type": "string",
@@ -2926,6 +3098,74 @@
                   "type": "integer",
                   "description": "Partition replicas hosted here.",
                   "minimum": 0
+                }
+              }
+            },
+            "description": "The resources that answered."
+          },
+          "snapshotAgeMs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Age of the metadata snapshot the answer was built from, where one was\ninvolved. This is what makes \"as of 4 seconds ago\" honest.",
+            "minimum": 0
+          },
+          "total": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "How many resources matched before paging or truncation.\n\nPresent only where the endpoint pages. Filtering and sorting happen on\nthe server — a fleet with a five-thousand-topic cluster in it is real —\nso the browser needs to be told what it is looking at a window into.",
+            "minimum": 0
+          }
+        }
+      },
+      "Envelope_BrokerTls": {
+        "type": "object",
+        "description": "What every data endpoint returns.",
+        "required": [
+          "items",
+          "errors"
+        ],
+        "properties": {
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResourceError"
+            },
+            "description": "The resources that did not. Non-empty is still `200 OK`."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One broker's TLS session, as kaas-ui's connection to it negotiated.",
+              "required": [
+                "nodeId",
+                "peer"
+              ],
+              "properties": {
+                "nodeId": {
+                  "type": "integer",
+                  "format": "int32",
+                  "description": "Node id."
+                },
+                "peer": {
+                  "type": "string",
+                  "description": "The address dialled — the advertised listener."
+                },
+                "session": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/TlsSessionDto",
+                      "description": "`None` on a plaintext listener. Not an error: absence of TLS is a\nconfiguration, and the UI says so rather than warning."
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 }
               }
             },
@@ -7420,6 +7660,37 @@
             "format": "int32",
             "description": "The version within that subject.",
             "minimum": 0
+          }
+        }
+      },
+      "TlsSessionDto": {
+        "type": "object",
+        "description": "What one handshake agreed on, and the chain that came with it.",
+        "required": [
+          "protocolVersion",
+          "cipherSuite",
+          "serverName",
+          "chain"
+        ],
+        "properties": {
+          "chain": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CertificateDto"
+            },
+            "description": "The chain as the broker sent it, leaf first."
+          },
+          "cipherSuite": {
+            "type": "string",
+            "description": "The cipher suite, by IANA name."
+          },
+          "protocolVersion": {
+            "type": "string",
+            "description": "`TLSv1.2` or `TLSv1.3`."
+          },
+          "serverName": {
+            "type": "string",
+            "description": "The name the leaf was verified against. The advertised host unless a\nserver-name override is configured — compare SANs against this."
           }
         }
       },

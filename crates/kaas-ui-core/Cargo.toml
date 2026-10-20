@@ -29,6 +29,9 @@ thiserror       = { workspace = true }
 tokio           = { workspace = true }
 tracing         = { workspace = true }
 utoipa          = { workspace = true }
+# The broker certificate fingerprint, beside the parser.
+sha2            = { workspace = true }
+x509-cert       = { workspace = true }
 
 [dev-dependencies]
 # The record fixtures the payload tests are built from.

@@ -1,4 +1,4 @@
-//! The fleet view, cluster detail, brokers and log dirs.
+//! The fleet view, cluster detail, brokers, log dirs and broker TLS.
 
 use axum::Json;
 use axum::extract::{Path, State};
@@ -8,6 +8,8 @@ use kaas_ui_core::dto::{
 use kaas_ui_core::envelope::Envelope;
 use kaas_ui_core::health::ClusterStatus;
 use kaas_ui_core::registry::Registry;
+use kaas_ui_core::tls::{BrokerTls, TlsSessionDto};
+use kaas_ui_core::{ErrorKind, ResourceError};
 
 use kaas_ui_auth::{Access, Action, Resource};
 
@@ -266,4 +268,94 @@ pub async fn log_dirs(
     Ok(Json(Envelope::new(
         dirs.iter().map(LogDirDto::from).collect(),
     )))
+}
+
+/// `GET /api/clusters/{id}/tls`
+///
+/// The certificate each broker presented to kaas-ui's own connection, one row
+/// per broker in the snapshot. Per broker because that is the only shape the
+/// answer has — see `kaas_ui_core::tls` — and per-item because one broker
+/// refusing the handshake is exactly the case this page exists for: its row
+/// is an error naming what rustls rejected, and the others still render.
+///
+/// Dials brokers kaas-ui has not connected to yet, as `capabilities` and
+/// `log-dirs` do; brokers are dialled concurrently, so a dead one costs its
+/// own timeout and nobody else's.
+#[utoipa::path(
+    get,
+    path = "/api/environments/{env}/clusters/{id}/tls",
+    params(
+        ("env" = String, Path, description = "Environment id"),
+        ("id" = String, Path, description = "Cluster id"),
+    ),
+    responses(
+        (status = 200, description = "Each broker's TLS session", body = Envelope<BrokerTls>),
+        (status = 404, description = "No such cluster"),
+        (status = 503, description = "Configured but not connected"),
+    ),
+    tag = "clusters",
+)]
+pub async fn tls(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path((env, id)): Path<(String, String)>,
+) -> ApiResult<Json<Envelope<BrokerTls>>> {
+    let (handle, admin) = state.connected(&env, &id, &caller)?;
+    caller.require(
+        &id,
+        &handle.labels,
+        Resource::ClusterConfig,
+        Action::View,
+        None,
+    )?;
+    let snapshot = admin.cluster().snapshot();
+    let pool = admin.cluster().pool();
+
+    let mut nodes: Vec<i32> = snapshot.brokers().iter().map(|b| b.node_id).collect();
+    nodes.sort_unstable();
+    let outcomes = futures::future::join_all(nodes.into_iter().map(|node| async move {
+        let connection = call("connect to broker", pool.get(node)).await;
+        (node, connection)
+    }))
+    .await;
+
+    let mut items = Vec::new();
+    let mut errors = Vec::new();
+    for (node, connection) in outcomes {
+        let resource = format!("broker {node}");
+        let connection = match connection {
+            Ok(connection) => connection,
+            Err(error) => {
+                errors.push(error.into_resource_error(&resource));
+                continue;
+            }
+        };
+        let session = match connection.tls_session().map(TlsSessionDto::from_session) {
+            None => None,
+            Some(Ok(session)) => Some(session),
+            Some(Err(message)) => {
+                errors.push(ResourceError {
+                    resource,
+                    kind: ErrorKind::Decode,
+                    code: None,
+                    code_number: None,
+                    message,
+                    unsupported_api: None,
+                    retriable: false,
+                });
+                continue;
+            }
+        };
+        items.push(BrokerTls {
+            node_id: node,
+            peer: connection.peer().to_owned(),
+            session,
+        });
+    }
+
+    Ok(Json(
+        Envelope::new(items)
+            .with_errors(errors)
+            .with_snapshot_age(snapshot.age()),
+    ))
 }

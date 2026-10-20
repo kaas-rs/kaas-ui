@@ -11,6 +11,7 @@ import {
 import { Card, CardContent } from "@/components/ui/card"
 import { PageTitle } from "@/components/page-title"
 import { BrokerTable } from "@/features/cluster/broker-table"
+import { TlsCard } from "@/features/cluster/tls-panel"
 
 export function ClusterOverviewPage({
   envId,
@@ -77,6 +78,8 @@ export function ClusterOverviewPage({
           </CardContent>
         </Card>
       </Section>
+
+      <TlsCard envId={envId} clusterId={clusterId} />
 
       <Section title="Brokers">
         <BrokerTable

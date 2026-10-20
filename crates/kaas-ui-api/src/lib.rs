@@ -399,6 +399,7 @@ fn api_router() -> Router<AppState> {
             "/environments/{env}/clusters/{id}/brokers/{node}/log-dirs",
             get(clusters::log_dirs),
         )
+        .route("/environments/{env}/clusters/{id}/tls", get(clusters::tls))
         .route(
             "/environments/{env}/clusters/{id}/configs",
             get(configs::cluster_configs),

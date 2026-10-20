@@ -22,14 +22,14 @@ rust-version = "1.97"
 # `cargo xtask link` writes a fenced [patch.crates-io] block for local
 # iteration against ../kaas-lib; `cargo xtask ci` fails if that fence was
 # committed.
-kafka-admin = "0.10"
+kafka-admin = "0.11"
 # `oidc` is what makes SASL/OAUTHBEARER usable from a config file: it brings
 # the `client_credentials` token provider that fetches a token and refreshes
 # it. Without the feature the mechanism exists but only a hand-written
 # `TokenProvider` can reach it, which a YAML block cannot be.
-kafka-conn  = { version = "0.10", features = ["oidc"] }
-kafka-meta  = "0.10"
-kafka-read  = "0.10"
+kafka-conn  = { version = "0.11", features = ["oidc"] }
+kafka-meta  = "0.11"
+kafka-read  = "0.11"
 
 # HTTP
 axum       = { version = "0.8", features = ["macros", "http2"] }
@@ -109,6 +109,13 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "for
 # Only to install that provider, once, behind a `Once`.
 rustls = { version = "0.23.45", default-features = false, features = ["ring", "std"] }
 
+# The broker certificate panel. kaas-lib hands over the chain as DER and
+# deliberately parses none of it — another ASN.1 implementation in the crate
+# every other crate sits on — so the parser lives here, on the side that wants
+# the fields. RustCrypto's rather than `x509-parser` because `der` and `spki`
+# are already in the tree beneath openidconnect: three new crates, not ten.
+x509-cert = { version = "0.2", default-features = false }
+
 # internal
 kaas-ui-auth  = { path = "crates/kaas-ui-auth" }
 kaas-ui-serde = { path = "crates/kaas-ui-serde" }
@@ -135,4 +142,3 @@ missing_debug_implementations = "warn"
 lto           = "thin"
 codegen-units = 1
 strip         = true
-

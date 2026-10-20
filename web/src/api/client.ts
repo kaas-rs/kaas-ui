@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query"
 import type {
   Acl,
+  BrokerTls,
   Capabilities,
   ClusterCard,
   ClusterDetail,
@@ -209,6 +210,20 @@ export function useLogDirs(env: string, id: string, node: number | null) {
     queryFn: () =>
       get<Envelope<LogDir>>(`${cluster(env, id)}/brokers/${node}/log-dirs`),
     enabled: node !== null,
+  })
+}
+
+/**
+ * Every broker's TLS session. One request for the cluster rather than one per
+ * row: the connections exist already, so this costs no broker round trip
+ * unless a broker has never been dialled. A certificate does not change under
+ * a live connection, so there is nothing to poll for.
+ */
+export function useBrokerTls(env: string, id: string) {
+  return useQuery({
+    queryKey: ["broker-tls", env, id],
+    queryFn: () => get<Envelope<BrokerTls>>(`${cluster(env, id)}/tls`),
+    staleTime: 5 * 60_000,
   })
 }
 

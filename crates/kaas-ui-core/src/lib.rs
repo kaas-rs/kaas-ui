@@ -32,6 +32,7 @@ pub mod federated;
 pub mod health;
 pub mod registry;
 pub mod sizing;
+pub mod tls;
 
 pub use config::{ClusterEntry, Config};
 pub use envelope::{Envelope, ResourceError};
