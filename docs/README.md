@@ -38,6 +38,22 @@ cargo xtask login   # 11 assertions, a real login. Needs the dex-test app
 
 Phase *n* is milestone M*n* in PLAN.md §8. One numbering, not two.
 
+## Order
+
+Agreed 2026-10-20 for Phases 9 and 10 — interleaved, because the first write
+is proven on Connect, which needs no kaas-lib release:
+
+| step | needs | delivers | state |
+|---|---|---|---|
+| **9a** | — | read-only Connect: `kaas-ui-connect`, connectors, tasks, redacted configs, links into topics and lag | in progress |
+| **10a** | 9a | the write gate — ceiling, grant, ownership, Origin check, audit intent/outcome, `/api/me` actions — proven on `connector.restart` | |
+| kaas-lib asks 17–18 | parallel with 10a | mutation ceiling, `Admin::scoped` | |
+| **10a, Kafka half** | kaas-lib release | `consumer.reset_offsets` through the same gate | |
+| **9b · 9c · 9d** | 9a; 9d also 10a | MM2 flows, MM2 record decoding, the remaining Connect writes | |
+| **10b–10e** | 10a | topics and messages, security, cluster and transactions, schema registry | |
+
+Phase 8 is independent of both.
+
 ## Read in this order
 
 | | | |

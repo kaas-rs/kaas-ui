@@ -452,16 +452,22 @@ the test on a Connect cluster *not* owned by Git):
 
 ## Order
 
-1. **9a** — `kaas-ui-connect`, config, registry lookup, redaction, the
-   Connect pages, the links. Stands alone.
-2. **9b** — flows from REST, fixtures A and B.
-3. **9c** — the three decoders in `kaas-ui-serde`; heartbeats, checkpoints,
-   offset syncs, topic-based discovery. No upstream dependency.
-4. **9d** — Connect writes, after Phase 10a lands the gate. Independent of
-   9b/9c; it needs only 9a's `kaas-ui-connect` and 10a's `Grant`.
+Agreed 2026-10-20: interleaved with Phase 10, **9a → 10a → 9b/9c/9d and
+the rest**. The whole sequence is in [README.md](README.md#order).
 
-9a–9c do not wait for Phase 10: they only read. Independent of Phase 8;
-either can go first. 8's cross-cluster topic search
+1. **9a** — `kaas-ui-connect` (`ConnectClient`, reads only), config,
+   registry lookup, redaction, the Connect pages, the links. First, because
+   it needs nothing from kaas-lib or from Phase 10, it is what retiring
+   kafbat-ui for Connect waits on, and 10a's pilot write runs through it.
+2. *Phase 10a* — the write gate, proven on `connector.restart`, which is
+   9d's first action landing early.
+3. **9b** — flows from REST, fixtures A and B.
+4. **9c** — the three decoders in `kaas-ui-serde`; heartbeats, checkpoints,
+   offset syncs, topic-based discovery. No upstream dependency.
+5. **9d** — the remaining Connect writes on 10a's gate: restart task, pause,
+   resume, stop, edit, create, delete, offsets. Independent of 9b/9c.
+
+9a–9c only read. Independent of Phase 8; either can go first. 8's cross-cluster topic search
 is where a mirrored topic's two names would want to be one row, which argues
 mildly for 9b before 8 finishes.
 

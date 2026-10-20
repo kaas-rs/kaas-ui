@@ -221,11 +221,38 @@ by Phase 1).
   (ACLs, quotas, SCRAM), `KafkaConnector`; `format: plain` renders the
   `kafka-topics.sh` / `kafka-configs.sh` / `kafka-acls.sh` invocation instead.
   Shown beside the Apply button, or instead of it.
-- **Ownership is declared, not discovered.** Strimzi's Topic and User
-  Operators will revert a change to a resource they manage; kaas-ui cannot
-  see their CRs from the Kafka protocol. Patterns in config are honest and
-  cheap. Reading the CRs through the Kubernetes API (kaas-ui already has a
-  ServiceAccount) is a later improvement, listed below, not a dependency.
+- **Ownership is declared, not discovered — and kaas-ui never asks
+  Kubernetes.** No broker says over the Kafka protocol who manages a topic or
+  an ACL, and kaas-ui does not depend on the platform it runs on, so there is
+  nothing to discover from. Two declarations, merged:
+  - **a generated ownership file** — the recommended source. The GitOps
+    repository already holds every `KafkaTopic`, `KafkaUser` and
+    `KafkaConnector` it owns; a generator there (kustomize or CI) emits exact
+    names, mounted beside the config and picked up by `reload.rs` like any
+    ConfigMap change. Cannot drift from Git, because it is made from it.
+
+    ```yaml
+    # ownership.yaml — generated, never hand-edited
+    dev/strimzi:
+      topics: [audit-log, dlq-mqtt-home, events, gtfs-rt-trip-updates]
+      principals: ["User:alice", "User:CN=bob-mtls"]
+    dev/connect:
+      connectors: [gtfs-schedule-nl-connector, mqtt-home-connector]
+    ```
+  - **patterns per target** (`owns_topics`, `owns_principals`,
+    `owns_connectors`) — the hand-written fallback, and the only option for a
+    cluster no generator describes.
+
+  `owns_principals` because ACLs are owned by principal, not one by one:
+  Strimzi's User Operator owns *every* ACL of a `KafkaUser` with simple
+  authorization and deletes ones it did not declare, and kaas-broker keeps
+  them inline on the user's resource. Name the principal as the broker sees
+  it — `status.username`, so `User:CN=bob-mtls`, not `bob-mtls`.
+
+  The cost, accepted: a resource the operator manages but nobody committed
+  (`kubectl apply` without a commit) looks unowned. Strimzi will revert a UI
+  edit to it; kaas-broker will write it through to the resource. The fix is
+  to commit it, which is the GitOps answer anyway.
 - **Operate is allowed on owned things** because it is not state. For Connect
   under Strimzi this is exactly the operator's own model: `spec.state` (pause,
   stop) is declarative and lives in Git; restart is the `strimzi.io/restart`
@@ -299,9 +326,23 @@ caller by default.
 
 ## Live acceptance
 
-`cargo xtask live` against a ceiling-enabled copy of the Strimzi cluster
-entry, with throwaway names under a `kaas-ui-live-` prefix that the test
-cleans up:
+**10a (Connect pilot)**, against the Strimzi `kafka-connect` with a
+`writes: { allow: [connector.restart] }` ceiling in the live config:
+
+- with no `writes:` block, the restart route answers 403 and nothing but `GET`
+  reaches the worker;
+- in open mode (no IdP) a `writes:` block is a startup error;
+- a granted restart of a connector listed in the ownership file succeeds —
+  operate is allowed on owned things — and writes an intent line before and
+  an outcome line after;
+- a role without `connector: operate` gets 403; a caller who cannot see the
+  Connect cluster gets 404; a request without `X-Kaas-Ui` or with a foreign
+  `Origin` is refused before authorization;
+- a failing audit sink fails the restart and the worker sees no `POST`.
+
+**10a Kafka half onward**, against a ceiling-enabled copy of the Strimzi
+cluster entry, with throwaway names under a `kaas-ui-live-` prefix that the
+test cleans up:
 
 - with no `writes:` block, every write route answers 403 for the open-mode
   admin and the connection is provably read-only (an `Error::ReadOnly` from a
@@ -320,27 +361,34 @@ cleans up:
 
 ## Order
 
-1. **10a — the gate.** kaas-lib asks A and B; `Grant`, `Ceiling`,
-   `Ownership`; the write router, Origin check, audit intent/outcome,
-   `/api/me` actions, `WriteDialog`; the rule rewrite and new invariants. One
-   action end to end to prove it: `consumer.reset_offsets`, because it is the
-   write people most often need during an incident and kaas-lib's empty-group
-   check makes it safe to demonstrate.
-2. **10b — topics and messages.** Create, edit, partitions, delete, truncate,
+Agreed 2026-10-20: interleaved with Phase 9, **9a → 10a → 9b/9c/9d and the
+rest**. The whole sequence is in [README.md](README.md#order).
+
+1. **10a — the gate**, after Phase 9a. `Grant`, `Ceiling`, `Ownership`
+   (patterns and the generated file); the write router, Origin check, audit
+   intent/outcome, `/api/me` actions, `WriteDialog`; the rule rewrite and the
+   new invariants. **Proven end to end on `connector.restart`**, not on a
+   Kafka write: it exercises every gate, needs no kaas-lib release (Connect is
+   REST, in `kaas-ui-connect` from 9a), is operate-tier so it is allowed on
+   GitOps-owned connectors, and loses nothing if it goes wrong. kaas-lib asks
+   A and B are filed and built in parallel.
+2. **10a, Kafka half** — once kaas-lib publishes A and B:
+   `connect_with_mutations`, `ClusterHandle::writer`, and
+   `consumer.reset_offsets` through the same gate, because it is the write
+   people most often need during an incident and kaas-lib's empty-group check
+   makes it safe to demonstrate.
+3. **10b — topics and messages.** Create, edit, partitions, delete, truncate,
    produce (ask C). Strimzi `KafkaTopic` manifests.
-3. **10c — security.** ACLs, quotas, SCRAM users. `KafkaUser` manifests.
-4. **10d — cluster and transactions.** Broker configs, reassignments, leader
+4. **10c — security.** ACLs, quotas, SCRAM users. `KafkaUser` manifests.
+5. **10d — cluster and transactions.** Broker configs, reassignments, leader
    election, transaction abort (ask D).
-5. **10e — schema registry.** Register, delete, compatibility, behind the
+6. **10e — schema registry.** Register, delete, compatibility, behind the
    same gate, in `kaas-ui-serde`'s writer.
 
-Phase 9's Connect writes (9d) depend on 10a and nothing after it.
+Phase 9's remaining Connect writes (9d) depend on 10a and nothing after it.
 
 ## Later, not now
 
-- **Ownership from the Kubernetes API**: list `KafkaTopic`, `KafkaUser`,
-  `KafkaConnector` CRs and treat their names as owned, replacing patterns for
-  Strimzi clusters.
 - **Open a pull request** instead of rendering a manifest — needs a Git
   credential, a repository layout convention and a review story. The
   manifest is the 80% that needs none of those.
@@ -355,8 +403,9 @@ Phase 9's Connect writes (9d) depend on 10a and nothing after it.
    like a missing resource.
 3. **Open mode** — "view everything, write nothing", and a `writes:` block
    without an IdP is a startup error. Agreed?
-4. **Ownership default** — nothing owned (this plan), or everything owned
-   unless listed, which is the more GitOps-first and more annoying choice.
+4. **Ownership default** — nothing owned unless the generated file or a
+   pattern says so (this plan), or everything owned unless listed, which is
+   the more GitOps-first and more annoying choice.
 
 ## Rule 1, rewritten
 
