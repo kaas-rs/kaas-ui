@@ -29,9 +29,9 @@ Every phase's acceptance command below runs against them.
 | | `kaas` | `strimzi` |
 |---|---|---|
 | namespace | `kaas` | `strimzi` |
-| bootstrap (plain) | `kaas.kaas.svc.cluster.local:9092` | `kafka-cluster-kafka-bootstrap.strimzi.svc.cluster.local:9092` |
+| bootstrap (development) | `kaas.kaas.svc.cluster.local:9095` | `kafka-cluster-kafka-bootstrap.strimzi.svc.cluster.local:9095` |
 | what it is | the `kaas` broker, 3 replicas, under development | Apache Kafka **4.2.0** via Strimzi, 3 dual-role nodes |
-| listeners | plain 9092, authed 9095, tls 9093 | plain 9092, tls 9093, **oauthbearer 9094** |
+| listeners | mtls 9093, scram 9095, oauth 9096 — **no plaintext** | the same three, same ports |
 | api keys advertised | **40** (was 37) | **75** |
 | topics | 13 | 17, of which 2 internal |
 | groups | 2, all reporting `group_type: ""` | 16, all `classic` |
@@ -382,20 +382,33 @@ and `sweep` mutate, and kaas-ui has no reason to run either.
 kaas-ui's own `config.yaml` uses the same two ids throughout the phases:
 
 ```yaml
-clusters:
+kafka_clusters:
   - id: kaas
     name: kaas (dev)
-    bootstrap: ["kaas.kaas.svc.cluster.local:9092"]
-    labels: { env: dev, kind: kaas }
+    bootstrap: ["kaas.kaas.svc.cluster.local:9095"]
+    tls: { ca_file: .dev/kaas-ca.crt }
+    sasl: { mechanism: scram-sha-512, username: kafbat-ui }
+    labels: { kind: kaas }
   - id: strimzi
     name: kafka-cluster (strimzi)
-    bootstrap: ["kafka-cluster-kafka-bootstrap.strimzi.svc.cluster.local:9092"]
-    labels: { env: dev, kind: strimzi }
+    bootstrap: ["kafka-cluster-kafka-bootstrap.strimzi.svc.cluster.local:9095"]
+    tls: { ca_file: .dev/strimzi-ca.crt }
+    sasl: { mechanism: scram-sha-512, username: kafbat-ui }
+    labels: { kind: strimzi }
   - id: dead
     name: nonexistent
     bootstrap: ["nowhere.invalid:9092"]
     labels: { env: dev, kind: none }
 ```
+
+Neither live cluster has an anonymous listener any more, so a development run
+authenticates: SCRAM on 9095 as the `kafbat-ui` KafkaUser, which exists on
+both and whose ACLs cover every topic, group and the cluster. The deployed
+oauth flow is not an option here — its federated credential names the kaas-ui
+ServiceAccount, not code-server's. `scripts/dev-credentials.sh` copies the two
+CA bundles and `KAAS_UI_PASSWORD_DEV_{KAAS,STRIMZI}` into `.dev/`
+(gitignored); the debug launch runs it and reads the env file, and a terminal
+run sources it with `set -a; . .dev/credentials.env; set +a`.
 
 The third entry is not padding. Phase 0's acceptance is that it renders as an
 unreachable card without delaying the other two, and it is the cheapest possible

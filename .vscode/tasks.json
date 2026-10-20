@@ -2,6 +2,25 @@
   "version": "2.0.0",
   "tasks": [
     {
+      // The debug launch's preLaunchTask: credentials first, because the
+      // binary starts against them, then Vite.
+      "label": "debug: prepare",
+      "dependsOrder": "sequence",
+      "dependsOn": ["dev: fetch cluster credentials", "web: vite dev server"],
+      "problemMatcher": []
+    },
+    {
+      // Both development clusters authenticate on every listener. This reads
+      // the `kafbat-ui` SCRAM password and the two CA bundles out of the
+      // cluster into .dev/ (gitignored) — see scripts/dev-credentials.sh.
+      // Re-run on every launch so a rotated password never needs a thought.
+      "label": "dev: fetch cluster credentials",
+      "type": "shell",
+      "command": "${workspaceFolder}/scripts/dev-credentials.sh",
+      "problemMatcher": [],
+      "presentation": { "reveal": "silent", "panel": "shared" }
+    },
+    {
       // Vite on :5173, proxying /api and /health to the binary on :8099 —
       // so the debugger keeps the Rust side and the browser gets hot reload,
       // without rebuilding the binary for a CSS change.
@@ -104,7 +123,7 @@
       // Talks to the real clusters. Starts its own server on 18099.
       "label": "cargo xtask live",
       "type": "shell",
-      "command": "cargo xtask live --config config.dev.yaml",
+      "command": "scripts/dev-credentials.sh && set -a && . .dev/credentials.env && set +a && cargo xtask live --config config.dev.yaml",
       "options": { "cwd": "${workspaceFolder}" },
       "problemMatcher": [],
       "group": "test"

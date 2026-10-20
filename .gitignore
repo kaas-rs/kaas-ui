@@ -4,3 +4,4 @@ web/dist/
 .DS_Store
 web/tsconfig.tsbuildinfo
 *.tsbuildinfo
+.dev/

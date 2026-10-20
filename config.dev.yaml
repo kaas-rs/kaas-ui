@@ -5,8 +5,11 @@
 # an unreachable card without costing the other two a millisecond. It is the
 # cheapest possible regression test for lazy connection.
 #
-# Both live clusters are reachable on their plaintext listener from inside the
-# Kubernetes cluster this is developed in. See docs/reference/environment.md.
+# Neither live cluster has an anonymous listener: both authenticate on every
+# port. This dials SCRAM over TLS on 9095 as the `kafbat-ui` KafkaUser, whose
+# password and CA bundles `scripts/dev-credentials.sh` fetches into `.dev/` —
+# run it once, or let the debug launch do it. See
+# docs/reference/environment.md.
 
 # No `dex` block and no `roles`: development runs **unauthenticated**, behind
 # code-server's /proxy/8099, with one anonymous caller who sees every cluster.
@@ -56,7 +59,15 @@ environments:
     kafka_clusters:
       - id: kaas
         name: kaas (dev)
-        bootstrap: ["kaas.kaas.svc.cluster.local:9092"]
+        bootstrap: ["kaas.kaas.svc.cluster.local:9095"]
+        # Relative to the working directory, which is the workspace root for
+        # both the debug launch and `cargo xtask live`.
+        tls:
+          ca_file: .dev/kaas-ca.crt
+        # The password is $KAAS_UI_PASSWORD_DEV_KAAS, from .dev/credentials.env.
+        sasl:
+          mechanism: scram-sha-512
+          username: kafbat-ui
         labels:
           kind: kaas
         refresh_interval: 30s
@@ -68,7 +79,12 @@ environments:
       - id: strimzi
         name: kafka-cluster (strimzi)
         bootstrap:
-          ["kafka-cluster-kafka-bootstrap.strimzi.svc.cluster.local:9092"]
+          ["kafka-cluster-kafka-bootstrap.strimzi.svc.cluster.local:9095"]
+        tls:
+          ca_file: .dev/strimzi-ca.crt
+        sasl:
+          mechanism: scram-sha-512
+          username: kafbat-ui
         labels:
           kind: strimzi
         refresh_interval: 30s

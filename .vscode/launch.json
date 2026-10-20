@@ -41,7 +41,8 @@
       "type": "lldb",
       "request": "launch",
       "name": "kaas-ui + frontend hot reload (code-server)",
-      "preLaunchTask": "web: vite dev server",
+      // Fetches the cluster credentials into .dev/, then starts Vite.
+      "preLaunchTask": "debug: prepare",
       // VS Code does not stop a preLaunchTask when the session ends, so Vite
       // would outlive every debug stop and keep serving /absproxy/5173/ with
       // no binary behind it. This takes it down with the session.
@@ -52,6 +53,9 @@
       },
       "args": ["--config", "config.dev.yaml"],
       "cwd": "${workspaceFolder}",
+      // KAAS_UI_PASSWORD_DEV_{KAAS,STRIMZI}: both clusters authenticate, and
+      // config.dev.yaml names a user but never a password.
+      "envFile": "${workspaceFolder}/.dev/credentials.env",
       "env": {
         // `debug` is where the message stream announces itself — one line per
         // stream open, with the cluster, topic, mode and caller.

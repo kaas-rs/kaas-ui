@@ -135,7 +135,8 @@ Two consequences, both load-bearing:
 
 | | `kaas` | `strimzi` |
 |---|---|---|
-| bootstrap | `kaas.kaas.svc.cluster.local:9092` | `kafka-cluster-kafka-bootstrap.strimzi.svc.cluster.local:9092` |
+| bootstrap | `kaas.kaas.svc.cluster.local:9095` | `kafka-cluster-kafka-bootstrap.strimzi.svc.cluster.local:9095` |
+| auth | SCRAM over TLS, `kafbat-ui`; `scripts/dev-credentials.sh` | same |
 | what | the kaas broker, 3 replicas | Apache Kafka 4.2.0 via Strimzi, 3 dual-role |
 | api keys | **40** | **75** |
 | notable | 24 ACLs; no topic ids; **no `DescribeCluster`** | keys 88/89 unnameable by our codec; 8 keys ahead of it |
