@@ -21,6 +21,7 @@ is surprising.
 | 6 — schema registry | one registry per environment, Avro/Protobuf/JSON Schema, the codec chip, the schema browser, the payload filter over decoded values |
 | 7 — read-only admin | ACLs, client quotas, SCRAM users, reassignments, the transaction inspector, and `CapabilityTab` at last |
 | 10a — the write gate (Connect half) | `Grant`, the three gates, `X-Kaas-Ui` + Origin guard, intent/outcome audit, `ConnectWriter`; connector restart, pause, resume, stop; GitOps ownership by pattern and generated file, with each write's Git equivalent |
+| 9d — Connect writes | the rest of the catalogue: task restart, reset topics, edit (with validate), create (with validate), delete, reset and alter offsets; destroy tier wants the name typed |
 | 9a — Connect, read-only | `kaas-ui-connect`: Connect clusters dialled over REST, GET-only by construction; connectors, tasks, redacted configs, topics, offsets, plugins; the `kafka_cluster:` reference checked against the workers |
 
 Still open: [Phase 8](09-phase-8-cross-cluster.md), the rest of
@@ -825,6 +826,54 @@ worker (96 of 97, the failure again Phase 7's transaction fixture). **An
 authenticated write has not run against a live worker**: it needs a signed-in
 session, the acceptance identity provider `dex-test` is out of the cluster,
 and the dev config is open — where a `writes:` block is refused by design.
+
+## Phase 9d — the decisions
+
+**Eleven operations, one handler.** Every write runs `perform`: lookup, gate,
+typed confirmation for destroy, the intent audited, the `ConnectWriter`, the
+outcome audited. Create is granted on the Connect cluster (`resource:
+connect, actions: [create]`, matched by its id); everything else on the
+connector by name, with kafbat-ui's verbs — `operate`, `edit`, `delete`,
+`reset_offsets`.
+
+**One HTTP shape, not Connect's verbs.** The plan had `PUT …/config`,
+`DELETE …/{name}`, `PATCH …/offsets`. All are `POST`s with a JSON body:
+destroy carries a typed `confirm`, and `DELETE` bodies are badly supported
+between a browser and here. Three non-GET paths in the openapi test.
+
+**`******` is how an edit keeps a secret.** The edit form starts from what a
+read showed, withheld values included. A key left at `******` is restored
+inside the writer from the worker's own copy (`ConnectClient::raw_config`,
+crate-private) into a `PreparedConfig` — no `Serialize`, no `Clone`, a `Debug`
+that prints keys — whose only way out is to the worker. A `******` with
+nothing behind it, or in a *new* connector, is refused as `Invalid`. The
+stub-worker test asserts the worker receives the real secret and that neither
+the response nor the audit line contains it; the audit carries the redacted
+config.
+
+**A dry run is a validation, and is not audited.** Edit and create can send
+`dryRun`: the writer asks `PUT /connector-plugins/{class}/config/validate`
+(a `PUT` that writes nothing, so it lives in `writer.rs` and needs the edit or
+create grant), and the page shows what the plugin refused. Nothing changed,
+so nothing is recorded.
+
+**The worker's `400` is the caller's `400`.** `ConnectFault::Invalid` is new:
+a request refused as given — by kaas-ui before sending, or by the worker, as
+for resetting a running connector's offsets ("Connectors must be in the
+STOPPED state…"). It passes through verbatim and the outcome is audited as
+failed. Offsets are not stopped for you: the form says the connector must be
+stopped, and stopping is its own, separately-authorized write.
+
+**Equivalents for everything.** Strimzi's for each: the `strimzi.io/restart`
+and `strimzi.io/restart-task` annotations, `spec.state`, a full
+`KafkaConnector` for create and edit (secrets written as `******` with a
+comment pointing at a config provider), the `connector-offsets` annotation and
+an `alterOffsets` ConfigMap for offsets. Reset-topics has no Strimzi model and
+renders the REST call.
+
+**Unproven, as for 10a:** no authenticated write has run against a live
+worker — no identity provider in dev. Every operation's request is asserted
+against a stub worker, through the real handler and writer.
 
 ## What is still unproven
 

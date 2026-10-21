@@ -257,7 +257,7 @@ pub struct ConnectorDetail {
 /// `{kafka_topic, kafka_partition}` and its offset `{kafka_offset}`; a
 /// source's are whatever its plugin chose, which is why they are passed
 /// through rather than typed.
-#[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct StoredOffset {
     /// Which source partition this is.
@@ -275,6 +275,44 @@ impl From<wire::Offset> for StoredOffset {
         Self {
             partition: offset.partition.unwrap_or_default(),
             offset: offset.offset,
+        }
+    }
+}
+
+/// What the plugin made of a config, without applying it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Validation {
+    /// How many keys the plugin found fault with.
+    pub error_count: i32,
+    /// Each key with something wrong, and what.
+    pub errors: Vec<ValidationError>,
+}
+
+/// One key the plugin refused.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ValidationError {
+    /// The key.
+    pub key: String,
+    /// What the plugin said about it, verbatim.
+    pub messages: Vec<String>,
+}
+
+impl From<wire::ConfigInfos> for Validation {
+    fn from(infos: wire::ConfigInfos) -> Self {
+        Self {
+            error_count: infos.error_count,
+            errors: infos
+                .configs
+                .into_iter()
+                .filter_map(|info| info.value)
+                .filter(|value| !value.errors.is_empty())
+                .map(|value| ValidationError {
+                    key: value.name,
+                    messages: value.errors,
+                })
+                .collect(),
         }
     }
 }

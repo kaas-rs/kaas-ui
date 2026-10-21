@@ -14,6 +14,7 @@ pub mod capabilities;
 pub mod clusters;
 pub mod configs;
 pub mod connect;
+pub mod connect_write;
 pub mod groups;
 pub mod health;
 pub mod me;

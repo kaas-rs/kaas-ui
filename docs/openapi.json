@@ -1821,6 +1821,98 @@
             "description": "The workers are rebalancing"
           }
         }
+      },
+      "post": {
+        "tags": [
+          "connect"
+        ],
+        "summary": "`POST /api/environments/{env}/connect-clusters/{connect}/connectors`",
+        "description": "Creates a connector — or, with `dryRun`, asks the plugin what it makes of\nthe config. Ownership is decided against the chosen name: a Connect\ncluster whose connectors Git owns (`owns_connectors: [\"*\"]`) refuses every\ncreate with the `KafkaConnector` to commit instead.",
+        "operationId": "create",
+        "parameters": [
+          {
+            "name": "env",
+            "in": "path",
+            "description": "Environment id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "connect",
+            "in": "path",
+            "description": "Connect cluster id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Kaas-Ui",
+            "in": "header",
+            "description": "Must be `1`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Created and audited, or a dry run's verdict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WriteResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An unusable config, or the worker refused it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not enabled here, not permitted, or not signed in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Git owns that name; the body carries the resource to commit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The workers refused or could not be reached"
+          }
+        }
       }
     },
     "/api/environments/{env}/connect-clusters/{connect}/connectors/{name}": {
@@ -1882,13 +1974,98 @@
         }
       }
     },
+    "/api/environments/{env}/connect-clusters/{connect}/connectors/{name}/tasks/{task}/restart": {
+      "post": {
+        "tags": [
+          "connect"
+        ],
+        "summary": "`POST /api/environments/{env}/connect-clusters/{connect}/connectors/{name}/tasks/{task}/restart`",
+        "operationId": "write_task",
+        "parameters": [
+          {
+            "name": "env",
+            "in": "path",
+            "description": "Environment id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "connect",
+            "in": "path",
+            "description": "Connect cluster id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Connector name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "task",
+            "in": "path",
+            "description": "Task number",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          },
+          {
+            "name": "X-Kaas-Ui",
+            "in": "header",
+            "description": "Must be `1`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Restarted and audited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WriteResult"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not enabled here, not permitted, or not signed in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such Connect cluster, connector or task"
+          },
+          "502": {
+            "description": "The workers refused or could not be reached"
+          }
+        }
+      }
+    },
     "/api/environments/{env}/connect-clusters/{connect}/connectors/{name}/{operation}": {
       "post": {
         "tags": [
           "connect"
         ],
         "summary": "`POST /api/environments/{env}/connect-clusters/{connect}/connectors/{name}/{operation}`",
-        "description": "`operation` is `restart`, `pause`, `resume` or `stop`. The three gates\ndecide; their refusals are `403` (no ceiling, no role, nobody signed in) or\n`409` (Git owns the connector, with the change to make there in the body).\nThe intent is audited before the worker is asked anything, and a failure\nto record it is a failure to write.",
+        "description": "`operation` is one of `restart`, `pause`, `resume`, `stop`,\n`reset-topics`, `edit`, `delete`, `reset-offsets`, `alter-offsets`.",
         "operationId": "write",
         "parameters": [
           {
@@ -1921,7 +2098,7 @@
           {
             "name": "operation",
             "in": "path",
-            "description": "restart | pause | resume | stop",
+            "description": "restart | pause | resume | stop | reset-topics | edit | delete | reset-offsets | alter-offsets",
             "required": true,
             "schema": {
               "type": "string"
@@ -1938,7 +2115,7 @@
           }
         ],
         "requestBody": {
-          "description": "restart's options; the others take none",
+          "description": "What the operation needs; most need nothing",
           "content": {
             "application/json": {
               "schema": {
@@ -1956,11 +2133,21 @@
         },
         "responses": {
           "200": {
-            "description": "Done, and audited",
+            "description": "Done and audited, or a dry run's verdict",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/WriteResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing input, an unconfirmed destroy, or the worker refused the request as given",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
                 }
               }
             }
@@ -2294,6 +2481,10 @@
           "view",
           "messages_read",
           "operate",
+          "edit",
+          "create",
+          "delete",
+          "reset_offsets",
           "all"
         ]
       },
@@ -2528,7 +2719,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/Equivalent",
-                "description": "On a refusal because Git owns the target: the change to make there."
+                "description": "On a refusal because Git owns the target: the change to make there.\n\nBoxed: three strings would more than double every error's size for a\nfield almost none of them carry."
               },
               {
                 "type": "null"
@@ -3062,7 +3253,8 @@
                 "cluster_config",
                 "topic",
                 "consumer",
-                "connector"
+                "connector",
+                "connect"
               ]
             }
           },
@@ -3361,6 +3553,17 @@
               {
                 "$ref": "#/components/schemas/ConnectorCounts",
                 "description": "How many connectors are in each state, where the list could be read."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "create": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/WriteOption",
+                "description": "Creating a connector here, where the ceiling lists it: whether this\ncaller may, and why not."
               },
               {
                 "type": "null"
@@ -3730,6 +3933,35 @@
           "sink",
           "unknown"
         ]
+      },
+      "CreateRequest": {
+        "type": "object",
+        "description": "A new connector.",
+        "required": [
+          "name",
+          "config"
+        ],
+        "properties": {
+          "config": {
+            "type": "object",
+            "description": "Its config, `connector.class` included.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "dryRun": {
+            "type": "boolean",
+            "description": "Validate against the plugin and create nothing."
+          },
+          "name": {
+            "type": "string",
+            "description": "Its name."
+          }
+        },
+        "additionalProperties": false
       },
       "Diagnostic": {
         "type": "object",
@@ -4189,7 +4421,8 @@
                       "cluster_config",
                       "topic",
                       "consumer",
-                      "connector"
+                      "connector",
+                      "connect"
                     ]
                   }
                 },
@@ -7104,9 +7337,16 @@
         "description": "One write kaas-ui can perform. A closed set: the catalogue in\n`docs/13-phase-10-administration.md`, landing one action at a time.\n\nThe serialised names are what `writes.allow` lists and what `/api` reports\nas available, so a config file and a page speak the same words.",
         "enum": [
           "connector.restart",
+          "connector.restart_task",
           "connector.pause",
           "connector.resume",
-          "connector.stop"
+          "connector.stop",
+          "connector.reset_topics",
+          "connector.edit",
+          "connector.create",
+          "connector.delete",
+          "connector.reset_offsets",
+          "connector.alter_offsets"
         ]
       },
       "Owned": {
@@ -7811,7 +8051,8 @@
           "cluster_config",
           "topic",
           "consumer",
-          "connector"
+          "connector",
+          "connect"
         ]
       },
       "ResourceCard": {
@@ -9348,9 +9589,52 @@
           }
         }
       },
+      "Validation": {
+        "type": "object",
+        "description": "What the plugin made of a config, without applying it.",
+        "required": [
+          "errorCount",
+          "errors"
+        ],
+        "properties": {
+          "errorCount": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many keys the plugin found fault with."
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "description": "Each key with something wrong, and what."
+          }
+        }
+      },
+      "ValidationError": {
+        "type": "object",
+        "description": "One key the plugin refused.",
+        "required": [
+          "key",
+          "messages"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "The key."
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "What the plugin said about it, verbatim."
+          }
+        }
+      },
       "WriteOption": {
         "type": "object",
-        "description": "One write a connector page could offer.",
+        "description": "One write a page could offer.",
         "required": [
           "operation",
           "tier",
@@ -9396,32 +9680,84 @@
       },
       "WriteRequest": {
         "type": "object",
-        "description": "The body of a restart. Pause, resume and stop take none.",
+        "description": "What a write to an existing connector carries. Every field is optional;\neach operation reads the ones it needs and is refused without them.",
         "properties": {
+          "config": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "`edit`: the whole config. A value left at `******` keeps the current\none, which the server restores from the worker; a key left out is\nremoved.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "confirm": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Destroy tier: the connector's name, typed."
+          },
+          "dryRun": {
+            "type": "boolean",
+            "description": "`edit`: validate against the plugin and apply nothing."
+          },
           "includeTasks": {
             "type": "boolean",
-            "description": "Restart the connector's tasks as well as the connector."
+            "description": "`restart`: its tasks too."
+          },
+          "offsets": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/StoredOffset"
+            },
+            "description": "`alter-offsets`: the offsets to set."
           },
           "onlyFailed": {
             "type": "boolean",
-            "description": "Restart only what has failed. On a healthy connector this restarts\nnothing, which makes it the safe default for a button."
+            "description": "`restart`: only what has failed — on a healthy connector, nothing."
           }
         },
         "additionalProperties": false
       },
       "WriteResult": {
         "type": "object",
-        "description": "What a write did.",
+        "description": "What a write did — or, for a dry run, what it would have met.",
         "required": [
-          "auditId",
+          "applied",
           "operation",
           "connector",
           "equivalent"
         ],
         "properties": {
+          "applied": {
+            "type": "boolean",
+            "description": "Whether anything was sent that changes the connector."
+          },
           "auditId": {
-            "type": "string",
-            "description": "The id the intent and outcome audit lines share."
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The id the intent and outcome audit lines share. `None` for a dry run,\nwhich changed nothing and is not audited."
+          },
+          "config": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RedactedConfig",
+                "description": "For an edit or a create: the config as sent, redacted."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "connector": {
             "type": "string",
@@ -9429,11 +9765,22 @@
           },
           "equivalent": {
             "$ref": "#/components/schemas/Equivalent",
-            "description": "What it would have been in Git."
+            "description": "What it would be in Git."
           },
           "operation": {
             "$ref": "#/components/schemas/Operation",
             "description": "What was done."
+          },
+          "validation": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Validation",
+                "description": "For a dry run: what the plugin made of the config."
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       }

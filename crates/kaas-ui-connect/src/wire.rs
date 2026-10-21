@@ -137,3 +137,26 @@ pub(crate) struct ConfigKeyInfo {
 pub(crate) struct ErrorBody {
     pub message: Option<String>,
 }
+
+/// `PUT /connector-plugins/{p}/config/validate`.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct ConfigInfos {
+    #[serde(default)]
+    pub error_count: i32,
+    #[serde(default)]
+    pub configs: Vec<ConfigInfo>,
+}
+
+/// One key's verdict.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct ConfigInfo {
+    pub value: Option<ConfigValueInfo>,
+}
+
+/// What the worker made of one key's value.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct ConfigValueInfo {
+    pub name: String,
+    #[serde(default)]
+    pub errors: Vec<String>,
+}

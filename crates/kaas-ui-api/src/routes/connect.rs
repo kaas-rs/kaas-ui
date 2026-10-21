@@ -7,11 +7,10 @@
 //! connectors cannot be used to learn which topics flow where on a cluster
 //! the caller cannot see.
 //!
-//! Reads go through a [`kaas_ui_connect::ConnectClient`], which has no method
-//! that sends anything but `GET`. Writes — Phase 10, restart, pause, resume,
-//! stop — go through [`write`]: the gate mints a `Grant` or says which of the
-//! three gates refused, the intent is audited before anything is sent, and the
-//! `ConnectWriter` checks the grant once more.
+//! Reads, here, go through a [`kaas_ui_connect::ConnectClient`], which has no
+//! method that sends anything but `GET`. Writes are in
+//! [`super::connect_write`]; the pages here carry what that module says a
+//! caller may do, so a button is drawn only where the gate would agree.
 //!
 //! What is **not** an error here: a worker without the `/offsets` or
 //! `/topics` endpoint. That is absence — the field is empty and says why —
@@ -20,20 +19,18 @@
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use futures::StreamExt;
-use kaas_ui_auth::{Action, Change, Denied, Operation, Resource, Tier};
+use kaas_ui_auth::{Action, Resource};
 use kaas_ui_connect::{
     ConnectFault, ConnectorDetail, ConnectorStatus, ConnectorSummary, ConnectorType, Plugin,
     StoredOffset,
 };
-use kaas_ui_connect::{Equivalent, Format};
-use kaas_ui_core::config::ManifestFormat;
 use kaas_ui_core::dto::ConnectClusterCard;
-use kaas_ui_core::registry::ConnectHandle;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+use super::connect_write::{self, WriteOption};
 use crate::error::connect_resource_error;
-use crate::{ApiError, ApiResult, AppState, Caller};
+use crate::{ApiResult, AppState, Caller};
 
 /// One Connect cluster's page header.
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -49,6 +46,9 @@ pub struct ConnectClusterDetail {
     pub plugin_count: Option<usize>,
     /// What could not be read, by name. The header renders without it.
     pub errors: Vec<kaas_ui_core::ResourceError>,
+    /// Creating a connector here, where the ceiling lists it: whether this
+    /// caller may, and why not.
+    pub create: Option<WriteOption>,
 }
 
 /// The `kafka_cluster:` reference, checked against the workers.
@@ -187,6 +187,7 @@ pub async fn detail(
         counts,
         plugin_count,
         errors,
+        create: connect_write::create_option(&state, &handle, &caller),
     }))
 }
 
@@ -353,96 +354,6 @@ pub struct ConnectorPage {
     pub managed_in_git: Option<kaas_ui_auth::Owned>,
 }
 
-/// One write a connector page could offer.
-#[derive(Debug, Clone, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct WriteOption {
-    /// The catalogue operation.
-    pub operation: Operation,
-    /// Operate, edit or destroy.
-    pub tier: Tier,
-    /// Whether every gate agrees for this caller now.
-    pub allowed: bool,
-    /// Which gate refuses, where one does.
-    pub refused_by: Option<Refusal>,
-    /// The sentence a refusal renders.
-    pub reason: Option<String>,
-    /// What this write would be in Git, or as a REST call.
-    pub equivalent: Equivalent,
-}
-
-/// Which gate refused a write.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub enum Refusal {
-    /// Nobody is signed in.
-    Anonymous,
-    /// The ceiling does not list it.
-    NotEnabled,
-    /// No role of the caller's permits it.
-    Forbidden,
-    /// Git owns the connector and this changes declared state.
-    Owned,
-}
-
-impl Refusal {
-    fn of(denied: &Denied) -> Self {
-        match denied {
-            Denied::Anonymous => Self::Anonymous,
-            Denied::NotEnabled(_) => Self::NotEnabled,
-            Denied::Forbidden(_) => Self::Forbidden,
-            Denied::Owned(..) => Self::Owned,
-        }
-    }
-}
-
-/// The writes a connector page can offer: everything on the Connect cluster's
-/// ceiling, checked against this caller, each with its Git equivalent.
-fn write_options(
-    state: &AppState,
-    handle: &ConnectHandle,
-    connector: &str,
-    caller: &Caller,
-) -> (Vec<WriteOption>, Option<kaas_ui_auth::Owned>) {
-    let owned = handle.owned(connector);
-    if handle.ceiling().is_empty() {
-        return (Vec::new(), owned);
-    }
-    let target = state.registry().connect_target(handle, connector);
-    let format = format_of(handle);
-    let options = Operation::ALL
-        .into_iter()
-        .filter(|operation| handle.ceiling().contains(operation))
-        .map(|operation| {
-            let checked =
-                caller
-                    .access()
-                    .check(operation, &target, handle.ceiling(), owned.as_ref());
-            WriteOption {
-                operation,
-                tier: operation.tier(),
-                allowed: checked.is_ok(),
-                refused_by: checked.as_ref().err().map(Refusal::of),
-                reason: checked.err().map(|denied| denied.message(&target)),
-                equivalent: kaas_ui_connect::equivalent(
-                    operation,
-                    connector,
-                    handle.client().url(),
-                    format,
-                ),
-            }
-        })
-        .collect();
-    (options, owned)
-}
-
-fn format_of(handle: &ConnectHandle) -> Format {
-    match handle.manifest_format() {
-        ManifestFormat::Strimzi => Format::Strimzi,
-        ManifestFormat::Plain => Format::Plain,
-    }
-}
-
 /// `GET /api/environments/{env}/connect-clusters/{connect}/connectors/{name}`
 #[utoipa::path(
     get,
@@ -472,7 +383,7 @@ pub async fn connector(
     let mut errors = Vec::new();
     let (topics, topics_absent) = split(client.topics(&name).await, "topics", &mut errors);
     let (offsets, offsets_absent) = split(client.offsets(&name).await, "offsets", &mut errors);
-    let (writes, managed_in_git) = write_options(&state, &handle, &name, &caller);
+    let (writes, managed_in_git) = connect_write::write_options(&state, &handle, &name, &caller);
 
     Ok(Json(ConnectorPage {
         card: ConnectClusterCard::of(&handle),
@@ -654,413 +565,4 @@ pub async fn topic_connectors(
     }
 
     Ok(Json(TopicConnectors { connectors, errors }))
-}
-
-/// The body of a restart. Pause, resume and stop take none.
-#[derive(Debug, Clone, Default, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct WriteRequest {
-    /// Restart the connector's tasks as well as the connector.
-    #[serde(default)]
-    pub include_tasks: bool,
-    /// Restart only what has failed. On a healthy connector this restarts
-    /// nothing, which makes it the safe default for a button.
-    #[serde(default)]
-    pub only_failed: bool,
-}
-
-/// What a write did.
-#[derive(Debug, Clone, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct WriteResult {
-    /// The id the intent and outcome audit lines share.
-    pub audit_id: String,
-    /// What was done.
-    pub operation: Operation,
-    /// To which connector.
-    pub connector: String,
-    /// What it would have been in Git.
-    pub equivalent: Equivalent,
-}
-
-/// `POST /api/environments/{env}/connect-clusters/{connect}/connectors/{name}/{operation}`
-///
-/// `operation` is `restart`, `pause`, `resume` or `stop`. The three gates
-/// decide; their refusals are `403` (no ceiling, no role, nobody signed in) or
-/// `409` (Git owns the connector, with the change to make there in the body).
-/// The intent is audited before the worker is asked anything, and a failure
-/// to record it is a failure to write.
-#[utoipa::path(
-    post,
-    path = "/api/environments/{env}/connect-clusters/{connect}/connectors/{name}/{operation}",
-    params(
-        ("env" = String, Path, description = "Environment id"),
-        ("connect" = String, Path, description = "Connect cluster id"),
-        ("name" = String, Path, description = "Connector name"),
-        ("operation" = String, Path, description = "restart | pause | resume | stop"),
-        ("X-Kaas-Ui" = String, Header, description = "Must be `1`: proves the request came from kaas-ui's own page"),
-    ),
-    request_body(content = Option<WriteRequest>, description = "restart's options; the others take none"),
-    responses(
-        (status = 200, description = "Done, and audited", body = WriteResult),
-        (status = 403, description = "Not enabled here, not permitted, or not signed in", body = crate::error::ApiErrorBody),
-        (status = 404, description = "No such Connect cluster, connector or operation"),
-        (status = 409, description = "Git owns the connector; the body carries the change to make there", body = crate::error::ApiErrorBody),
-        (status = 502, description = "The workers refused or could not be reached"),
-    ),
-    tag = "connect",
-)]
-pub async fn write(
-    State(state): State<AppState>,
-    caller: Caller,
-    Path((env, id, name, operation)): Path<(String, String, String, String)>,
-    body: Option<Json<WriteRequest>>,
-) -> ApiResult<Json<WriteResult>> {
-    let operation = match operation.as_str() {
-        "restart" => Operation::ConnectorRestart,
-        "pause" => Operation::ConnectorPause,
-        "resume" => Operation::ConnectorResume,
-        "stop" => Operation::ConnectorStop,
-        other => {
-            return Err(ApiError::not_found(format!(
-                "no connector operation {other:?}: restart, pause, resume or stop"
-            )));
-        }
-    };
-    let request = body.map(|Json(request)| request).unwrap_or_default();
-
-    let handle = state.connect_cluster(&env, &id, &caller)?;
-    let target = state.registry().connect_target(&handle, &name);
-    let owned = handle.owned(&name);
-    let equivalent =
-        kaas_ui_connect::equivalent(operation, &name, handle.client().url(), format_of(&handle));
-
-    let grant = caller
-        .access()
-        .authorize(
-            caller.principal(),
-            operation,
-            target.clone(),
-            handle.ceiling(),
-            owned.as_ref(),
-        )
-        .map_err(|denied| ApiError::denied(&denied, &target, Some(equivalent.clone())))?;
-
-    let parameters = match operation {
-        Operation::ConnectorRestart => serde_json::json!({
-            "includeTasks": request.include_tasks,
-            "onlyFailed": request.only_failed,
-        }),
-        _ => serde_json::Value::Null,
-    };
-    let intent = Change::intent(&grant, parameters);
-    state
-        .audit()
-        .record(&intent)
-        .map_err(|error| ApiError::intent_unrecorded(&error.to_string()))?;
-
-    let writer = handle.client().writer(&grant)?;
-    let outcome = match operation {
-        Operation::ConnectorRestart => {
-            writer
-                .restart(request.include_tasks, request.only_failed)
-                .await
-        }
-        Operation::ConnectorPause => writer.pause().await,
-        Operation::ConnectorResume => writer.resume().await,
-        Operation::ConnectorStop => writer.stop().await,
-    };
-    state
-        .audit()
-        .record(&intent.outcome(outcome.as_ref().map(|_| ()).map_err(ToString::to_string)))
-        .map_err(|error| ApiError::outcome_unrecorded(&error.to_string()))?;
-    outcome?;
-
-    Ok(Json(WriteResult {
-        audit_id: grant.id().to_owned(),
-        operation,
-        connector: name,
-        equivalent,
-    }))
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::BTreeMap;
-    use std::sync::{Arc, Mutex};
-
-    use arc_swap::ArcSwap;
-    use axum::http::StatusCode;
-    use kaas_ui_auth::{Audit, Permission, Policy, Principal, Role};
-    use kaas_ui_core::{Config, Registry};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
-
-    use super::*;
-
-    /// A writer the test can read back.
-    #[derive(Clone, Default)]
-    struct Lines(Arc<Mutex<Vec<u8>>>);
-
-    impl std::io::Write for Lines {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(buf);
-            Ok(buf.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    impl Lines {
-        fn read(&self) -> Vec<serde_json::Value> {
-            String::from_utf8(self.0.lock().unwrap().clone())
-                .unwrap()
-                .lines()
-                .map(|line| serde_json::from_str(line).unwrap())
-                .collect()
-        }
-    }
-
-    /// A worker that accepts everything and writes down what it was sent.
-    async fn worker() -> (String, Arc<Mutex<Vec<String>>>) {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let log = Arc::new(Mutex::new(Vec::new()));
-        let seen = Arc::clone(&log);
-        tokio::spawn(async move {
-            while let Ok((mut socket, _)) = listener.accept().await {
-                let seen = Arc::clone(&seen);
-                tokio::spawn(async move {
-                    let mut buffer = Vec::new();
-                    let mut chunk = [0_u8; 1024];
-                    while !buffer.windows(4).any(|w| w == b"\r\n\r\n") {
-                        match socket.read(&mut chunk).await {
-                            Ok(0) | Err(_) => return,
-                            Ok(read) => buffer.extend_from_slice(&chunk[..read]),
-                        }
-                    }
-                    let head = String::from_utf8_lossy(&buffer).to_string();
-                    let first = head.lines().next().unwrap_or("").to_owned();
-                    seen.lock().unwrap().push(first);
-                    let _ = socket
-                        .write_all(
-                            b"HTTP/1.1 202 Accepted\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}",
-                        )
-                        .await;
-                });
-            }
-        });
-        (format!("http://{addr}"), log)
-    }
-
-    fn state(url: &str, audit: Lines) -> AppState {
-        let config = Config::from_yaml(&format!(
-            r#"
-auth:
-  issuer: https://kaas.example/dex
-  client_id: kaas-ui
-  redirect_url: https://kaas.example/auth/callback
-environments:
-  - id: dev
-    kafka_clusters:
-      - id: strimzi
-        bootstrap: ["strimzi:9092"]
-    connect_clusters:
-      - id: connect
-        url: {url}
-        kafka_cluster: strimzi
-        writes:
-          allow: [connector.restart, connector.pause]
-          gitops:
-            owns_connectors: ["owned-*"]
-            source: k3s-cluster/apps/strimzi/kafka-connectors
-            format: strimzi
-"#
-        ))
-        .unwrap();
-        let policy = Policy::enforcing(vec![
-            Role {
-                name: "oncall".into(),
-                subjects: vec!["alice".into()],
-                clusters: vec!["strimzi".into()],
-                cluster_labels: BTreeMap::new(),
-                permissions: vec![
-                    Permission {
-                        resource: kaas_ui_auth::Resource::Topic,
-                        value: None,
-                        actions: vec![kaas_ui_auth::Action::View],
-                    },
-                    Permission {
-                        resource: kaas_ui_auth::Resource::Connector,
-                        value: None,
-                        actions: vec![kaas_ui_auth::Action::Operate],
-                    },
-                ],
-            },
-            Role {
-                name: "viewer".into(),
-                subjects: vec!["bob".into()],
-                clusters: vec!["strimzi".into()],
-                cluster_labels: BTreeMap::new(),
-                permissions: vec![Permission {
-                    resource: kaas_ui_auth::Resource::Topic,
-                    value: None,
-                    actions: vec![kaas_ui_auth::Action::View],
-                }],
-            },
-        ]);
-        AppState::new(
-            Arc::new(ArcSwap::from_pointee(
-                Registry::from_config(&config).unwrap(),
-            )),
-            policy,
-        )
-        .with_audit(Arc::new(Audit::to_writer(Box::new(audit))))
-    }
-
-    fn caller(state: &AppState, who: &str) -> Caller {
-        let principal = Principal::new(who);
-        let access = state.policy().access(&principal);
-        Caller::new(principal, access)
-    }
-
-    async fn post(
-        state: &AppState,
-        who: &str,
-        name: &str,
-        op: &str,
-    ) -> ApiResult<Json<WriteResult>> {
-        write(
-            State(state.clone()),
-            caller(state, who),
-            Path(("dev".into(), "connect".into(), name.into(), op.into())),
-            Some(Json(WriteRequest {
-                include_tasks: true,
-                only_failed: true,
-            })),
-        )
-        .await
-    }
-
-    #[tokio::test]
-    async fn a_granted_restart_is_audited_before_and_after_and_reaches_the_worker() {
-        let (url, sent) = worker().await;
-        let audit = Lines::default();
-        let state = state(&url, audit.clone());
-
-        let Json(result) = post(&state, "alice", "gtfs", "restart").await.unwrap();
-        assert_eq!(result.operation, Operation::ConnectorRestart);
-        assert_eq!(
-            sent.lock().unwrap().as_slice(),
-            ["POST /connectors/gtfs/restart?includeTasks=true&onlyFailed=true HTTP/1.1"]
-        );
-
-        let lines = audit.read();
-        assert_eq!(lines.len(), 2, "{lines:?}");
-        assert_eq!(lines[0]["phase"], "intent");
-        assert_eq!(lines[1]["phase"], "outcome");
-        assert_eq!(lines[1]["ok"], true);
-        assert_eq!(lines[0]["id"], lines[1]["id"]);
-        assert_eq!(lines[0]["id"], result.audit_id);
-        assert_eq!(lines[0]["roles"], serde_json::json!(["oncall"]));
-    }
-
-    #[tokio::test]
-    async fn each_gate_refuses_in_its_own_words_and_nothing_reaches_the_worker() {
-        let (url, sent) = worker().await;
-        let audit = Lines::default();
-        let state = state(&url, audit.clone());
-
-        // No role permits bob to operate.
-        let forbidden = post(&state, "bob", "gtfs", "restart").await.unwrap_err();
-        assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
-
-        // The ceiling does not list stop.
-        let not_enabled = post(&state, "alice", "gtfs", "stop").await.unwrap_err();
-        assert_eq!(not_enabled.status(), StatusCode::FORBIDDEN);
-
-        // Git owns `owned-a`: a pause is declared state, so 409 with the
-        // KafkaConnector change to make instead...
-        let owned = post(&state, "alice", "owned-a", "pause").await.unwrap_err();
-        assert_eq!(owned.status(), StatusCode::CONFLICT);
-
-        // ...and nobody signed in may write at all.
-        let anonymous = write(
-            State(state.clone()),
-            Caller::new(
-                Principal::anonymous(),
-                state.policy().access(&Principal::anonymous()),
-            ),
-            Path((
-                "dev".into(),
-                "connect".into(),
-                "gtfs".into(),
-                "restart".into(),
-            )),
-            None,
-        )
-        .await
-        .unwrap_err();
-        // Anonymous sees no Connect cluster in an enforcing deployment: 404,
-        // before any gate is asked.
-        assert_eq!(anonymous.status(), StatusCode::NOT_FOUND);
-
-        assert!(
-            sent.lock().unwrap().is_empty(),
-            "{:?}",
-            sent.lock().unwrap()
-        );
-        assert!(audit.read().is_empty(), "a refused write leaves no intent");
-
-        // A restart of an owned connector is operate-tier and goes through.
-        assert!(post(&state, "alice", "owned-a", "restart").await.is_ok());
-    }
-
-    #[tokio::test]
-    async fn a_failed_intent_record_means_no_write() {
-        struct Broken;
-        impl std::io::Write for Broken {
-            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
-                Err(std::io::Error::other("disk full"))
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
-        }
-        let (url, sent) = worker().await;
-        let state =
-            state(&url, Lines::default()).with_audit(Arc::new(Audit::to_writer(Box::new(Broken))));
-        let error = post(&state, "alice", "gtfs", "restart").await.unwrap_err();
-        assert_eq!(error.status(), StatusCode::INTERNAL_SERVER_ERROR);
-        assert!(sent.lock().unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn the_page_offers_what_the_caller_may_do_and_says_what_git_owns() {
-        let (url, _) = worker().await;
-        let state = state(&url, Lines::default());
-        let handle = state
-            .connect_cluster("dev", "connect", &caller(&state, "alice"))
-            .unwrap();
-
-        let (alice, _) = write_options(&state, &handle, "owned-a", &caller(&state, "alice"));
-        let restart = alice
-            .iter()
-            .find(|o| o.operation == Operation::ConnectorRestart)
-            .unwrap();
-        assert!(restart.allowed);
-        let pause = alice
-            .iter()
-            .find(|o| o.operation == Operation::ConnectorPause)
-            .unwrap();
-        assert_eq!(pause.refused_by, Some(Refusal::Owned));
-        assert!(pause.equivalent.text.contains("state: paused"));
-        // Only what the ceiling lists is offered at all.
-        assert!(
-            !alice
-                .iter()
-                .any(|o| o.operation == Operation::ConnectorStop)
-        );
-    }
 }

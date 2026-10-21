@@ -362,6 +362,7 @@ impl From<kaas_ui_connect::ConnectFault> for ApiError {
             F::Misconfigured(_) | F::Rejected(_) => (StatusCode::BAD_GATEWAY, ErrorKind::Invalid),
             F::Rebalancing(_) => (StatusCode::SERVICE_UNAVAILABLE, ErrorKind::Transport),
             F::NotFound(_) => (StatusCode::NOT_FOUND, ErrorKind::Invalid),
+            F::Invalid(_) => (StatusCode::BAD_REQUEST, ErrorKind::Invalid),
             F::Absent(_) => (StatusCode::NOT_FOUND, ErrorKind::Unsupported),
         };
         Self {

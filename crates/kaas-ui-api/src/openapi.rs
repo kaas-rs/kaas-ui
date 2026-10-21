@@ -50,7 +50,9 @@ use utoipa::OpenApi;
         crate::routes::connect::connector,
         crate::routes::connect::plugins,
         crate::routes::connect::topic_connectors,
-        crate::routes::connect::write,
+        crate::routes::connect_write::write,
+        crate::routes::connect_write::write_task,
+        crate::routes::connect_write::create,
         crate::routes::admin::acls,
         crate::routes::admin::quotas,
         crate::routes::admin::scram_users,
@@ -79,10 +81,13 @@ use utoipa::OpenApi;
         crate::routes::connect::PluginList,
         crate::routes::connect::TopicConnector,
         crate::routes::connect::TopicConnectors,
-        crate::routes::connect::Refusal,
-        crate::routes::connect::WriteOption,
-        crate::routes::connect::WriteRequest,
-        crate::routes::connect::WriteResult,
+        crate::routes::connect_write::CreateRequest,
+        crate::routes::connect_write::Refusal,
+        crate::routes::connect_write::WriteOption,
+        crate::routes::connect_write::WriteRequest,
+        crate::routes::connect_write::WriteResult,
+        kaas_ui_connect::Validation,
+        kaas_ui_connect::ValidationError,
         kaas_ui_auth::Operation,
         kaas_ui_auth::Owned,
         kaas_ui_auth::Tier,
@@ -220,10 +225,20 @@ mod tests {
 
     /// Every path that is not a `GET`. Phase 10's writes, one per line, so a
     /// new one is a change to this list that a reviewer sees.
-    const WRITES: [(&str, &str); 1] = [(
-        "post",
-        "/api/environments/{env}/connect-clusters/{connect}/connectors/{name}/{operation}",
-    )];
+    const WRITES: [(&str, &str); 3] = [
+        (
+            "post",
+            "/api/environments/{env}/connect-clusters/{connect}/connectors",
+        ),
+        (
+            "post",
+            "/api/environments/{env}/connect-clusters/{connect}/connectors/{name}/tasks/{task}/restart",
+        ),
+        (
+            "post",
+            "/api/environments/{env}/connect-clusters/{connect}/connectors/{name}/{operation}",
+        ),
+    ];
 
     #[test]
     fn the_document_builds_and_its_only_writes_are_the_gated_ones() {
@@ -242,6 +257,9 @@ mod tests {
                 }
             }
         }
-        assert_eq!(writes, WRITES, "the non-GET routes changed");
+        writes.sort_unstable();
+        let mut expected = WRITES.to_vec();
+        expected.sort_unstable();
+        assert_eq!(writes, expected, "the non-GET routes changed");
     }
 }

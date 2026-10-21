@@ -440,7 +440,7 @@ impl ConnectClient {
 
     /// What a plugin's definition declares, cached; `None` when it cannot be
     /// fetched, which makes redaction fall back to names alone.
-    async fn plugin_keys(&self, class: &str) -> Option<Arc<PluginKeys>> {
+    pub(crate) async fn plugin_keys(&self, class: &str) -> Option<Arc<PluginKeys>> {
         if let Some(cached) = self
             .plugins
             .read()
@@ -473,6 +473,34 @@ impl ConnectClient {
             );
         }
         Some(keys)
+    }
+
+    /// Any config, redacted the way a read is: by its plugin's declared
+    /// `PASSWORD` keys where the definition can be fetched, by name where not.
+    pub async fn redacted(&self, config: &BTreeMap<String, String>) -> RedactedConfig {
+        let keys = match config.get("connector.class") {
+            Some(class) => self.plugin_keys(class).await,
+            None => None,
+        };
+        let (entries, redaction) = redact(config, keys.as_deref());
+        RedactedConfig { entries, redaction }
+    }
+
+    /// A connector's config exactly as the worker holds it — secrets and all.
+    ///
+    /// Crate-private, and only the writer calls it: an edit submitted with a
+    /// withheld value (`******`) means "keep what is there", and keeping it
+    /// needs the value. It goes into a `PreparedConfig`, which cannot be
+    /// serialised, and from there only to the worker.
+    pub(crate) async fn raw_config(
+        &self,
+        name: &str,
+    ) -> Result<BTreeMap<String, String>, ConnectFault> {
+        self.ready().await?;
+        let info: wire::ConnectorInfo = self
+            .get_json(&format!("/connectors/{}", segment(name)))
+            .await?;
+        Ok(info.config)
     }
 
     /// The HTTP client, for the writer — which builds its requests in its

@@ -389,8 +389,8 @@ pub fn router(state: AppState) -> Router {
 
 fn api_router() -> Router<AppState> {
     use routes::{
-        admin, analysis, capabilities, clusters, configs, connect, groups, me, messages, schemas,
-        spec, topics,
+        admin, analysis, capabilities, clusters, configs, connect, connect_write, groups, me,
+        messages, schemas, spec, topics,
     };
 
     Router::new()
@@ -536,7 +536,7 @@ fn api_router() -> Router<AppState> {
         )
         .route(
             "/environments/{env}/connect-clusters/{connect}/connectors",
-            get(connect::connectors),
+            get(connect::connectors).post(connect_write::create),
         )
         .route(
             "/environments/{env}/connect-clusters/{connect}/connectors/{name}",
@@ -551,7 +551,11 @@ fn api_router() -> Router<AppState> {
         // `ConnectWriter` it reaches checks the grant again.
         .route(
             "/environments/{env}/connect-clusters/{connect}/connectors/{name}/{operation}",
-            post(connect::write),
+            post(connect_write::write),
+        )
+        .route(
+            "/environments/{env}/connect-clusters/{connect}/connectors/{name}/tasks/{task}/restart",
+            post(connect_write::write_task),
         )
         .layer(middleware::from_fn(write_guard))
 }

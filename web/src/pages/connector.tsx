@@ -24,7 +24,10 @@ import {
 } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ConfigTable } from "@/features/connect/config-table"
-import { ConnectorWrites } from "@/features/connect/connector-writes"
+import {
+  ConnectorWrites,
+  TaskRestart,
+} from "@/features/connect/connector-writes"
 import {
   ConnectorStatusBadge,
   TaskState,
@@ -101,6 +104,8 @@ export function ConnectorPage({
           connectId={connectId}
           connector={summary.name}
           status={summary.status}
+          config={data.connector.config}
+          offsets={data.offsets}
           writes={data.writes}
           managedInGit={data.managedInGit}
         />
@@ -187,7 +192,7 @@ export function ConnectorPage({
           )}
         </TabsList>
         <TabsContent value="tasks" className="mt-4">
-          <Tasks data={data} />
+          <Tasks envId={envId} connectId={connectId} data={data} />
         </TabsContent>
         <TabsContent value="config" className="mt-4 space-y-6">
           <ConfigTable config={data.connector.config} />
@@ -216,8 +221,27 @@ function Trace({ trace }: { trace: string }) {
   )
 }
 
-function Tasks({ data }: { data: ConnectorPageData }) {
+function Tasks({
+  envId,
+  connectId,
+  data,
+}: {
+  envId: string
+  connectId: string
+  data: ConnectorPageData
+}) {
   const { summary, taskConfigs } = data.connector
+  const restartTask = data.writes.find(
+    (write) => write.operation === "connector.restart_task"
+  )
+  const subject = {
+    envId,
+    connectId,
+    connector: summary.name,
+    status: summary.status,
+    config: data.connector.config,
+    offsets: data.offsets,
+  }
   if (summary.tasks.length === 0) {
     return (
       <Empty>
@@ -235,6 +259,7 @@ function Tasks({ data }: { data: ConnectorPageData }) {
               <TableHead>state</TableHead>
               <TableHead>worker</TableHead>
               <TableHead>plugin</TableHead>
+              {restartTask?.allowed ? <TableHead className="w-24" /> : null}
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -253,6 +278,15 @@ function Tasks({ data }: { data: ConnectorPageData }) {
                 <TableCell className="font-mono text-[12px] text-ink-faint">
                   {task.version ?? "—"}
                 </TableCell>
+                {restartTask?.allowed ? (
+                  <TableCell className="text-right">
+                    <TaskRestart
+                      subject={subject}
+                      write={restartTask}
+                      task={task.id}
+                    />
+                  </TableCell>
+                ) : null}
               </TableRow>
             ))}
           </TableBody>

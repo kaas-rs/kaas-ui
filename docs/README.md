@@ -11,7 +11,7 @@ in [11-built.md](11-built.md).
 
 ## Status
 
-**Phases 0–7 are done, and 9a and the Connect half of 10a.**
+**Phases 0–7 are done, and 9a, 9d and the Connect half of 10a.**
 The workspace is five crates, a frontend and an xtask.
 
 ```sh
@@ -33,7 +33,7 @@ cargo xtask login   # 11 assertions, a real login. Needs the dex-test app
 | 6 — schema registry | **done** — one registry per environment, Avro/Protobuf/JSON Schema, the codec chip, the schema browser, the payload filter over decoded values |
 | 7 — read-only admin | **done** — ACLs, quotas, SCRAM users, reassignments, the transaction inspector, and the `CapabilityTab` the design system named in Phase 1 |
 | 8 — cross-cluster | not started — fleet topic search, cluster comparison, capability diff |
-| 9 — Connect and MM2 | **9a done** — Connect clusters read-only; 9b–9d (MM2 flows, MM2 records, Connect writes) to come |
+| 9 — Connect and MM2 | **9a and 9d done** — Connect clusters, read and written behind the gate; 9b–9c (MirrorMaker 2) to come |
 | 10 — administration | **10a's Connect half done** — the gate, connector restart/pause/resume/stop; the Kafka half waits on kaas-lib asks 17–18 |
 
 Phase *n* is milestone M*n* in PLAN.md §8. One numbering, not two.
@@ -49,7 +49,8 @@ is proven on Connect, which needs no kaas-lib release:
 | **10a** | 9a | the write gate — ceiling, grant, ownership, Origin check, audit intent/outcome — proven on connector restart, pause, resume, stop | **done** — authenticated live write unproven (no IdP in dev); see [11-built.md](11-built.md#phase-10a--the-decisions-the-connect-half) |
 | kaas-lib asks 17–18 | parallel with 10a | mutation ceiling, `Admin::scoped` | **filed** — [upstream-asks.md](reference/upstream-asks.md) |
 | **10a, Kafka half** | kaas-lib release | `consumer.reset_offsets` through the same gate | |
-| **9b · 9c · 9d** | 9a; 9d also 10a | MM2 flows, MM2 record decoding, the remaining Connect writes | next |
+| **9d** | 9a, 10a | the remaining Connect writes: task restart, reset topics, edit, create, delete, offsets | **done** — authenticated live write unproven, as for 10a |
+| **9b · 9c** | 9a, MM2 fixtures | MM2 flows, MM2 record decoding | next — needs the fixtures approved |
 | **10b–10e** | 10a | topics and messages, security, cluster and transactions, schema registry | |
 
 Phase 8 is independent of both.

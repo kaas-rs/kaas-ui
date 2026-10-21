@@ -1202,6 +1202,8 @@ export interface ConnectClusterDetail {
   counts: ConnectorCounts | null
   pluginCount: number | null
   errors: ResourceError[]
+  /** Creating a connector here, where the ceiling lists it. */
+  create: WriteOption | null
 }
 
 export type ConnectorType = "source" | "sink" | "unknown"
@@ -1337,9 +1339,16 @@ export interface TopicConnectors {
 /** A catalogue operation, spelled as `writes.allow` spells it. */
 export type Operation =
   | "connector.restart"
+  | "connector.restart_task"
   | "connector.pause"
   | "connector.resume"
   | "connector.stop"
+  | "connector.reset_topics"
+  | "connector.edit"
+  | "connector.create"
+  | "connector.delete"
+  | "connector.reset_offsets"
+  | "connector.alter_offsets"
 
 /** Operate: not state, allowed on what Git owns. Edit: declared state.
     Destroy: loses data or position. */
@@ -1372,12 +1381,40 @@ export interface WriteOption {
 export interface WriteRequest {
   includeTasks?: boolean
   onlyFailed?: boolean
+  /** edit: the whole config; `******` keeps a withheld value. */
+  config?: Record<string, string>
+  offsets?: StoredOffset[]
+  /** Destroy tier: the connector's name, typed. */
+  confirm?: string
+  /** edit: validate against the plugin, apply nothing. */
+  dryRun?: boolean
+}
+
+export interface CreateRequest {
+  name: string
+  config: Record<string, string>
+  dryRun?: boolean
+}
+
+export interface ValidationError {
+  key: string
+  messages: string[]
+}
+
+export interface Validation {
+  errorCount: number
+  errors: ValidationError[]
 }
 
 export interface WriteResult {
-  /** Joins the intent and outcome lines in the audit. */
-  auditId: string
+  /** Joins the intent and outcome lines in the audit. null for a dry run. */
+  auditId: string | null
+  /** Whether anything changed. false for a dry run. */
+  applied: boolean
   operation: Operation
   connector: string
   equivalent: Equivalent
+  validation: Validation | null
+  /** For an edit or a create: the config as sent, redacted. */
+  config: RedactedConfig | null
 }

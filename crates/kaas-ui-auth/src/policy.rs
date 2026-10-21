@@ -20,8 +20,9 @@
 //! customer data out of it.
 //!
 //! Writes arrived with Phase 10, and with them the verbs — but only the ones
-//! that exist. [`Action::Operate`] on [`Resource::Connector`] is the first:
-//! restart, pause, resume, stop. A verb this file offers is a verb some code
+//! that exist, each mapped to the operations that perform it: `operate`,
+//! `edit`, `delete` and `reset_offsets` on [`Resource::Connector`], `create`
+//! on [`Resource::Connect`]. A verb this file offers is a verb some code
 //! path performs, and the write is still only reachable through a [`crate::Grant`],
 //! which also needs the target's configured ceiling to agree. A role alone
 //! writes nothing.
@@ -58,17 +59,20 @@ pub enum Resource {
     /// the Connect cluster keeps its state in — the cluster a role's
     /// `clusters:` and `cluster_labels:` already select.
     Connector,
+    /// A Connect cluster, by id: what a new connector is created on.
+    Connect,
 }
 
 impl Resource {
     /// Every resource, for a role that says `all`.
     #[must_use]
-    pub fn every() -> [Self; 4] {
+    pub fn every() -> [Self; 5] {
         [
             Self::ClusterConfig,
             Self::Topic,
             Self::Consumer,
             Self::Connector,
+            Self::Connect,
         ]
     }
 
@@ -79,7 +83,10 @@ impl Resource {
     /// pattern against it would silently match nothing.
     #[must_use]
     pub fn is_named(self) -> bool {
-        matches!(self, Self::Topic | Self::Consumer | Self::Connector)
+        matches!(
+            self,
+            Self::Topic | Self::Consumer | Self::Connector | Self::Connect
+        )
     }
 
     /// The actions that mean something on this resource.
@@ -91,7 +98,13 @@ impl Resource {
         match self {
             Self::Topic => &[Action::View, Action::MessagesRead],
             Self::ClusterConfig | Self::Consumer => &[Action::View],
-            Self::Connector => &[Action::Operate],
+            Self::Connector => &[
+                Action::Operate,
+                Action::Edit,
+                Action::Delete,
+                Action::ResetOffsets,
+            ],
+            Self::Connect => &[Action::Create],
         }
     }
 }
@@ -111,6 +124,14 @@ pub enum Action {
     ///
     /// Only meaningful on [`Resource::Connector`].
     Operate,
+    /// Change what a thing is configured to be.
+    Edit,
+    /// Make a new one.
+    Create,
+    /// Remove one.
+    Delete,
+    /// Move a consumer's stored position — a connector's offsets.
+    ResetOffsets,
     /// Every action this resource has. `all` in the config file.
     All,
 }

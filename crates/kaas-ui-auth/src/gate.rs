@@ -39,6 +39,9 @@ pub enum Operation {
     /// Restart a connector, optionally its tasks, optionally only failed ones.
     #[serde(rename = "connector.restart")]
     ConnectorRestart,
+    /// Restart one task of a connector.
+    #[serde(rename = "connector.restart_task")]
+    ConnectorRestartTask,
     /// Pause a connector: tasks keep their resources and process nothing.
     #[serde(rename = "connector.pause")]
     ConnectorPause,
@@ -48,6 +51,24 @@ pub enum Operation {
     /// Stop a connector: tasks are shut down and release their resources.
     #[serde(rename = "connector.stop")]
     ConnectorStop,
+    /// Forget the topics a connector has been seen using.
+    #[serde(rename = "connector.reset_topics")]
+    ConnectorResetTopics,
+    /// Replace a connector's config.
+    #[serde(rename = "connector.edit")]
+    ConnectorEdit,
+    /// Create a connector on a Connect cluster.
+    #[serde(rename = "connector.create")]
+    ConnectorCreate,
+    /// Delete a connector.
+    #[serde(rename = "connector.delete")]
+    ConnectorDelete,
+    /// Clear a stopped connector's stored offsets.
+    #[serde(rename = "connector.reset_offsets")]
+    ConnectorResetOffsets,
+    /// Set a stopped connector's stored offsets.
+    #[serde(rename = "connector.alter_offsets")]
+    ConnectorAlterOffsets,
 }
 
 /// How much a write can cost, which decides confirmation and the GitOps rule —
@@ -65,34 +86,63 @@ pub enum Tier {
 
 impl Operation {
     /// Every operation, in catalogue order.
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 11] = [
         Self::ConnectorRestart,
+        Self::ConnectorRestartTask,
         Self::ConnectorPause,
         Self::ConnectorResume,
         Self::ConnectorStop,
+        Self::ConnectorResetTopics,
+        Self::ConnectorEdit,
+        Self::ConnectorCreate,
+        Self::ConnectorDelete,
+        Self::ConnectorResetOffsets,
+        Self::ConnectorAlterOffsets,
     ];
 
     /// The tier.
     ///
     /// Pause, resume and stop are **edit**, not operate: under Strimzi they are
     /// `spec.state` on the `KafkaConnector` — declared state the operator puts
-    /// back. A restart is not state; Strimzi models it as an annotation.
+    /// back. A restart is not state; Strimzi models it as an annotation. A
+    /// connector's offsets are its position, so changing them is **destroy**:
+    /// what it would have read or skipped is not coming back.
     #[must_use]
     pub fn tier(self) -> Tier {
         match self {
-            Self::ConnectorRestart => Tier::Operate,
-            Self::ConnectorPause | Self::ConnectorResume | Self::ConnectorStop => Tier::Edit,
+            Self::ConnectorRestart | Self::ConnectorRestartTask | Self::ConnectorResetTopics => {
+                Tier::Operate
+            }
+            Self::ConnectorPause
+            | Self::ConnectorResume
+            | Self::ConnectorStop
+            | Self::ConnectorEdit
+            | Self::ConnectorCreate => Tier::Edit,
+            Self::ConnectorDelete | Self::ConnectorResetOffsets | Self::ConnectorAlterOffsets => {
+                Tier::Destroy
+            }
         }
     }
 
-    /// The role permission this operation needs.
+    /// The role permission this operation needs — kafbat-ui's words.
+    ///
+    /// Creating is granted on the **Connect cluster**, the thing a new
+    /// connector is created on; everything else on the connector by name.
     #[must_use]
     pub fn permission(self) -> (Resource, Action) {
         match self {
             Self::ConnectorRestart
+            | Self::ConnectorRestartTask
             | Self::ConnectorPause
             | Self::ConnectorResume
-            | Self::ConnectorStop => (Resource::Connector, Action::Operate),
+            | Self::ConnectorStop
+            | Self::ConnectorResetTopics => (Resource::Connector, Action::Operate),
+            Self::ConnectorEdit => (Resource::Connector, Action::Edit),
+            Self::ConnectorCreate => (Resource::Connect, Action::Create),
+            Self::ConnectorDelete => (Resource::Connector, Action::Delete),
+            Self::ConnectorResetOffsets | Self::ConnectorAlterOffsets => {
+                (Resource::Connector, Action::ResetOffsets)
+            }
         }
     }
 
@@ -101,9 +151,16 @@ impl Operation {
     pub fn name(self) -> &'static str {
         match self {
             Self::ConnectorRestart => "connector.restart",
+            Self::ConnectorRestartTask => "connector.restart_task",
             Self::ConnectorPause => "connector.pause",
             Self::ConnectorResume => "connector.resume",
             Self::ConnectorStop => "connector.stop",
+            Self::ConnectorResetTopics => "connector.reset_topics",
+            Self::ConnectorEdit => "connector.edit",
+            Self::ConnectorCreate => "connector.create",
+            Self::ConnectorDelete => "connector.delete",
+            Self::ConnectorResetOffsets => "connector.reset_offsets",
+            Self::ConnectorAlterOffsets => "connector.alter_offsets",
         }
     }
 }
@@ -259,13 +316,13 @@ impl Access {
             return Err(Denied::NotEnabled(operation));
         }
         let (resource, action) = operation.permission();
-        if !self.role_permits(
-            &target.cluster,
-            &target.labels,
-            resource,
-            action,
-            target.name.as_deref(),
-        ) {
+        // A permission's `value` names the thing it is granted on: the
+        // connector for most operations, the Connect cluster for `create`.
+        let named = match resource {
+            Resource::Connect => Some(target.host.as_str()),
+            _ => target.name.as_deref(),
+        };
+        if !self.role_permits(&target.cluster, &target.labels, resource, action, named) {
             return Err(Denied::Forbidden(operation));
         }
         if let Some(owned) = owned
@@ -471,6 +528,93 @@ mod tests {
                 .unwrap_err(),
             Denied::Forbidden(Operation::ConnectorRestart)
         );
+    }
+
+    #[test]
+    fn each_verb_grants_its_own_operations_and_no_others() {
+        let alice = Principal::new("alice");
+        let role = |resource: Resource, value: Option<&str>, action: Action| {
+            Policy::enforcing(vec![Role {
+                name: "r".into(),
+                subjects: vec!["alice".into()],
+                clusters: vec!["*".into()],
+                cluster_labels: BTreeMap::new(),
+                permissions: vec![Permission {
+                    resource,
+                    value: value.map(str::to_owned),
+                    actions: vec![action],
+                }],
+            }])
+            .access(&alice)
+        };
+
+        let editor = role(Resource::Connector, None, Action::Edit);
+        assert!(
+            editor
+                .check(Operation::ConnectorEdit, &target("a"), ALL, None)
+                .is_ok()
+        );
+        assert!(
+            editor
+                .check(Operation::ConnectorDelete, &target("a"), ALL, None)
+                .is_err()
+        );
+        assert!(
+            editor
+                .check(Operation::ConnectorRestart, &target("a"), ALL, None)
+                .is_err()
+        );
+
+        let resetter = role(Resource::Connector, None, Action::ResetOffsets);
+        for operation in [
+            Operation::ConnectorResetOffsets,
+            Operation::ConnectorAlterOffsets,
+        ] {
+            assert!(resetter.check(operation, &target("a"), ALL, None).is_ok());
+        }
+
+        // `create` is granted on the Connect cluster, matched by its id —
+        // `target` aims at Connect cluster `connect`.
+        let creator = role(Resource::Connect, Some("conn*"), Action::Create);
+        assert!(
+            creator
+                .check(Operation::ConnectorCreate, &target("new"), ALL, None)
+                .is_ok()
+        );
+        let elsewhere = role(Resource::Connect, Some("mm2"), Action::Create);
+        assert!(
+            elsewhere
+                .check(Operation::ConnectorCreate, &target("new"), ALL, None)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn destroying_what_git_owns_is_refused_like_editing_it() {
+        let alice = Principal::new("alice");
+        let access =
+            Policy::enforcing(vec![Role::admin("admin", vec!["alice".into()])]).access(&alice);
+        let owned = Owned { source: None };
+        for operation in [
+            Operation::ConnectorDelete,
+            Operation::ConnectorResetOffsets,
+            Operation::ConnectorEdit,
+        ] {
+            assert!(matches!(
+                access.check(operation, &target("a"), ALL, Some(&owned)),
+                Err(Denied::Owned(..))
+            ));
+        }
+        for operation in [
+            Operation::ConnectorRestartTask,
+            Operation::ConnectorResetTopics,
+        ] {
+            assert!(
+                access
+                    .check(operation, &target("a"), ALL, Some(&owned))
+                    .is_ok()
+            );
+        }
     }
 
     #[test]

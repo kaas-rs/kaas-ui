@@ -260,21 +260,27 @@ GET /api/environments/{env}/connect-clusters/{id}/plugins
 GET /api/environments/{env}/mirrors                                     flows (9b)
 GET /api/environments/{env}/mirrors/{source}/{target}                   one flow (9b, 9c)
 
-# 9d — registered through Phase 10's write_route; each names its action
-POST   …/connect-clusters/{id}/connectors                               connector.create       (?dry_run=true ⇒ validate)
-PUT    …/connect-clusters/{id}/connectors/{name}/config                 connector.edit
-DELETE …/connect-clusters/{id}/connectors/{name}                        connector.delete
-POST   …/connect-clusters/{id}/connectors/{name}/restart                connector.restart
-POST   …/connect-clusters/{id}/connectors/{name}/tasks/{t}/restart      connector.restart_task
-POST   …/connect-clusters/{id}/connectors/{name}/state                  connector.pause|resume|stop  {"state": …}
-DELETE …/connect-clusters/{id}/connectors/{name}/offsets                connector.reset_offsets
-PATCH  …/connect-clusters/{id}/connectors/{name}/offsets                connector.alter_offsets
+# 9d — built 2026-10-21: one shape, a POST with a JSON body, for every write
+POST …/connect-clusters/{id}/connectors                                  connector.create   {name, config, dryRun?}
+POST …/connect-clusters/{id}/connectors/{name}/{operation}               restart | pause | resume | stop | reset-topics
+                                                                         | edit {config, dryRun?} | delete {confirm}
+                                                                         | reset-offsets {confirm} | alter-offsets {offsets, confirm}
+POST …/connect-clusters/{id}/connectors/{name}/tasks/{t}/restart         connector.restart_task
 ```
 
+Action-style rather than the REST verbs Connect itself uses — the plan had
+`PUT …/config`, `DELETE …/{name}`, `PATCH …/offsets`. A destroy-tier write
+carries a typed confirmation, and `DELETE` bodies are badly supported by the
+clients and proxies between a browser and kaas-ui; one shape also means one
+guard, one client function, and an openapi test that lists exactly three
+non-GET paths.
+
 Write routes follow Phase 10's sequence unchanged: Origin check, 404 for
-invisible, 403 for visible-but-not-granted, 409 for owned, audit intent,
-execute through the `ConnectWriter`, audit outcome. Request bodies (connector
-configs) go through the same redaction before they reach the audit log.
+invisible, 403 for visible-but-not-granted, 409 for owned, typed confirmation
+for destroy, audit intent, execute through the `ConnectWriter`, audit outcome.
+Configs reach the audit log redacted — and the edit form's `******` is merged
+back from the worker's own copy inside the writer, into a type that cannot be
+serialised, so the secret it restores reaches the worker and nothing else.
 
 - Connect unreachable, timed out, or **401/403 from Connect** → 502. Same
   trap as `Error::Authentication`: Connect rejecting kaas-ui's credentials must

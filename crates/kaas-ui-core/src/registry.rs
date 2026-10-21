@@ -812,7 +812,11 @@ impl Registry {
     /// state in — the same cluster that decides who may *see* it — so a role
     /// file needs no new axis for Connect. One that names no Kafka cluster is
     /// selected by its own id and the environment label.
-    pub fn connect_target(&self, handle: &ConnectHandle, connector: &str) -> kaas_ui_auth::Target {
+    pub fn connect_target(
+        &self,
+        handle: &ConnectHandle,
+        connector: Option<&str>,
+    ) -> kaas_ui_auth::Target {
         let (cluster, labels) = match &handle.kafka_cluster {
             Some(kafka) => {
                 let labels = self
@@ -834,7 +838,7 @@ impl Registry {
             cluster,
             labels,
             host: handle.id().to_owned(),
-            name: Some(connector.to_owned()),
+            name: connector.map(str::to_owned),
         }
     }
 

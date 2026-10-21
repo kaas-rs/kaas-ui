@@ -25,6 +25,7 @@ import type {
   Producer,
   TopicConnectors,
   Equivalent,
+  CreateRequest,
   Operation,
   WriteRequest,
   WriteResult,
@@ -828,12 +829,18 @@ export function useTopicConnectors(env: string, id: string, topic: string) {
   })
 }
 
-/** The last path segment for each connector operation. */
-const CONNECTOR_SEGMENT: Record<Operation, string> = {
+/** The last path segment for each connector operation. Create and task
+    restart are addressed differently and are not in this table. */
+const CONNECTOR_SEGMENT: Partial<Record<Operation, string>> = {
   "connector.restart": "restart",
   "connector.pause": "pause",
   "connector.resume": "resume",
   "connector.stop": "stop",
+  "connector.reset_topics": "reset-topics",
+  "connector.edit": "edit",
+  "connector.delete": "delete",
+  "connector.reset_offsets": "reset-offsets",
+  "connector.alter_offsets": "alter-offsets",
 }
 
 /**
@@ -848,18 +855,39 @@ export function useConnectorWrite(env: string, id: string, name: string) {
     mutationFn: ({
       operation,
       request,
+      task,
     }: {
       operation: Operation
       request?: WriteRequest
-    }) =>
-      post<WriteResult>(
-        `${connectCluster(env, id)}/connectors/${encode(name)}/${CONNECTOR_SEGMENT[operation]}`,
-        operation === "connector.restart" ? (request ?? {}) : undefined
-      ),
-    onSettled: () => {
+      task?: number
+    }) => {
+      const base = `${connectCluster(env, id)}/connectors/${encode(name)}`
+      const path =
+        operation === "connector.restart_task"
+          ? `${base}/tasks/${task ?? 0}/restart`
+          : `${base}/${CONNECTOR_SEGMENT[operation]}`
+      return post<WriteResult>(path, request ?? {})
+    },
+    onSettled: (result) => {
+      // A dry run changed nothing.
+      if (result && !result.applied) return
       void queryClient.invalidateQueries({
         queryKey: ["connector", env, id, name],
       })
+      void queryClient.invalidateQueries({ queryKey: ["connectors", env, id] })
+      void queryClient.invalidateQueries({ queryKey: ["connect", env, id] })
+    },
+  })
+}
+
+/** Create a connector, or with `dryRun` ask the plugin what it thinks. */
+export function useConnectorCreate(env: string, id: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (request: CreateRequest) =>
+      post<WriteResult>(`${connectCluster(env, id)}/connectors`, request),
+    onSettled: (result) => {
+      if (result && !result.applied) return
       void queryClient.invalidateQueries({ queryKey: ["connectors", env, id] })
       void queryClient.invalidateQueries({ queryKey: ["connect", env, id] })
     },

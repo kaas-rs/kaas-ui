@@ -41,7 +41,13 @@ pub enum ConnectFault {
     /// switched off. Absence, rendered by hiding a panel; never an error page.
     #[error("{0}")]
     Absent(String),
-    /// Any other refusal, verbatim.
+    /// The request was refused as given: by kaas-ui before sending — a config
+    /// with a placeholder and nothing behind it — or by the worker with a
+    /// `400`, as for resetting a running connector's offsets. Verbatim.
+    #[error("{0}")]
+    Invalid(String),
+    /// Any other refusal, verbatim — and the writer's answer to a grant used
+    /// for something it was not minted for, which only a kaas-ui bug can do.
     #[error("{0}")]
     Rejected(String),
 }
@@ -82,6 +88,7 @@ impl ConnectFault {
                 ))
             }
             StatusCode::NOT_FOUND => Self::NotFound(said),
+            StatusCode::BAD_REQUEST => Self::Invalid(said),
             _ => Self::Rejected(format!(
                 "Connect cluster {id:?} answered {status} for {path}: {said}"
             )),

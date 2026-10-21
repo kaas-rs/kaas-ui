@@ -2988,9 +2988,9 @@ environments:
 
     #[test]
     fn an_unknown_operation_is_refused_by_name() {
-        let err = Config::from_yaml(&WITH_WRITES.replace("connector.pause", "connector.delete"))
+        let err = Config::from_yaml(&WITH_WRITES.replace("connector.pause", "connector.explode"))
             .unwrap_err();
-        assert!(format!("{err}").contains("connector.delete"), "{err}");
+        assert!(format!("{err}").contains("connector.explode"), "{err}");
     }
 
     #[test]

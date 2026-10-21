@@ -1,8 +1,9 @@
 // One Kafka Connect cluster: its workers, its connectors, its plugins.
 //
 // A peer of a Kafka cluster inside its environment, dialled over the Connect
-// REST API. Reading is all this page does; writes live on the connector page,
-// drawn only where Phase 10's gate agrees, never as a greyed promise here.
+// REST API. The one write here is "new connector", drawn only where Phase
+// 10's gate agrees; the rest live on the connector page. Never a greyed
+// promise.
 
 import { useState } from "react"
 import { Link, useNavigate, useSearch } from "@tanstack/react-router"
@@ -43,6 +44,7 @@ import {
   connectorTypeLabel,
 } from "@/features/connect/connector-status"
 import { ConnectorTable } from "@/features/connect/connector-table"
+import { CreateConnector } from "@/features/connect/connector-writes"
 import { cn } from "@/lib/utils"
 
 export const CONNECT_VIEWS = ["connectors", "plugins"] as const
@@ -107,10 +109,17 @@ export function ConnectClusterPage({
           </span>
         }
         actions={
-          <RegistryStatusBadge
-            status={card.status}
-            title={card.error ?? undefined}
-          />
+          <>
+            <CreateConnector
+              envId={envId}
+              connectId={connectId}
+              write={data.create}
+            />
+            <RegistryStatusBadge
+              status={card.status}
+              title={card.error ?? undefined}
+            />
+          </>
         }
       />
 
