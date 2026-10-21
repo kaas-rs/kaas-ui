@@ -175,11 +175,13 @@ export function ConnectorWrites({
         })}
         {destroy.length > 0 ? (
           <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm" aria-label="more writes">
-                more
-                <ChevronDown aria-hidden />
-              </Button>
+            <DropdownMenuTrigger
+              render={
+                <Button variant="outline" size="sm" aria-label="more writes" />
+              }
+            >
+              more
+              <ChevronDown aria-hidden />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               {destroy.map((write) => {
@@ -188,7 +190,7 @@ export function ConnectorWrites({
                   <DropdownMenuItem
                     key={write.operation}
                     className="text-danger"
-                    onSelect={() => setOpen({ write })}
+                    onClick={() => setOpen({ write })}
                   >
                     <Icon aria-hidden />
                     {LABEL[write.operation]}…
@@ -508,7 +510,8 @@ function CreateForm({
   const inputError = "error" in parsed ? parsed.error : null
   const ready = !inputError && !!name.trim()
 
-  const choosePlugin = (plugin: string) => {
+  const choosePlugin = (plugin: string | null) => {
+    if (!plugin) return
     const current = "config" in parsed ? parsed.config : {}
     setDraft(JSON.stringify({ ...current, "connector.class": plugin }, null, 2))
     setVerdict(null)

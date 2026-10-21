@@ -52,12 +52,10 @@ export function ConfigTable({
                 <TableCell>
                   {entry.documentation ? (
                     <Tooltip>
-                      <TooltipTrigger asChild>
-                        <span className="font-mono">
-                          {entry.name}
-                          <span className="ml-1.5 text-[11px] text-ink-faint">
-                            ⓘ
-                          </span>
+                      <TooltipTrigger render={<span className="font-mono" />}>
+                        {entry.name}
+                        <span className="ml-1.5 text-[11px] text-ink-faint">
+                          ⓘ
                         </span>
                       </TooltipTrigger>
                       <TooltipContent className="max-w-lg">

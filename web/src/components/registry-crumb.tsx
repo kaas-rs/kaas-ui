@@ -49,13 +49,16 @@ export function RegistryCrumb({
   return (
     <CrumbMenu label={label} current={last}>
       {siblings.map((entry) => (
-        <DropdownMenuItem key={entry.registry.id} asChild>
-          <Link
-            to="/environments/$envId/schema-registries/$registryId"
-            params={{ envId, registryId: entry.registry.id }}
-          >
-            <span className="truncate">{entry.registry.name}</span>
-          </Link>
+        <DropdownMenuItem
+          key={entry.registry.id}
+          render={
+            <Link
+              to="/environments/$envId/schema-registries/$registryId"
+              params={{ envId, registryId: entry.registry.id }}
+            />
+          }
+        >
+          <span className="truncate">{entry.registry.name}</span>
         </DropdownMenuItem>
       ))}
     </CrumbMenu>

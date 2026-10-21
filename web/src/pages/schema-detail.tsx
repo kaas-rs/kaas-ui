@@ -33,14 +33,19 @@ export function SchemaDetailPage({
   const detail = useSubjectVersions(envId, registryId, subject)
 
   const back = (
-    <Button variant="ghost" size="sm" asChild>
-      <Link
-        to="/environments/$envId/schema-registries/$registryId"
-        params={{ envId, registryId }}
-      >
-        <ArrowLeft aria-hidden />
-        schema registry
-      </Link>
+    <Button
+      variant="ghost"
+      size="sm"
+      render={
+        <Link
+          to="/environments/$envId/schema-registries/$registryId"
+          params={{ envId, registryId }}
+        />
+      }
+      nativeButton={false}
+    >
+      <ArrowLeft aria-hidden />
+      schema registry
     </Button>
   )
 

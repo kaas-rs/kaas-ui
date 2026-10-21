@@ -46,8 +46,8 @@ export function LagCell({ lag }: { lag: Lag }) {
   const { text, className, why } = render()
   return (
     <Tooltip>
-      <TooltipTrigger asChild>
-        <span className={className}>{text}</span>
+      <TooltipTrigger render={<span className={className} />}>
+        {text}
       </TooltipTrigger>
       <TooltipContent>{why}</TooltipContent>
     </Tooltip>

@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "tw-animate-css";
 
 /* Dark mode is an explicit attribute, never an implicit media query.
  *
@@ -9,6 +10,25 @@
  * class is written too, because that is what a copied-in shadcn snippet
  * expects and it should not need editing to work. */
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *, .dark, .dark *));
+
+/* Base UI's state attributes, as the shadcn components spell them. From
+   `shadcn/tailwind.css` (what `shadcn eject` inlines), only the variants
+   these components use and only in their Base UI form. */
+@custom-variant data-open (&:where([data-open]:not([data-open="false"])));
+@custom-variant data-closed (&:where([data-closed]:not([data-closed="false"])));
+@custom-variant data-disabled (&:where([data-disabled="true"], [data-disabled]:not([data-disabled="false"])));
+@custom-variant data-active (&:where([data-active]:not([data-active="false"])));
+@custom-variant data-horizontal (&:where([data-orientation="horizontal"]));
+@custom-variant data-vertical (&:where([data-orientation="vertical"]));
+
+@utility no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
 
 /* ---------------------------------------------------------------------------
  * The palette

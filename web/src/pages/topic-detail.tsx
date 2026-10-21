@@ -113,14 +113,19 @@ export function TopicDetailPage({
           </span>
         }
         actions={
-          <Button variant="ghost" size="sm" asChild>
-            <Link
-              to="/environments/$envId/clusters/$clusterId/topics"
-              params={{ envId, clusterId }}
-            >
-              <ArrowLeft aria-hidden />
-              all topics
-            </Link>
+          <Button
+            variant="ghost"
+            size="sm"
+            render={
+              <Link
+                to="/environments/$envId/clusters/$clusterId/topics"
+                params={{ envId, clusterId }}
+              />
+            }
+            nativeButton={false}
+          >
+            <ArrowLeft aria-hidden />
+            all topics
           </Button>
         }
       />
@@ -178,7 +183,7 @@ export function TopicDetailPage({
         <TabsContent value="configs" className="mt-4">
           <TopicConfigs envId={envId} clusterId={clusterId} topic={topic} />
         </TabsContent>
-        {/* Radix unmounts the hidden panel, and the statistics component
+        {/* A hidden tab panel is unmounted, and the statistics component
             closes its stream on unmount — so leaving this tab cancels a
             running analysis, which is the whole cancellation story. */}
         <TabsContent value="statistics" className="mt-4">
@@ -195,7 +200,7 @@ export function TopicDetailPage({
             virtualized and the split pane is a flex box, and neither can work
             inside a page that scrolls. The subtraction is this page's chrome —
             app header, padding, title, tab row, footer. Leaving the tab stops
-            the stream, because Radix unmounts the panel that is not shown and
+            the stream, because the panel that is not shown is unmounted and
             a live scan nobody is looking at is a scan that should not be open. */}
         <TabsContent value="messages" className="mt-4">
           <MessageBrowser

@@ -29,14 +29,19 @@ export function GroupDetailPage({
         title={<span className="font-mono text-[18px]">{groupId}</span>}
         subtitle={detail ? <GroupSubtitle detail={detail} /> : undefined}
         actions={
-          <Button variant="ghost" size="sm" asChild>
-            <Link
-              to="/environments/$envId/clusters/$clusterId/groups"
-              params={{ envId, clusterId }}
-            >
-              <ArrowLeft aria-hidden />
-              all groups
-            </Link>
+          <Button
+            variant="ghost"
+            size="sm"
+            render={
+              <Link
+                to="/environments/$envId/clusters/$clusterId/groups"
+                params={{ envId, clusterId }}
+              />
+            }
+            nativeButton={false}
+          >
+            <ArrowLeft aria-hidden />
+            all groups
           </Button>
         }
       />

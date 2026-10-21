@@ -20,11 +20,13 @@ export function FeatureBadge({ entry }: { entry: FeatureEntry }) {
   }
   return (
     <Tooltip>
-      <TooltipTrigger asChild>
-        <Badge variant="outline" className="font-mono text-ink-faint">
-          <X aria-hidden className="size-3" />
-          {entry.api}
-        </Badge>
+      <TooltipTrigger
+        render={
+          <Badge variant="outline" className="font-mono text-ink-faint" />
+        }
+      >
+        <X aria-hidden className="size-3" />
+        {entry.api}
       </TooltipTrigger>
       <TooltipContent>
         {entry.api} (key {entry.apiKey}): broker{" "}

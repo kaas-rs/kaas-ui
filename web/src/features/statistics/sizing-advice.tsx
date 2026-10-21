@@ -220,6 +220,10 @@ function ProfileSelect({
       <Select
         value={chosen}
         onValueChange={(next) => onProfile(next as Profile)}
+        items={profiles.map((entry) => ({
+          value: entry.profile,
+          label: entry.label,
+        }))}
       >
         <SelectTrigger
           className="w-full sm:w-[17rem]"

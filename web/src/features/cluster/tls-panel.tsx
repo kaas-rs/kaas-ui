@@ -82,10 +82,16 @@ export function TlsCell({
   if (error) {
     return (
       <Tooltip>
-        <TooltipTrigger asChild>
-          <ExpandLink open={open} onToggle={onToggle} className="text-danger">
-            {error.kind === "decode" ? "unreadable" : "no session"}
-          </ExpandLink>
+        <TooltipTrigger
+          render={
+            <ExpandLink
+              open={open}
+              onToggle={onToggle}
+              className="text-danger"
+            />
+          }
+        >
+          {error.kind === "decode" ? "unreadable" : "no session"}
         </TooltipTrigger>
         <TooltipContent>{error.message}</TooltipContent>
       </Tooltip>
@@ -95,8 +101,10 @@ export function TlsCell({
   if (tls.session === null) {
     return (
       <Tooltip>
-        <TooltipTrigger asChild>
-          <span className="text-[12px] text-ink-faint">plaintext</span>
+        <TooltipTrigger
+          render={<span className="text-[12px] text-ink-faint" />}
+        >
+          plaintext
         </TooltipTrigger>
         <TooltipContent>
           the listener kaas-ui dials is not encrypted — a configuration, not a

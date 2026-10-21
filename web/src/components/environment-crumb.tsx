@@ -50,14 +50,17 @@ export function EnvironmentCrumb({
   return (
     <CrumbMenu label={label} current={last}>
       {sections.map((section) => (
-        <DropdownMenuItem key={section.id} asChild>
-          <Link
-            to="/environments/$envId"
-            params={{ envId: section.id }}
-            onClick={() => chooseEnvironment(section.id)}
-          >
-            <span className="truncate">{section.name}</span>
-          </Link>
+        <DropdownMenuItem
+          key={section.id}
+          render={
+            <Link
+              to="/environments/$envId"
+              params={{ envId: section.id }}
+              onClick={() => chooseEnvironment(section.id)}
+            />
+          }
+        >
+          <span className="truncate">{section.name}</span>
         </DropdownMenuItem>
       ))}
     </CrumbMenu>

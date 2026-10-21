@@ -107,14 +107,19 @@ export function TopicSchemas({
                 {/* To the subject, not to the registry listing: the reader is
                     already on the thing the subject is about, and the page
                     they want is the schema text. */}
-                <Button variant="outline" size="sm" asChild>
-                  <Link
-                    to="/environments/$envId/schema-registries/$registryId/subjects/$subject"
-                    params={{ envId, registryId, subject: row.subject }}
-                  >
-                    open schema
-                    <ArrowRight aria-hidden />
-                  </Link>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  render={
+                    <Link
+                      to="/environments/$envId/schema-registries/$registryId/subjects/$subject"
+                      params={{ envId, registryId, subject: row.subject }}
+                    />
+                  }
+                  nativeButton={false}
+                >
+                  open schema
+                  <ArrowRight aria-hidden />
                 </Button>
               </div>
             </CardContent>

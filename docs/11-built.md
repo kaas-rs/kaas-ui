@@ -1144,7 +1144,7 @@ without modification. What was decided at the point of building:
   rather than a silently narrowed chart. Records with no timestamp are
   counted, not plotted as 1970.
 - Cancellation is closing the stream, exactly as designed: the pump selects on
-  the reader going away, Radix unmounting the hidden tab panel closes the
+  the reader going away, the hidden tab panel unmounting closes the
   `EventSource`, and `no_mutating_route` needed no exception.
 
 Measured against both clusters (`cargo xtask live`, 72 assertions): totals

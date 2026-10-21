@@ -17,7 +17,6 @@
 // be shown in it.
 
 import { useState, type ReactNode } from "react"
-import { toast } from "sonner"
 
 import { Mono } from "@/components/domain"
 import {
@@ -31,6 +30,7 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { toast } from "@/components/ui/toast"
 
 export interface WriteDialogProps {
   /** Dismissed — cancel or Escape — or applied. */
@@ -68,7 +68,9 @@ export interface WriteDialogProps {
  * joins this toast to the intent and outcome lines in the audit log.
  */
 export function toastApplied(what: string, auditId: string | null) {
-  toast.success(what, {
+  toast.add({
+    type: "success",
+    title: what,
     description: auditId ? `Accepted. Audit ${auditId}.` : "Accepted.",
   })
 }
@@ -100,7 +102,7 @@ export function WriteDialog({
         if (!open) onClose()
       }}
     >
-      <AlertDialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto data-[size=default]:sm:max-w-xl">
+      <AlertDialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto data-[size=default]:max-w-[calc(100%-2rem)] data-[size=default]:sm:max-w-xl">
         <AlertDialogHeader>
           <AlertDialogTitle>{title}</AlertDialogTitle>
           <AlertDialogDescription>{description}</AlertDialogDescription>

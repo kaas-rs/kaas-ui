@@ -32,14 +32,16 @@ export function SortableHead({
   return (
     <TableHead className={cn(right && "text-right")}>
       <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            onClick={onClick}
-            className="cursor-pointer decoration-dotted underline-offset-4 hover:underline"
-          >
-            {label}
-          </button>
+        <TooltipTrigger
+          render={
+            <button
+              type="button"
+              onClick={onClick}
+              className="cursor-pointer decoration-dotted underline-offset-4 hover:underline"
+            />
+          }
+        >
+          {label}
         </TooltipTrigger>
         <TooltipContent>{hint}</TooltipContent>
       </Tooltip>

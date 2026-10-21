@@ -85,14 +85,20 @@ export function FleetCard({ card }: { card: ClusterCardData }) {
           asOfMs={fleet.dataUpdatedAt}
           maxStalenessMs={card.maxStalenessMs}
         />
-        <Button variant="link" size="sm" asChild className="ml-auto h-auto p-0">
-          <Link
-            to="/environments/$envId/clusters/$clusterId/topics"
-            params={{ envId: card.environment, clusterId: card.id }}
-          >
-            topics
-            <ArrowRight aria-hidden />
-          </Link>
+        <Button
+          variant="link"
+          size="sm"
+          className="ml-auto h-auto p-0"
+          render={
+            <Link
+              to="/environments/$envId/clusters/$clusterId/topics"
+              params={{ envId: card.environment, clusterId: card.id }}
+            />
+          }
+          nativeButton={false}
+        >
+          topics
+          <ArrowRight aria-hidden />
         </Button>
       </CardFooter>
     </Card>

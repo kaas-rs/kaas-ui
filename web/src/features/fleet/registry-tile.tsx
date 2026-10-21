@@ -163,14 +163,20 @@ export function RegistryTile({
             "no cluster here references it"
           )}
         </span>
-        <Button variant="link" size="sm" asChild className="ml-auto h-auto p-0">
-          <Link
-            to="/environments/$envId/schema-registries/$registryId"
-            params={{ envId, registryId: registry.id }}
-          >
-            subjects
-            <ArrowRight aria-hidden />
-          </Link>
+        <Button
+          variant="link"
+          size="sm"
+          className="ml-auto h-auto p-0"
+          render={
+            <Link
+              to="/environments/$envId/schema-registries/$registryId"
+              params={{ envId, registryId: registry.id }}
+            />
+          }
+          nativeButton={false}
+        >
+          subjects
+          <ArrowRight aria-hidden />
         </Button>
       </CardFooter>
     </Card>

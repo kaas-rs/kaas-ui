@@ -36,32 +36,29 @@ export function NavRegistryItem({
   return (
     <SidebarMenuItem>
       <SidebarMenuButton
-        asChild
-        // Any cluster's schema route is this registry: arriving on
-        // `/clusters/strimzi/schemas` from a link someone sent must light the
-        // same row as arriving through `kaas`, because it is the same page.
         isActive={pathname.startsWith(
           `/environments/${envId}/schema-registries/${registry.id}`
         )}
         tooltip={`${registry.name} — ${registry.url}`}
+        render={
+          <Link
+            to="/environments/$envId/schema-registries/$registryId"
+            params={{ envId, registryId: registry.id }}
+          />
+        }
       >
-        <Link
-          to="/environments/$envId/schema-registries/$registryId"
-          params={{ envId, registryId: registry.id }}
-        >
-          <Icon aria-hidden />
-          <span className="truncate">{registry.name}</span>
-          {/* A registry that is down still lists what it last knew, so the row
+        <Icon aria-hidden />
+        <span className="truncate">{registry.name}</span>
+        {/* A registry that is down still lists what it last knew, so the row
               stays a link and says so quietly rather than disappearing. */}
-          {broken ? (
-            <span
-              className="text-warn-ink ml-auto text-[10px]"
-              title={registry.error ?? registry.status}
-            >
-              {registry.status === "misconfigured" ? "!" : "?"}
-            </span>
-          ) : null}
-        </Link>
+        {broken ? (
+          <span
+            className="text-warn-ink ml-auto text-[10px]"
+            title={registry.error ?? registry.status}
+          >
+            {registry.status === "misconfigured" ? "!" : "?"}
+          </span>
+        ) : null}
       </SidebarMenuButton>
     </SidebarMenuItem>
   )

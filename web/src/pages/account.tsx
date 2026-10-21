@@ -76,10 +76,12 @@ function Grant({ actions }: { actions: Action[] | undefined }) {
       <span className="text-ok text-[13px] font-medium">view</span>
       {payloads ? (
         <Tooltip>
-          <TooltipTrigger asChild>
-            <Badge variant="outline" className="cursor-default text-[11px]">
-              payloads
-            </Badge>
+          <TooltipTrigger
+            render={
+              <Badge variant="outline" className="cursor-default text-[11px]" />
+            }
+          >
+            payloads
           </TooltipTrigger>
           <TooltipContent>
             this role may read message bodies here, not only metadata

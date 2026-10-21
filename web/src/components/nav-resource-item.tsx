@@ -17,7 +17,7 @@ import { SidebarMenuButton, SidebarMenuItem } from "@/components/ui/sidebar"
  * room to answer it anyway. It keeps its glyph and gains the tooltip every
  * other collapsed row has.
  *
- * `SidebarMenuButton asChild` around a plain `div` is what buys that tooltip:
+ * `SidebarMenuButton` rendering a plain `div` is what buys that tooltip:
  * the styling and the collapsed-only tooltip come from the primitive, while
  * the element stays something that cannot be clicked, focused or announced as
  * a control. Hover is neutralised for the same reason.
@@ -33,27 +33,24 @@ export function NavResourceItem({
   return (
     <SidebarMenuItem>
       <SidebarMenuButton
-        asChild
-        // The endpoint and the kind, for the row that cannot lead anywhere.
-        // "not probed" is the fleet card's job to say; a nav that repeated it
-        // on every row would be nagging.
         tooltip={
           resource.endpoint
             ? `${resource.name} — ${resource.endpoint}`
             : resource.name
         }
         className="text-sidebar-foreground/55 hover:bg-transparent hover:text-sidebar-foreground/55"
+        render={
+          <div
+            title={
+              resource.endpoint
+                ? `${kind.label} — ${resource.endpoint}`
+                : kind.label
+            }
+          />
+        }
       >
-        <div
-          title={
-            resource.endpoint
-              ? `${kind.label} — ${resource.endpoint}`
-              : kind.label
-          }
-        >
-          <Icon aria-hidden />
-          <span className="truncate">{resource.name}</span>
-        </div>
+        <Icon aria-hidden />
+        <span className="truncate">{resource.name}</span>
       </SidebarMenuButton>
     </SidebarMenuItem>
   )

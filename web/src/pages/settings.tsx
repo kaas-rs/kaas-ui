@@ -143,7 +143,25 @@ function DateOrderPicker({ timeZone }: { timeZone: string }) {
   const sample = new Date()
 
   return (
-    <Select value={order} onValueChange={(next) => setOrder(next as DateOrder)}>
+    <Select
+      value={order}
+      onValueChange={(next) => setOrder(next as DateOrder)}
+      // The trigger shows the choice and its sample, as the list does.
+      items={[
+        { value: "system", label: "from browser", order: localeDateOrder() },
+        ...ORDERS.map((option) => ({ ...option, order: option.value })),
+      ].map(({ value, label, order: shown }) => ({
+        value,
+        label: (
+          <span className="flex gap-2">
+            {label}
+            <span className="text-ink-faint">
+              {formatDate(sample, timeZone, shown)}
+            </span>
+          </span>
+        ),
+      }))}
+    >
       <SelectTrigger className="w-[210px]" aria-label="Date order">
         <SelectValue />
       </SelectTrigger>
@@ -265,23 +283,24 @@ export function SettingsPage() {
           otherwise. It used to sit in the top bar of every page, which gave a
           document you read once the same weight as the navigation. */}
       <Section title="Reference">
-        {/* `asChild`, not `render` — the Item in this registry is the Radix
-            build, so the anchor is passed as the child and `Slot.Root` merges
-            the props onto it. No wrapping bordered div either: `outline` is
-            the border, and keeping both draws two. */}
-        <Item variant="outline" asChild>
-          <a
-            href={withBase("/api/openapi.json")}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <ItemContent>
-              <ItemTitle>OpenAPI</ItemTitle>
-            </ItemContent>
-            <ItemActions>
-              <ExternalLinkIcon className="size-4" />
-            </ItemActions>
-          </a>
+        {/* The anchor is the Item, through `render`. No wrapping bordered
+            div: `outline` is the border, and keeping both draws two. */}
+        <Item
+          variant="outline"
+          render={
+            <a
+              href={withBase("/api/openapi.json")}
+              target="_blank"
+              rel="noopener noreferrer"
+            />
+          }
+        >
+          <ItemContent>
+            <ItemTitle>OpenAPI</ItemTitle>
+          </ItemContent>
+          <ItemActions>
+            <ExternalLinkIcon className="size-4" />
+          </ItemActions>
         </Item>
       </Section>
 

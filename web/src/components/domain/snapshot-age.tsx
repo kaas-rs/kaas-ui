@@ -38,15 +38,17 @@ export function SnapshotAge({
 
   return (
     <Tooltip>
-      <TooltipTrigger asChild>
-        <span
-          className={cn(
-            "text-[12px]",
-            stale ? "font-medium text-warn-ink" : "text-ink-faint"
-          )}
-        >
-          as of {duration(age)} ago
-        </span>
+      <TooltipTrigger
+        render={
+          <span
+            className={cn(
+              "text-[12px]",
+              stale ? "font-medium text-warn-ink" : "text-ink-faint"
+            )}
+          />
+        }
+      >
+        as of {duration(age)} ago
       </TooltipTrigger>
       <TooltipContent>
         {stale

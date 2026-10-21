@@ -47,34 +47,38 @@ export function ClusterCrumb({
   return (
     <CrumbMenu label={id} mono current={last}>
       {siblings.map((card) => (
-        <DropdownMenuItem key={card.id} asChild>
+        <DropdownMenuItem
+          key={card.id}
+          render={
+            <Link
+              to={
+                (section
+                  ? `/environments/${envId}/clusters/${card.id}/${section}`
+                  : `/environments/${envId}/clusters/${card.id}`) as string
+              }
+              className="font-mono"
+            />
+          }
+        >
           {/* A plain `string`, not a template-literal type: the router's `to`
               accepts one, and spelling the typed form here would need a
               separate branch per section for no extra safety. The environment
               is in it — a sibling is a sibling *within* one, and the flat form
               this used to build no longer routes anywhere. */}
-          <Link
-            to={
-              (section
-                ? `/environments/${envId}/clusters/${card.id}/${section}`
-                : `/environments/${envId}/clusters/${card.id}`) as string
-            }
-            className="font-mono"
-          >
-            {/* Red rather than a word: the row is one line and the name is
+
+          {/* Red rather than a word: the row is one line and the name is
                 already on it, so the colour is the whole message. On the span
                 rather than the link, where no class of the menu item's own can
                 out-order it. */}
-            <span
-              className={
-                card.status === "unreachable"
-                  ? "truncate text-danger"
-                  : "truncate"
-              }
-            >
-              {card.id}
-            </span>
-          </Link>
+          <span
+            className={
+              card.status === "unreachable"
+                ? "truncate text-danger"
+                : "truncate"
+            }
+          >
+            {card.id}
+          </span>
         </DropdownMenuItem>
       ))}
     </CrumbMenu>

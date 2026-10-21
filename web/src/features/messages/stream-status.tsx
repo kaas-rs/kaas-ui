@@ -54,17 +54,17 @@ export function StreamStatus({
         // on the grounds that a live tail does not need one, so the badge that
         // reports the ending is what picks it back up.
         <Badge
-          asChild
           variant="outline"
           className="cursor-pointer gap-1 text-warn-ink hover:bg-surface-raised"
+          render={
+            <button
+              type="button"
+              onClick={onRestart}
+              title="Open the stream again"
+            />
+          }
         >
-          <button
-            type="button"
-            onClick={onRestart}
-            title="Open the stream again"
-          >
-            <RotateCw className="size-3" aria-hidden /> stream ended
-          </button>
+          <RotateCw className="size-3" aria-hidden /> stream ended
         </Badge>
       ) : phase === "done" ? (
         <Badge variant="outline">window read</Badge>

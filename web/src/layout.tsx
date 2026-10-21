@@ -14,7 +14,7 @@ import { AppSidebar } from "@/components/app-sidebar"
 import { Breadcrumbs } from "@/components/breadcrumbs"
 import { VersionBadge } from "@/components/version-badge"
 import { Separator } from "@/components/ui/separator"
-import { Toaster } from "@/components/ui/sonner"
+import { Toaster } from "@/components/ui/toast"
 import {
   SidebarInset,
   SidebarProvider,
@@ -64,7 +64,7 @@ export function AppLayout() {
         </footer>
       </SidebarInset>
       {/* What a write says once its dialog has closed. */}
-      <Toaster position="bottom-right" />
+      <Toaster />
     </SidebarProvider>
   )
 }

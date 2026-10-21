@@ -52,17 +52,19 @@ export function CodecChip({
 
   return (
     <Tooltip>
-      <TooltipTrigger asChild>
-        <Badge
-          variant="outline"
-          className={cn(
-            "h-4 shrink-0 px-1 font-mono text-[10px] font-normal",
-            note ? noteTone(note.kind) : undefined,
-            className
-          )}
-        >
-          {label}
-        </Badge>
+      <TooltipTrigger
+        render={
+          <Badge
+            variant="outline"
+            className={cn(
+              "h-4 shrink-0 px-1 font-mono text-[10px] font-normal",
+              note ? noteTone(note.kind) : undefined,
+              className
+            )}
+          />
+        }
+      >
+        {label}
       </TooltipTrigger>
       <TooltipContent className="max-w-[420px]">
         <div className="space-y-1 text-xs">

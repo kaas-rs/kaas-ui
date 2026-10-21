@@ -152,73 +152,70 @@ export function NavClusterItem({
     <Collapsible
       open={open}
       onOpenChange={setOpen}
-      asChild
       className="group/cluster"
+      render={<SidebarMenuItem />}
     >
-      <SidebarMenuItem>
-        <SidebarMenuButton
-          asChild
-          isActive={
-            pathname === `/environments/${card.environment}/clusters/${card.id}`
-          }
-          tooltip={`${card.id} — ${card.status}`}
-          // Dimmed to the same weight as the resources below, because it now
-          // holds the same amount: a name and nothing to open. It stays a link
-          // — its page is where the transport error and the retry are, which
-          // is the one thing worth clicking on a cluster that is down.
-          className={cn(unreachable && "text-sidebar-foreground/55")}
-        >
-          {/* Following the name is also asking to see what is under it. */}
+      <SidebarMenuButton
+        isActive={
+          pathname === `/environments/${card.environment}/clusters/${card.id}`
+        }
+        tooltip={`${card.id} — ${card.status}`}
+        className={cn(unreachable && "text-sidebar-foreground/55")}
+        render={
           <Link
             to="/environments/$envId/clusters/$clusterId"
             params={{ envId: card.environment, clusterId: card.id }}
             onClick={() => setOpen(true)}
-          >
-            <ClusterIcon aria-hidden />
-            <span>{card.id}</span>
-          </Link>
-        </SidebarMenuButton>
+          />
+        }
+      >
+        {/* Following the name is also asking to see what is under it. */}
 
-        {items.length > 0 ? (
-          <>
-            <CollapsibleTrigger asChild>
+        <ClusterIcon aria-hidden />
+        <span>{card.id}</span>
+      </SidebarMenuButton>
+
+      {items.length > 0 ? (
+        <>
+          <CollapsibleTrigger
+            render={
               <SidebarMenuAction
                 aria-label={`${open ? "Collapse" : "Expand"} ${card.id}`}
-              >
-                <ChevronRight className="transition-transform duration-200 group-data-[state=open]/cluster:rotate-90" />
-              </SidebarMenuAction>
-            </CollapsibleTrigger>
+              />
+            }
+          >
+            <ChevronRight className="transition-transform duration-200 group-data-[open]/cluster:rotate-90" />
+          </CollapsibleTrigger>
 
-            <CollapsibleContent>
-              <SidebarMenuSub>
-                {items.map((item) => {
-                  const href = item.to
-                    .replace("$envId", card.environment)
-                    .replace("$clusterId", card.id)
-                  return (
-                    <SidebarMenuSubItem key={item.label}>
-                      <SidebarMenuSubButton
-                        asChild
-                        isActive={pathname.startsWith(href)}
-                      >
+          <CollapsibleContent>
+            <SidebarMenuSub>
+              {items.map((item) => {
+                const href = item.to
+                  .replace("$envId", card.environment)
+                  .replace("$clusterId", card.id)
+                return (
+                  <SidebarMenuSubItem key={item.label}>
+                    <SidebarMenuSubButton
+                      isActive={pathname.startsWith(href)}
+                      render={
                         <Link
                           to={item.to}
                           params={{
                             envId: card.environment,
                             clusterId: card.id,
                           }}
-                        >
-                          <span>{item.label}</span>
-                        </Link>
-                      </SidebarMenuSubButton>
-                    </SidebarMenuSubItem>
-                  )
-                })}
-              </SidebarMenuSub>
-            </CollapsibleContent>
-          </>
-        ) : null}
-      </SidebarMenuItem>
+                        />
+                      }
+                    >
+                      <span>{item.label}</span>
+                    </SidebarMenuSubButton>
+                  </SidebarMenuSubItem>
+                )
+              })}
+            </SidebarMenuSub>
+          </CollapsibleContent>
+        </>
+      ) : null}
     </Collapsible>
   )
 }

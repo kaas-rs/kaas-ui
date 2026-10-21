@@ -68,10 +68,10 @@ export function GroupMembers({ members }: { members: GroupMember[] }) {
               <TableCell>
                 {member.assignment.length === 0 ? (
                   <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span className="text-[12px] text-ink-faint">
-                        not reported
-                      </span>
+                    <TooltipTrigger
+                      render={<span className="text-[12px] text-ink-faint" />}
+                    >
+                      not reported
                     </TooltipTrigger>
                     <TooltipContent>
                       the classic protocol carries an assignor-defined blob that

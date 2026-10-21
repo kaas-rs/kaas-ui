@@ -20,15 +20,13 @@ export function NavMirrorsItem({ envId }: { envId: string }) {
   return (
     <SidebarMenuItem>
       <SidebarMenuButton
-        asChild
         isActive={pathname.startsWith(`/environments/${envId}/mirrors`)}
         tooltip={`${flows} MirrorMaker flow${flows === 1 ? "" : "s"}`}
+        render={<Link to="/environments/$envId/mirrors" params={{ envId }} />}
       >
-        <Link to="/environments/$envId/mirrors" params={{ envId }}>
-          <Repeat aria-hidden />
-          <span className="truncate">MirrorMaker</span>
-          <span className="ml-auto text-[11px] text-ink-faint">{flows}</span>
-        </Link>
+        <Repeat aria-hidden />
+        <span className="truncate">MirrorMaker</span>
+        <span className="ml-auto text-[11px] text-ink-faint">{flows}</span>
       </SidebarMenuButton>
     </SidebarMenuItem>
   )

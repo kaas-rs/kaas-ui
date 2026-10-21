@@ -8,7 +8,7 @@
 //   * **No avatar image.** `/api/me` carries no picture and Dex is not asked
 //     for one, so the avatar is initials and there is no `AvatarImage` to be
 //     permanently empty. That is also why no `avatar.tsx` primitive is added:
-//     a Radix Avatar exists to swap an image for a fallback, and there is no
+//     an Avatar primitive exists to swap an image for a fallback, and there is no
 //     image.
 //   * **Roles, where the block puts an email.** An email is not why anyone
 //     opens this menu; "which roles do I have" is, because it is the answer
@@ -101,65 +101,66 @@ export function NavUser({ identity }: { identity: Identity }) {
         <form ref={signOut} method="post" action={withBase("/auth/logout")} hidden />
 
         <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <SidebarMenuButton
-              size="lg"
-              tooltip={`${name} — ${under}`}
-              className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
-            >
-              <Face name={name} />
-              <div className="grid flex-1 text-left text-sm leading-tight">
-                <span className="truncate font-medium">{name}</span>
-                <span className="text-ink-muted truncate text-xs">{under}</span>
-              </div>
-              <ChevronsUpDown className="ml-auto size-4" />
-            </SidebarMenuButton>
+          <DropdownMenuTrigger
+            render={
+              <SidebarMenuButton
+                size="lg"
+                tooltip={`${name} — ${under}`}
+                className="data-popup-open:bg-sidebar-accent data-popup-open:text-sidebar-accent-foreground"
+              />
+            }
+          >
+            <Face name={name} />
+            <div className="grid flex-1 text-left text-sm leading-tight">
+              <span className="truncate font-medium">{name}</span>
+              <span className="text-ink-muted truncate text-xs">{under}</span>
+            </div>
+            <ChevronsUpDown className="ml-auto size-4" />
           </DropdownMenuTrigger>
 
           <DropdownMenuContent
-            className="w-(--radix-dropdown-menu-trigger-width) min-w-56 rounded-lg"
+            className="w-(--anchor-width) min-w-56 rounded-lg"
             side={isMobile ? "bottom" : "right"}
             align="end"
             sideOffset={4}
           >
-            <DropdownMenuLabel className="p-0 font-normal">
-              <div className="flex items-center gap-2 px-1 py-1.5 text-left text-sm">
-                <Face name={name} />
-                <div className="grid flex-1 text-left text-sm leading-tight">
-                  <span className="truncate font-medium">{name}</span>
-                  <span className="text-ink-muted truncate text-xs">
-                    {under}
-                  </span>
+            {/* Base UI labels belong to a group; this one heads the menu. */}
+            <DropdownMenuGroup>
+              <DropdownMenuLabel className="p-0 font-normal">
+                <div className="flex items-center gap-2 px-1 py-1.5 text-left text-sm">
+                  <Face name={name} />
+                  <div className="grid flex-1 text-left text-sm leading-tight">
+                    <span className="truncate font-medium">{name}</span>
+                    <span className="text-ink-muted truncate text-xs">
+                      {under}
+                    </span>
+                  </div>
                 </div>
-              </div>
-            </DropdownMenuLabel>
+              </DropdownMenuLabel>
+            </DropdownMenuGroup>
 
             <DropdownMenuSeparator />
             <DropdownMenuGroup>
               {/* Offered signed out too: "what am I allowed to see" is a fair
                   question for an anonymous caller, and on an open deployment
                   the answer — everything — is worth being able to check. */}
-              <DropdownMenuItem asChild>
-                <Link to="/account">
-                  <BadgeCheck />
-                  Account
-                </Link>
+              <DropdownMenuItem render={<Link to="/account" />}>
+                <BadgeCheck />
+                Account
               </DropdownMenuItem>
               {/* Next to Account because the pair is one question asked twice
                   — what is true of *me* here. Account answers the half that
                   follows the login to any machine; Settings answers the half
                   that stays in this browser. */}
-              <DropdownMenuItem asChild>
-                <Link to="/settings">
-                  <Settings />
-                  Settings
-                </Link>
+              <DropdownMenuItem render={<Link to="/settings" />}>
+                <Settings />
+                Settings
               </DropdownMenuItem>
             </DropdownMenuGroup>
 
             <DropdownMenuSeparator />
             {identity.authenticated ? (
-              <DropdownMenuItem onSelect={() => signOut.current?.submit()}>
+              <DropdownMenuItem onClick={() => signOut.current?.submit()}>
                 <LogOut />
                 Sign out
               </DropdownMenuItem>
@@ -170,13 +171,11 @@ export function NavUser({ identity }: { identity: Identity }) {
               // — otherwise the chooser page this removed comes back through
               // this menu.
               identity.connectors.length === 0 ? (
-                <DropdownMenuItem asChild>
+                <DropdownMenuItem render={<a href={withBase("/auth/login")} />}>
                   {/* A plain navigation: the browser has to leave for the
                       provider and come back with a cookie. */}
-                  <a href={withBase("/auth/login")}>
-                    <LogIn />
-                    Sign in
-                  </a>
+                  <LogIn />
+                  Sign in
                 </DropdownMenuItem>
               ) : (
                 identity.connectors.map((connector) => {
@@ -184,18 +183,21 @@ export function NavUser({ identity }: { identity: Identity }) {
                   // note on the sign-in screen.
                   const id = encodeURIComponent(connector.id)
                   return (
-                    <DropdownMenuItem key={connector.id} asChild>
-                      <a href={withBase(`/auth/login?connector=${id}`)}>
-                        <LogIn />
-                        Sign in with {connector.name}
-                      </a>
+                    <DropdownMenuItem
+                      key={connector.id}
+                      render={
+                        <a href={withBase(`/auth/login?connector=${id}`)} />
+                      }
+                    >
+                      <LogIn />
+                      Sign in with {connector.name}
                     </DropdownMenuItem>
                   )
                 })
               )
             ) : (
               <DropdownMenuItem
-                onSelect={(event) => event.preventDefault()}
+                closeOnClick={false}
                 className="focus:bg-transparent"
               >
                 <span className="text-ink-muted text-[12px]">

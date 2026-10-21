@@ -61,11 +61,13 @@ export function SignInPage({
                 Empty is the default and the fallback: one button, no name, and
                 the provider asks. */}
             {connectors.length === 0 ? (
-              <Button asChild className="w-full">
-                <a href={withBase("/auth/login")}>
-                  <LogIn />
-                  Sign in
-                </a>
+              <Button
+                className="w-full"
+                render={<a href={withBase("/auth/login")} />}
+                nativeButton={false}
+              >
+                <LogIn />
+                Sign in
               </Button>
             ) : (
               connectors.map((connector) => {
@@ -80,14 +82,15 @@ export function SignInPage({
                   // person should use is not something this build could know.
                   <Button
                     key={connector.id}
-                    asChild
                     variant="outline"
                     className="w-full"
+                    render={
+                      <a href={withBase(`/auth/login?connector=${id}`)} />
+                    }
+                    nativeButton={false}
                   >
-                    <a href={withBase(`/auth/login?connector=${id}`)}>
-                      <LogIn />
-                      Sign in with {connector.name}
-                    </a>
+                    <LogIn />
+                    Sign in with {connector.name}
                   </Button>
                 )
               })

@@ -28,28 +28,28 @@ export function NavConnectItem({
   return (
     <SidebarMenuItem>
       <SidebarMenuButton
-        asChild
         isActive={pathname.startsWith(
           `/environments/${envId}/connect-clusters/${card.id}`
         )}
         tooltip={`${card.name} — ${card.url}`}
+        render={
+          <Link
+            to="/environments/$envId/connect-clusters/$connectId"
+            params={{ envId, connectId: card.id }}
+            search={{ listing: "connectors" }}
+          />
+        }
       >
-        <Link
-          to="/environments/$envId/connect-clusters/$connectId"
-          params={{ envId, connectId: card.id }}
-          search={{ listing: "connectors" }}
-        >
-          <Icon aria-hidden />
-          <span className="truncate">{card.name}</span>
-          {broken ? (
-            <span
-              className="text-warn-ink ml-auto text-[10px]"
-              title={card.error ?? card.status}
-            >
-              {card.status === "misconfigured" ? "!" : "?"}
-            </span>
-          ) : null}
-        </Link>
+        <Icon aria-hidden />
+        <span className="truncate">{card.name}</span>
+        {broken ? (
+          <span
+            className="text-warn-ink ml-auto text-[10px]"
+            title={card.error ?? card.status}
+          >
+            {card.status === "misconfigured" ? "!" : "?"}
+          </span>
+        ) : null}
       </SidebarMenuButton>
     </SidebarMenuItem>
   )

@@ -211,8 +211,10 @@ function BrokerRoleBadges({ broker }: { broker: Broker }) {
         </Badge>
       ) : broker.isFenced === null ? (
         <Tooltip>
-          <TooltipTrigger asChild>
-            <span className="text-[11px] text-ink-faint">fencing unknown</span>
+          <TooltipTrigger
+            render={<span className="text-[11px] text-ink-faint" />}
+          >
+            fencing unknown
           </TooltipTrigger>
           <TooltipContent>
             this cluster does not report fencing — unknown, not false

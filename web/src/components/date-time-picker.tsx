@@ -94,15 +94,17 @@ export function DateTimePicker({
   return (
     <div className={cn("flex items-center gap-2", className)}>
       <Popover open={open} onOpenChange={setOpen}>
-        <PopoverTrigger asChild>
-          <Button
-            variant="outline"
-            className="w-[168px] justify-start font-normal"
-            aria-label="Date"
-          >
-            <CalendarIcon className="mr-2 size-4" />
-            {value ? formatDate(value, timeZone, dateOrder) : "Pick a date"}
-          </Button>
+        <PopoverTrigger
+          render={
+            <Button
+              variant="outline"
+              className="w-[168px] justify-start font-normal"
+              aria-label="Date"
+            />
+          }
+        >
+          <CalendarIcon className="mr-2 size-4" />
+          {value ? formatDate(value, timeZone, dateOrder) : "Pick a date"}
         </PopoverTrigger>
         <PopoverContent className="w-auto p-0" align="start">
           <Calendar

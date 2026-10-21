@@ -33,7 +33,7 @@ if (container) {
   createRoot(container).render(
     <StrictMode>
       <QueryClientProvider client={queryClient}>
-        <TooltipProvider delayDuration={200}>
+        <TooltipProvider delay={200}>
           <RouterProvider router={router} />
         </TooltipProvider>
       </QueryClientProvider>

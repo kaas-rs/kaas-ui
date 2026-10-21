@@ -213,10 +213,12 @@ function Head({ label, hint }: { label: string; hint: string }) {
   return (
     <span role="columnheader">
       <Tooltip>
-        <TooltipTrigger asChild>
-          <span className="cursor-help decoration-dotted underline-offset-4 hover:underline">
-            {label}
-          </span>
+        <TooltipTrigger
+          render={
+            <span className="cursor-help decoration-dotted underline-offset-4 hover:underline" />
+          }
+        >
+          {label}
         </TooltipTrigger>
         <TooltipContent>{hint}</TooltipContent>
       </Tooltip>

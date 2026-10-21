@@ -55,35 +55,37 @@ export function VersionBadge() {
     <Button
       variant="ghost"
       size="sm"
-      asChild
       className="relative ml-auto text-[12px]"
+      render={
+        <a
+          href={releaseUrl(behind && latest.data ? latest.data : current)}
+          target="_blank"
+          rel="noreferrer noopener"
+        />
+      }
+      nativeButton={false}
     >
       {/* Points at whichever version is worth reading about: the newer one
           when there is one, otherwise the one you are running. */}
-      <a
-        href={releaseUrl(behind && latest.data ? latest.data : current)}
-        target="_blank"
-        rel="noreferrer noopener"
-      >
-        <GithubMark className="size-3.5" />
-        <span className="font-mono">{current}</span>
-        {/* Presence is the signal, not hue: the dot either is or is not
+
+      <GithubMark className="size-3.5" />
+      <span className="font-mono">{current}</span>
+      {/* Presence is the signal, not hue: the dot either is or is not
             there, so this still reads without colour vision. With no tooltip
             left to explain it, the sr-only label below is the only wording
             there is — which is why it spells the state out rather than
             repeating the number. */}
-        {behind ? (
-          <span
-            aria-hidden
-            className="bg-warn absolute top-1 right-1 size-1.5 rounded-full"
-          />
-        ) : null}
-        <span className="sr-only">
-          {behind
-            ? `version ${current}, and ${latest.data} has been released`
-            : `version ${current}`}
-        </span>
-      </a>
+      {behind ? (
+        <span
+          aria-hidden
+          className="bg-warn absolute top-1 right-1 size-1.5 rounded-full"
+        />
+      ) : null}
+      <span className="sr-only">
+        {behind
+          ? `version ${current}, and ${latest.data} has been released`
+          : `version ${current}`}
+      </span>
     </Button>
   )
 }

@@ -138,14 +138,20 @@ export function ConnectTile({
             "no Kafka cluster referenced"
           )}
         </span>
-        <Button variant="link" size="sm" asChild className="ml-auto h-auto p-0">
-          <Link
-            to="/environments/$envId/connect-clusters/$connectId"
-            params={params}
-          >
-            connectors
-            <ArrowRight aria-hidden />
-          </Link>
+        <Button
+          variant="link"
+          size="sm"
+          className="ml-auto h-auto p-0"
+          render={
+            <Link
+              to="/environments/$envId/connect-clusters/$connectId"
+              params={params}
+            />
+          }
+          nativeButton={false}
+        >
+          connectors
+          <ArrowRight aria-hidden />
         </Button>
       </CardFooter>
     </Card>

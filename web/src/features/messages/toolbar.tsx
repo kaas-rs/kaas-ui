@@ -41,6 +41,9 @@ export interface ToolbarProps {
   onRestart(): void
 }
 
+/** The transaction-visibility choices, for the items and the trigger. */
+const VISIBILITY = { all: "All records", committed: "Committed only" }
+
 export function Toolbar({
   mode,
   offset,
@@ -114,6 +117,9 @@ export function Toolbar({
       <Select
         value={draftMode}
         onValueChange={(value) => setDraftMode(value as SeekMode)}
+        items={Object.fromEntries(
+          Object.entries(SEEK_MODES).map(([key, entry]) => [key, entry.label])
+        )}
       >
         <SelectTrigger className="w-[150px]" aria-label="Seek mode">
           <SelectValue />
@@ -216,6 +222,7 @@ export function Toolbar({
         onValueChange={(value) =>
           onVisibilityChange(value as "all" | "committed")
         }
+        items={VISIBILITY}
       >
         <SelectTrigger
           className="w-[130px]"
@@ -224,8 +231,8 @@ export function Toolbar({
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="all">All records</SelectItem>
-          <SelectItem value="committed">Committed only</SelectItem>
+          <SelectItem value="all">{VISIBILITY.all}</SelectItem>
+          <SelectItem value="committed">{VISIBILITY.committed}</SelectItem>
         </SelectContent>
       </Select>
 

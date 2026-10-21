@@ -11,13 +11,15 @@ import type { ResourceError } from "@/api/types"
 export function UnknownCodeChip({ code }: { code: number }) {
   return (
     <Tooltip>
-      <TooltipTrigger asChild>
-        <span
-          className="rounded-sm px-1.5 py-0.5 font-mono text-[12px]"
-          style={{ background: "var(--warn-soft)", color: "var(--warn-ink)" }}
-        >
-          code {code}
-        </span>
+      <TooltipTrigger
+        render={
+          <span
+            className="rounded-sm px-1.5 py-0.5 font-mono text-[12px]"
+            style={{ background: "var(--warn-soft)", color: "var(--warn-ink)" }}
+          />
+        }
+      >
+        code {code}
       </TooltipTrigger>
       <TooltipContent>
         this build has no name for this error code
@@ -38,27 +40,29 @@ export function ErrorChips({ errors }: { errors: ResourceError[] }) {
     <div className="mb-4 flex flex-wrap gap-2">
       {errors.map((error, index) => (
         <Tooltip key={`${error.resource}-${index}`}>
-          <TooltipTrigger asChild>
-            <span
-              className="inline-flex items-center gap-2 rounded-sm border px-2 py-1 text-[12px]"
-              style={{
-                background: "var(--warn-soft)",
-                color: "var(--warn-ink)",
-                borderColor: "var(--rust-edge)",
-              }}
-            >
-              <AlertTriangle aria-hidden className="size-3.5" />
-              <span className="font-mono">{error.resource}</span>
-              {error.code ? (
-                <span className="font-mono opacity-80">{error.code}</span>
-              ) : error.codeNumber !== null ? (
-                <span className="font-mono opacity-80">
-                  code {error.codeNumber}
-                </span>
-              ) : (
-                <span className="opacity-80">{error.kind}</span>
-              )}
-            </span>
+          <TooltipTrigger
+            render={
+              <span
+                className="inline-flex items-center gap-2 rounded-sm border px-2 py-1 text-[12px]"
+                style={{
+                  background: "var(--warn-soft)",
+                  color: "var(--warn-ink)",
+                  borderColor: "var(--rust-edge)",
+                }}
+              />
+            }
+          >
+            <AlertTriangle aria-hidden className="size-3.5" />
+            <span className="font-mono">{error.resource}</span>
+            {error.code ? (
+              <span className="font-mono opacity-80">{error.code}</span>
+            ) : error.codeNumber !== null ? (
+              <span className="font-mono opacity-80">
+                code {error.codeNumber}
+              </span>
+            ) : (
+              <span className="opacity-80">{error.kind}</span>
+            )}
           </TooltipTrigger>
           <TooltipContent className="max-w-md">{error.message}</TooltipContent>
         </Tooltip>

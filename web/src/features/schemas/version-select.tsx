@@ -29,6 +29,19 @@ export function VersionSelect({
       <Select
         value={value !== undefined ? String(value) : undefined}
         onValueChange={(next) => onChange(Number(next))}
+        // What the trigger shows for the chosen value: Base UI renders the
+        // raw value without it.
+        items={versions.map((version) => ({
+          value: String(version.version),
+          label: (
+            <span className="flex gap-1.5">
+              v{version.version}
+              {version.version === current ? (
+                <span className="text-ink-faint">(current)</span>
+              ) : null}
+            </span>
+          ),
+        }))}
       >
         <SelectTrigger className="w-[130px]" aria-label={`${label} version`}>
           <SelectValue />

@@ -62,10 +62,10 @@ export function GroupTable({
                   </Link>
                 ) : (
                   <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span className="font-mono text-ink-muted">
-                        {group.groupId}
-                      </span>
+                    <TooltipTrigger
+                      render={<span className="font-mono text-ink-muted" />}
+                    >
+                      {group.groupId}
                     </TooltipTrigger>
                     <TooltipContent>
                       this build has no schema for this group kind
@@ -79,8 +79,10 @@ export function GroupTable({
               <TableCell className="font-mono text-ink-muted">
                 {group.groupType || (
                   <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span className="text-ink-faint">unreported</span>
+                    <TooltipTrigger
+                      render={<span className="text-ink-faint" />}
+                    >
+                      unreported
                     </TooltipTrigger>
                     <TooltipContent>
                       this broker is too old to report a group type; it takes
