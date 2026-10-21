@@ -806,6 +806,46 @@ impl Registry {
             .filter_map(move |((env, id), _)| self.connect_cluster(env, id, who))
     }
 
+    /// The Kafka cluster a MirrorMaker alias names, from `environment`'s
+    /// point of view: its `mirror_aliases`, or else the cluster here with the
+    /// same id. `None` where neither names one.
+    pub fn resolve_alias(&self, environment: &str, alias: &str) -> Option<Key> {
+        let entry = self
+            .environments
+            .iter()
+            .find(|candidate| candidate.id == environment)?;
+        let key = match entry.mirror_aliases.get(alias) {
+            Some(target) => match target.split_once('/') {
+                Some((env, id)) => (env.to_owned(), id.to_owned()),
+                None => (environment.to_owned(), target.clone()),
+            },
+            None => (environment.to_owned(), alias.to_owned()),
+        };
+        self.clusters.contains_key(&key).then_some(key)
+    }
+
+    /// The alias a cluster goes by in `environment`'s flows: the one its
+    /// `mirror_aliases` maps to it, or its own id when it is in this
+    /// environment. For naming a flow found from its internal topics, where
+    /// only the cluster that holds them is known.
+    pub fn alias_of(&self, environment: &str, cluster: &Key) -> Option<String> {
+        let entry = self
+            .environments
+            .iter()
+            .find(|candidate| candidate.id == environment)?;
+        let mapped = entry.mirror_aliases.iter().find(|(_, target)| {
+            let resolved = match target.split_once('/') {
+                Some((env, id)) => (env.to_owned(), id.to_owned()),
+                None => (environment.to_owned(), (*target).clone()),
+            };
+            resolved == *cluster
+        });
+        match mapped {
+            Some((alias, _)) => Some(alias.clone()),
+            None => (cluster.0 == environment).then(|| cluster.1.clone()),
+        }
+    }
+
     /// What a write to one connector is aimed at, for the gate.
     ///
     /// Roles select a connector by the Kafka cluster its Connect cluster keeps

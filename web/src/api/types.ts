@@ -1247,6 +1247,8 @@ export interface ConnectorSummary {
   tasksFailed: number
   /** The group a sink commits to; null for a source. */
   consumerGroup: string | null
+  /** Its part in a MirrorMaker 2 flow, if it is a Mirror connector. */
+  mirror: MirrorRole | null
 }
 
 export interface ConnectorList {
@@ -1417,4 +1419,113 @@ export interface WriteResult {
   validation: Validation | null
   /** For an edit or a create: the config as sent, redacted. */
   config: RedactedConfig | null
+}
+
+// --- MirrorMaker 2 -------------------------------------------------------------
+
+export type MirrorKind = "source" | "checkpoint" | "heartbeat"
+
+/** How a flow names topics on its target. Custom: kaas-ui cannot know. */
+export type ReplicationPolicy =
+  | { kind: "default"; separator: string }
+  | { kind: "identity" }
+  | { kind: "custom"; class: string }
+
+export interface MirrorRole {
+  kind: MirrorKind
+  sourceAlias: string | null
+  targetAlias: string | null
+  policy: ReplicationPolicy
+  topics: string | null
+  topicsExclude: string | null
+  groups: string | null
+  groupsExclude: string | null
+}
+
+export interface FlowEnd {
+  environment: string
+  id: string
+}
+
+export interface FlowConnector {
+  connectCluster: string
+  connectName: string
+  name: string
+  kind: MirrorKind
+  status: ConnectorStatus
+  tasksRunning: number
+  tasksTotal: number
+}
+
+export interface MirrorFlow {
+  sourceAlias: string
+  targetAlias: string
+  source: FlowEnd | null
+  target: FlowEnd | null
+  connectors: FlowConnector[]
+  /** Connectors no Connect cluster runs. Empty for a discovered flow, where
+      that is unknown rather than complete. */
+  missing: MirrorKind[]
+  policy: ReplicationPolicy | null
+  topics: string | null
+  topicsExclude: string | null
+  groups: string | null
+  groupsExclude: string | null
+  /** Found from internal topics and no Connect API: task state unknown. */
+  discovered: boolean
+}
+
+export interface MirrorList {
+  flows: MirrorFlow[]
+  errors: ResourceError[]
+}
+
+export interface MirroredTopic {
+  sourceTopic: string | null
+  targetTopic: string
+  sourcePartitions: number | null
+  targetPartitions: number | null
+}
+
+export interface Heartbeat {
+  sourceAlias: string
+  targetAlias: string
+  timestampMs: number
+}
+
+export interface HeartbeatSeen {
+  topic: string
+  heartbeat: Heartbeat
+  ageMs: number
+}
+
+export interface Checkpoint {
+  group: string
+  topic: string
+  partition: number
+  upstreamOffset: number
+  downstreamOffset: number
+  metadata: string
+}
+
+export interface CheckpointRow {
+  checkpoint: Checkpoint
+  targetTopic: string | null
+}
+
+export interface OffsetSync {
+  topic: string
+  partition: number
+  upstreamOffset: number
+  downstreamOffset: number
+}
+
+export interface MirrorFlowDetail {
+  flow: MirrorFlow
+  topics: MirroredTopic[]
+  heartbeats: HeartbeatSeen[]
+  checkpoints: CheckpointRow[]
+  /** A lower bound: offset syncs are sparse by design. */
+  offsetSyncs: OffsetSync[]
+  errors: ResourceError[]
 }

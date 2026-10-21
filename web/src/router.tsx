@@ -34,6 +34,8 @@ import { EnvironmentPage } from "@/pages/environment"
 import { CONNECT_VIEWS, ConnectClusterPage } from "@/pages/connect-cluster"
 import type { ConnectView } from "@/pages/connect-cluster"
 import { CONNECTOR_PANES, ConnectorPage } from "@/pages/connector"
+import { MirrorsPage } from "@/pages/mirrors"
+import { MirrorFlowPage } from "@/pages/mirror-flow"
 import type { ConnectorPane } from "@/pages/connector"
 import {
   messageSearchSchema,
@@ -330,6 +332,28 @@ const connectorRoute = createRoute({
   },
 })
 
+/** The MirrorMaker 2 flows of an environment. */
+const mirrorsRoute = createRoute({
+  getParentRoute: () => environmentRoute,
+  path: "mirrors",
+  component: function MirrorsRoute() {
+    const { envId } = useParams({ from: "/environments/$envId/mirrors" })
+    return <MirrorsPage envId={envId} />
+  },
+})
+
+/** One flow, addressed by its two aliases — the names MirrorMaker uses. */
+const mirrorFlowRoute = createRoute({
+  getParentRoute: () => environmentRoute,
+  path: "mirrors/$source/$target",
+  component: function MirrorFlowRoute() {
+    const { envId, source, target } = useParams({
+      from: "/environments/$envId/mirrors/$source/$target",
+    })
+    return <MirrorFlowPage envId={envId} source={source} target={target} />
+  },
+})
+
 const routeTree = rootRoute.addChildren([
   indexRoute,
   accountRoute,
@@ -350,6 +374,8 @@ const routeTree = rootRoute.addChildren([
     schemaRegistryRoute,
     schemaRoute,
     connectRoute.addChildren([connectIndexRoute, connectorRoute]),
+    mirrorsRoute,
+    mirrorFlowRoute,
   ]),
 ])
 

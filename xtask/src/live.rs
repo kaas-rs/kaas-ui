@@ -2157,6 +2157,13 @@ async fn assertions() -> Result<Acceptance, String> {
     // compares kaas-ui's answer with the worker's own.
     connect_assertions(&client, &mut acceptance).await?;
 
+    // --- MirrorMaker 2 (Phase 9b, 9c) ----------------------------------------
+    //
+    // Against the two k3s-cluster fixtures: A, a KafkaMirrorMaker2 (strimzi →
+    // kaas) on the `mm2` Connect cluster; B, Mirror connectors on `connect`
+    // (kaas → strimzi).
+    mirror_assertions(&client, &mut acceptance).await?;
+
     // --- an unknown id is absent, not forbidden -----------------------------
     let status = client
         .get(url(&format!(
@@ -2513,5 +2520,123 @@ async fn connect_assertions(
             Err(format!("got {unknown}"))
         },
     );
+    Ok(())
+}
+
+/// Phase 9b and 9c against the MirrorMaker fixtures.
+async fn mirror_assertions(
+    client: &reqwest::Client,
+    acceptance: &mut Acceptance,
+) -> Result<(), String> {
+    let list = get(client, &format!("/api/environments/{ENV}/mirrors")).await?;
+    let flows = list["flows"].as_array().cloned().unwrap_or_default();
+    let flow = |source: &str, target: &str| {
+        flows
+            .iter()
+            .find(|flow| flow["sourceAlias"] == source && flow["targetAlias"] == target)
+            .cloned()
+    };
+    let hosted_on = |flow: &Value, connect: &str| {
+        let connectors = flow["connectors"].as_array().cloned().unwrap_or_default();
+        !connectors.is_empty() && connectors.iter().all(|c| c["connectCluster"] == connect)
+    };
+
+    acceptance.check(
+        "mirrors: the dedicated MirrorMaker's flow, strimzi → kaas, runs on `mm2`",
+        match flow("strimzi", "kaas") {
+            Some(found) if hosted_on(&found, "mm2") && found["target"]["id"] == "kaas" => Ok(format!(
+                "{} connectors, missing {}",
+                found["connectors"].as_array().map_or(0, Vec::len),
+                found["missing"]
+            )),
+            Some(found) => Err(format!("{found}")),
+            None => Err(format!(
+                "not found among {} flows — is fixture A (k3s-cluster apps/strimzi/kafka-mirrormaker2.yaml) synced? errors: {}",
+                flows.len(),
+                list["errors"]
+            )),
+        },
+    );
+    acceptance.check(
+        "mirrors: the co-hosted flow, kaas → strimzi, runs on `connect` with all three connectors",
+        match flow("kaas", "strimzi") {
+            Some(found)
+                if hosted_on(&found, "connect")
+                    && found["missing"].as_array().is_some_and(Vec::is_empty) =>
+            {
+                Ok(String::new())
+            }
+            Some(found) => Err(format!("{found}")),
+            None => {
+                Err("not found — is fixture B (kafka-connectors/mirror-kaas-*.yaml) synced?".into())
+            }
+        },
+    );
+
+    for (source, target) in [("strimzi", "kaas"), ("kaas", "strimzi")] {
+        if flow(source, target).is_none() {
+            continue;
+        }
+        let detail = get(
+            client,
+            &format!("/api/environments/{ENV}/mirrors/{source}/{target}"),
+        )
+        .await?;
+        let topics = detail["topics"].as_array().cloned().unwrap_or_default();
+        acceptance.check(
+            &format!("mirrors {source} → {target}: mirrored topics map to a topic on both sides"),
+            if !topics.is_empty()
+                && topics.iter().all(|topic| {
+                    topic["sourcePartitions"].is_number() && topic["targetPartitions"].is_number()
+                })
+            {
+                Ok(topics
+                    .iter()
+                    .map(|topic| format!("{} → {}", topic["sourceTopic"], topic["targetTopic"]))
+                    .collect::<Vec<_>>()
+                    .join(", "))
+            } else {
+                Err(format!("{topics:?}"))
+            },
+        );
+        let heartbeats = detail["heartbeats"].as_array().cloned().unwrap_or_default();
+        let freshest = heartbeats
+            .iter()
+            .filter_map(|seen| seen["ageMs"].as_i64())
+            .min();
+        acceptance.check(
+            &format!("mirrors {source} → {target}: a heartbeat younger than a minute"),
+            match freshest {
+                Some(age) if age < 60_000 => Ok(format!("{age} ms, {} topic(s)", heartbeats.len())),
+                Some(age) => Err(format!("newest is {age} ms old")),
+                None => Err(format!("no heartbeat; errors {}", detail["errors"])),
+            },
+        );
+    }
+
+    // The canary's group consumes kaas-canary-v1 on kaas; fixture B
+    // checkpoints it onto strimzi.
+    if flow("kaas", "strimzi").is_some() {
+        let detail = get(
+            client,
+            &format!("/api/environments/{ENV}/mirrors/kaas/strimzi"),
+        )
+        .await?;
+        let checkpoints = detail["checkpoints"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        acceptance.check(
+            "mirrors kaas → strimzi: a group consuming on the source has a checkpoint on the target",
+            if checkpoints
+                .iter()
+                .any(|row| row["checkpoint"]["topic"] == "kaas-canary-v1")
+            {
+                Ok(format!("{} checkpoints", checkpoints.len()))
+            } else {
+                Err(format!("{checkpoints:?}; errors {}", detail["errors"]))
+            },
+        );
+    }
     Ok(())
 }

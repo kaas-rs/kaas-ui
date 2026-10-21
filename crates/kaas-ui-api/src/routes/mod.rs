@@ -19,6 +19,7 @@ pub mod groups;
 pub mod health;
 pub mod me;
 pub mod messages;
+pub mod mirror;
 pub mod schemas;
 pub mod spec;
 pub mod topics;

@@ -21,6 +21,7 @@ is surprising.
 | 6 — schema registry | one registry per environment, Avro/Protobuf/JSON Schema, the codec chip, the schema browser, the payload filter over decoded values |
 | 7 — read-only admin | ACLs, client quotas, SCRAM users, reassignments, the transaction inspector, and `CapabilityTab` at last |
 | 10a — the write gate (Connect half) | `Grant`, the three gates, `X-Kaas-Ui` + Origin guard, intent/outcome audit, `ConnectWriter`; connector restart, pause, resume, stop; GitOps ownership by pattern and generated file, with each write's Git equivalent |
+| 9b · 9c — MirrorMaker 2 | flows from every Connect cluster and from the clusters' internal topics; mirrored topics; heartbeats, checkpoints and offset syncs decoded in kaas-ui-serde |
 | 9d — Connect writes | the rest of the catalogue: task restart, reset topics, edit (with validate), create (with validate), delete, reset and alter offsets; destroy tier wants the name typed |
 | 9a — Connect, read-only | `kaas-ui-connect`: Connect clusters dialled over REST, GET-only by construction; connectors, tasks, redacted configs, topics, offsets, plugins; the `kafka_cluster:` reference checked against the workers |
 
@@ -887,6 +888,45 @@ renders the REST call.
 **Unproven, as for 10a:** no authenticated write has run against a live
 worker — no identity provider in dev. Every operation's request is asserted
 against a stub worker, through the real handler and writer.
+
+## Phase 9b and 9c — the decisions
+
+**A flow is found two ways, and they merge.** From every Connect cluster
+the caller may see in the environment — dedicated to MirrorMaker or not — by
+the three Mirror connector classes and the aliases in their config; and from
+the clusters' own topics, `<source>.checkpoints.internal` on a target and
+`mm2-offset-syncs.<target>.internal` on a source. The second is how a
+dedicated-mode MirrorMaker, with no public REST API, shows up at all; such a
+flow is `discovered` and says its task state is unknown. Each connector is
+attributed to the Connect cluster that runs it, because one flow can be split
+across two.
+
+**Aliases resolve through `mirror_aliases`, or to the same-named cluster.**
+A mapping may cross environments; one to a cluster that does not exist is a
+startup error. A flow whose resolved end the caller cannot see is not listed.
+
+**The decoders are kaas-ui's** (`kaas_ui_serde::mirror`), not kaas-lib's:
+kaas-lib fetches the bytes like any topic, and the records' contents are
+payload decoding. Version 0 is read; any other format version is reported
+as unrecognised, never guessed at.
+
+**Reading the internal topics needs topic view on the cluster holding them,
+and consumer view for checkpoints,** which name groups. It is not audited as
+a disclosure: replication metadata, not payloads.
+
+**What the fixtures taught before they ran:** Strimzi's v1
+`KafkaMirrorMaker2` has no heartbeat connector, so fixture A's flow reports
+`missing: [heartbeat]` honestly, and its liveness is the heartbeat fixture B
+emits on Strimzi, carried to kaas as `strimzi.heartbeats` — one heartbeat
+crossing both flows. And this KafkaConnect has
+`strimzi.io/use-connector-resources: "true"`, so every connector on it is
+Git's.
+
+**Not yet run live.** The fixtures (k3s-cluster `6ee84b9`) await a sync of
+`kaas` then `strimzi`; the flow assembly is tested against two stub Connect
+clusters shaped like them, and the decoders against Kafka-encoded fixtures.
+`cargo xtask live` carries the assertions and fails, by name, until the
+fixtures exist.
 
 ## What is still unproven
 

@@ -14,8 +14,9 @@ multi-cluster from day one, OIDC via Dex.
   outlived it is here.
 
 Read `docs/README.md` first. Phases 0–7 are done, and 9a (read-only Connect),
-the Connect half of 10a (the write gate) and 9d (Connect writes); 8, 9b–9c and
-the rest of 10 are planned, in the order `docs/README.md` gives.
+the Connect half of 10a (the write gate) and 9d (Connect writes); 9b–9c
+(MirrorMaker 2) are built and await their live fixtures; 8 and the rest of 10
+are planned, in the order `docs/README.md` gives.
 
 ## The shape
 

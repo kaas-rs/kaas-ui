@@ -590,6 +590,17 @@ pub struct EnvironmentEntry {
     /// deployments included, which are Connect clusters too.
     #[serde(default)]
     pub connect_clusters: Vec<ConnectClusterEntry>,
+    /// MirrorMaker 2 cluster aliases, mapped to the clusters they name.
+    ///
+    /// A MirrorMaker flow names its ends by alias (`source.cluster.alias`),
+    /// and an alias is that deployment's word, not kaas-ui's. An alias not
+    /// listed here resolves to the Kafka cluster with the same id in this
+    /// environment — which is what both fixtures and most deployments use. A
+    /// value is a cluster id here, or `<environment>/<id>`: a flow may cross
+    /// environments, and disaster recovery from `dev` into `prod` is exactly
+    /// what one is for.
+    #[serde(default)]
+    pub mirror_aliases: BTreeMap<String, String>,
     /// Everything else here that kaas-ui does not dial: Connect, an MQTT
     /// broker, a REST proxy. Inventory, so that "what is in staging" has one
     /// answer and it is not only the brokers.
@@ -1612,6 +1623,32 @@ impl Config {
                     return Err(ConfigError::Invalid(format!(
                         "Connect cluster {id:?} in environment {env:?} has a `writes:` block that \
                          allows nothing: list operations under `allow`, or remove it"
+                    )));
+                }
+            }
+        }
+
+        // Every alias has to name a cluster that exists — in this environment,
+        // or in the one it names. A mapping to nothing would leave a flow
+        // unresolved with no error to say why.
+        for environment in &self.environments {
+            for (alias, target) in &environment.mirror_aliases {
+                let (env, id) = target
+                    .split_once('/')
+                    .unwrap_or((environment.id.as_str(), target.as_str()));
+                let exists = self.environments.iter().any(|candidate| {
+                    candidate.id == env
+                        && candidate
+                            .kafka_clusters
+                            .iter()
+                            .any(|cluster| cluster.id == id)
+                });
+                if !exists {
+                    return Err(ConfigError::Invalid(format!(
+                        "environment {:?} maps MirrorMaker alias {alias:?} to {target:?}, which \
+                         names no Kafka cluster (write `<id>` for this environment or \
+                         `<environment>/<id>`)",
+                        environment.id
                     )));
                 }
             }
@@ -3087,5 +3124,27 @@ environments:
             ["*"],
             "Strimzi reconciles every connector on this KafkaConnect"
         );
+    }
+
+    #[test]
+    fn a_mirror_alias_must_name_a_cluster_here_or_in_the_environment_it_names() {
+        let base = r#"
+environments:
+  - id: dev
+    kafka_clusters:
+      - id: strimzi
+        bootstrap: ["a:9093"]
+    mirror_aliases:
+      upstream: strimzi
+      dr: prod/prod-eu
+  - id: prod
+    kafka_clusters:
+      - id: prod-eu
+        bootstrap: ["b:9093"]
+"#;
+        let config = Config::from_yaml(base).unwrap();
+        assert_eq!(config.environments[0].mirror_aliases["dr"], "prod/prod-eu");
+        let err = Config::from_yaml(&base.replace("prod/prod-eu", "prod/nowhere")).unwrap_err();
+        assert!(format!("{err}").contains("names no Kafka cluster"), "{err}");
     }
 }

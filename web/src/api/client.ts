@@ -10,6 +10,8 @@ import type {
   ConnectClusterDetail,
   ConnectorList,
   ConnectorPage,
+  MirrorFlowDetail,
+  MirrorList,
   Envelope,
   EnvironmentSection,
   GroupDetail,
@@ -891,5 +893,31 @@ export function useConnectorCreate(env: string, id: string) {
       void queryClient.invalidateQueries({ queryKey: ["connectors", env, id] })
       void queryClient.invalidateQueries({ queryKey: ["connect", env, id] })
     },
+  })
+}
+
+// --- MirrorMaker 2 -------------------------------------------------------
+
+/** The flows of one environment, from every Connect cluster and from the
+    clusters' own internal topics. */
+export function useMirrors(env: string) {
+  return useQuery({
+    queryKey: ["mirrors", env],
+    queryFn: () => get<MirrorList>(`/api/environments/${encode(env)}/mirrors`),
+    refetchInterval: 15_000,
+    enabled: !!env,
+  })
+}
+
+/** One flow: connectors, mirrored topics, heartbeats, checkpoints, syncs.
+    Polled — heartbeat age is what someone opens this to watch. */
+export function useMirrorFlow(env: string, source: string, target: string) {
+  return useQuery({
+    queryKey: ["mirror", env, source, target],
+    queryFn: () =>
+      get<MirrorFlowDetail>(
+        `/api/environments/${encode(env)}/mirrors/${encode(source)}/${encode(target)}`
+      ),
+    refetchInterval: 10_000,
   })
 }

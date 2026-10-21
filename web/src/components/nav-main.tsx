@@ -29,6 +29,7 @@ import { useFleet } from "@/api/client"
 import { byResourceKind } from "@/components/domain"
 import { NavClusterItem } from "@/components/nav-cluster-item"
 import { NavConnectItem } from "@/components/nav-connect-item"
+import { NavMirrorsItem } from "@/components/nav-mirrors-item"
 import { NavRegistryItem } from "@/components/nav-registry-item"
 import { NavResourceItem } from "@/components/nav-resource-item"
 import { SidebarGroup, SidebarMenu } from "@/components/ui/sidebar"
@@ -112,6 +113,7 @@ export function NavMain() {
         {connects.map((card) => (
           <NavConnectItem key={card.id} envId={active.id} card={card} />
         ))}
+        <NavMirrorsItem envId={active.id} />
         {byResourceKind(inventory).map((resource) => (
           <NavResourceItem key={resource.id} resource={resource} />
         ))}

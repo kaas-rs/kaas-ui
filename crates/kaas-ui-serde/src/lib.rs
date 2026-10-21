@@ -38,6 +38,7 @@
 )]
 
 pub mod codec;
+pub mod mirror;
 pub mod naming;
 pub mod proto;
 pub mod registry;

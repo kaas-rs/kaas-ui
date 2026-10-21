@@ -153,3 +153,24 @@ environments:
             owns_connectors: ["*"]
             source: https://github.com/Woestebanaan/k3s-cluster/tree/master/apps/strimzi/kafka-connectors
             format: strimzi
+
+      # The dedicated MirrorMaker 2 (k3s-cluster fixture A, Strimzi → kaas):
+      # a Connect cluster too, whose workers run against kaas. Strimzi
+      # generates its connectors from the KafkaMirrorMaker2 resource, so Git
+      # owns all of them; a session can restart, and gets the
+      # KafkaMirrorMaker2 change to make for anything else.
+      - id: mm2
+        name: MirrorMaker 2
+        url: http://mm2-mirrormaker2-api.strimzi.svc.cluster.local:8083
+        kafka_cluster: kaas
+        writes:
+          allow:
+            - connector.restart
+            - connector.restart_task
+            - connector.pause
+            - connector.resume
+            - connector.stop
+          gitops:
+            owns_connectors: ["*"]
+            source: https://github.com/Woestebanaan/k3s-cluster/blob/master/apps/strimzi/kafka-mirrormaker2.yaml
+            format: strimzi

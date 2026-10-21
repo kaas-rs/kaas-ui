@@ -390,7 +390,7 @@ pub fn router(state: AppState) -> Router {
 fn api_router() -> Router<AppState> {
     use routes::{
         admin, analysis, capabilities, clusters, configs, connect, connect_write, groups, me,
-        messages, schemas, spec, topics,
+        messages, mirror, schemas, spec, topics,
     };
 
     Router::new()
@@ -527,6 +527,13 @@ fn api_router() -> Router<AppState> {
         .route(
             "/environments/{env}/connect-clusters/{connect}",
             get(connect::detail),
+        )
+        // MirrorMaker 2 flows: assembled from every Connect cluster here and
+        // from the clusters' own internal topics.
+        .route("/environments/{env}/mirrors", get(mirror::list))
+        .route(
+            "/environments/{env}/mirrors/{source}/{target}",
+            get(mirror::detail),
         )
         // The reverse index, under the topic it is about: which connectors on
         // the Connect clusters attached to this Kafka cluster use it.
