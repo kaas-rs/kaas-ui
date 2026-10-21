@@ -97,6 +97,30 @@ environments:
           kind: none
         connect_timeout: 3s
 
+    # Strimzi's general-purpose Connect cluster: five source connectors and
+    # the three MirrorMaker 2 plugins installed. Dialled over REST, read-only
+    # — the client has no method that sends anything but GET. No credentials:
+    # Strimzi's REST listener is plain HTTP inside the cluster, and the
+    # NetworkPolicy `kafka-connect-allow-kaas-ui` (k3s-cluster) is what lets
+    # this pod and the deployed kaas-ui reach it at all.
+    #
+    # `kafka_cluster` is checked, not trusted: the page compares it with the
+    # cluster id the workers report, and it decides who sees this — a caller
+    # who may read topics on `strimzi`.
+    connect_clusters:
+      - id: connect
+        name: Kafka Connect
+        url: http://kafka-connect-connect-api.strimzi.svc.cluster.local:8083
+        kafka_cluster: strimzi
+
+      # The dead-cluster fixture's Connect twin: a `.invalid` name fails DNS at
+      # once, so its card says unreachable without costing the live one a
+      # millisecond — which `cargo xtask live` asserts.
+      - id: connect-dead
+        name: nonexistent Connect
+        url: http://connect.invalid:8083
+        kafka_cluster: dead
+
   # --- staging and prod: fixtures for the fleet layout ---------------------
   #
   # Every one of these dials a `.invalid` name (RFC 2606), so DNS fails

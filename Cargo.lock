@@ -1841,6 +1841,7 @@ dependencies = [
  "bytes",
  "futures",
  "kaas-ui-auth",
+ "kaas-ui-connect",
  "kaas-ui-core",
  "kaas-ui-serde",
  "kafka-admin",
@@ -1873,6 +1874,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "kaas-ui-connect"
+version = "0.14.0"
+dependencies = [
+ "arc-swap",
+ "kaas-ui-serde",
+ "reqwest 0.13.5",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "utoipa",
+]
+
+[[package]]
 name = "kaas-ui-core"
 version = "0.14.0"
 dependencies = [
@@ -1881,6 +1897,7 @@ dependencies = [
  "figment",
  "humantime-serde",
  "kaas-ui-auth",
+ "kaas-ui-connect",
  "kaas-ui-serde",
  "kafka-admin",
  "kafka-conn",

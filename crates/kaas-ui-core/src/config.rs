@@ -13,6 +13,7 @@ use std::time::Duration;
 use figment::Figment;
 use figment::providers::{Env, Format, Yaml};
 use kaas_ui_auth::{OidcConfig, Resource, Role};
+use kaas_ui_connect::{ConnectAuth, ConnectSettings, ConnectTls};
 use kaas_ui_serde::{Codec, RegistryAuth, RegistrySettings};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -326,6 +327,134 @@ impl SchemaRegistryEntry {
     }
 }
 
+/// One declared Kafka Connect cluster.
+///
+/// Dialled over its REST API, read-only: kaas-ui sends it nothing but `GET`,
+/// and that is a property of the client it gets (`kaas-ui-connect`), not of
+/// the credentials here — which can usually delete connectors.
+///
+/// A MirrorMaker 2 deployment is one of these too. Strimzi runs a
+/// `KafkaMirrorMaker2` as a Connect cluster with the same REST API, so there
+/// is one kind of dialled thing and "is MM2" is a property of its connectors.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "snake_case")]
+pub struct ConnectClusterEntry {
+    /// Stable identifier, unique **within its environment**. Appears in
+    /// `/api/environments/{env}/connect-clusters/{id}`, so it may not contain
+    /// anything that would have to be escaped in a path segment.
+    pub id: String,
+    /// Human-readable name. Defaults to the id.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// The REST base url, as in
+    /// `http://kafka-connect-connect-api.strimzi.svc.cluster.local:8083`.
+    pub url: String,
+    /// The Kafka cluster in this environment the workers keep their state in.
+    ///
+    /// A reference, like a cluster's `schema_registry:`, and **checked rather
+    /// than trusted**: `GET /` names the Kafka cluster id the workers use, and
+    /// a mismatch is shown on the page. It also decides visibility — a caller
+    /// sees this Connect cluster when they may view topics on that one.
+    ///
+    /// Absent is legal — the workers may use a cluster kaas-ui does not show
+    /// — and then anyone who may view topics somewhere in the environment
+    /// sees it, as for a registry nobody references.
+    #[serde(default)]
+    pub kafka_cluster: Option<String>,
+    /// Basic-auth principal.
+    #[serde(default)]
+    pub username: Option<String>,
+    /// Basic-auth secret. Omit it and it is read from
+    /// `KAAS_UI_PASSWORD_<ENVIRONMENT>_<ID>` — see [`secret_var`].
+    #[serde(default)]
+    pub password: Option<String>,
+    /// A bearer token, sent verbatim. Mutually exclusive with basic auth.
+    /// Omit it and, where no `username` is set, it is read from
+    /// `KAAS_UI_BEARER_TOKEN_<ENVIRONMENT>_<ID>` if that is set.
+    #[serde(default)]
+    pub bearer_token: Option<String>,
+    /// TLS beyond the system roots. Files, never inline PEM.
+    #[serde(default)]
+    pub tls: Option<ConnectTlsSettings>,
+    /// Per-call timeout.
+    #[serde(default, with = "humantime_serde::option")]
+    pub request_timeout: Option<Duration>,
+    /// TCP connect timeout.
+    #[serde(default, with = "humantime_serde::option")]
+    pub connect_timeout: Option<Duration>,
+}
+
+/// TLS for a Connect REST endpoint.
+///
+/// Narrower than a Kafka cluster's [`TlsSettings`]: there is no
+/// `server_name`, because the HTTP client verifies the name in the url and
+/// offers no override.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "snake_case")]
+pub struct ConnectTlsSettings {
+    /// PEM bundle to trust in addition to the system roots.
+    #[serde(default)]
+    pub ca_file: Option<PathBuf>,
+    /// Client certificate chain, for mTLS.
+    #[serde(default)]
+    pub cert_file: Option<PathBuf>,
+    /// Client key, for mTLS.
+    #[serde(default)]
+    pub key_file: Option<PathBuf>,
+}
+
+impl ConnectClusterEntry {
+    /// The name to render.
+    #[must_use]
+    pub fn display_name(&self) -> &str {
+        self.name.as_deref().unwrap_or(&self.id)
+    }
+
+    /// Turn the configured entry into the client's settings.
+    ///
+    /// The credential rule is the registry's, word for word: a username says
+    /// "basic auth", so a password is looked for only beside one, and a bearer
+    /// token only where there is none.
+    pub fn to_settings(&self, environment: &str) -> Result<ConnectSettings, ConfigError> {
+        let mut settings = ConnectSettings::new(self.id.clone(), self.url.clone())
+            .with_name(self.display_name().to_owned());
+        if let Some(timeout) = self.request_timeout {
+            settings = settings.with_request_timeout(timeout);
+        }
+        if let Some(timeout) = self.connect_timeout {
+            settings = settings.with_connect_timeout(timeout);
+        }
+        if let Some(tls) = &self.tls {
+            settings = settings.with_tls(ConnectTls {
+                ca_file: tls.ca_file.clone(),
+                client: tls.cert_file.clone().zip(tls.key_file.clone()),
+            });
+        }
+
+        let what = format!("Connect cluster {:?}", self.id);
+        if let Some(username) = &self.username {
+            let password = match &self.password {
+                Some(inline) => inline.clone(),
+                None => secret_from_env(&what, &secret_var("password", environment, &self.id))?,
+            };
+            settings = settings.with_auth(ConnectAuth::Basic {
+                username: username.clone(),
+                password,
+            });
+        } else if let Some(token) = &self.bearer_token {
+            settings = settings.with_auth(ConnectAuth::Bearer(token.clone()));
+        } else {
+            let variable = secret_var("bearer_token", environment, &self.id);
+            if let Ok(token) = std::env::var(&variable)
+                && !token.trim().is_empty()
+            {
+                settings = settings.with_auth(ConnectAuth::Bearer(token.trim().to_owned()));
+            }
+        }
+        Ok(settings)
+    }
+}
+
 /// A configured codec override for one topic.
 ///
 /// The override is only free in one direction. `hex` and `string` need no
@@ -388,6 +517,10 @@ pub struct EnvironmentEntry {
     /// that should render hex must be able to say so.
     #[serde(default)]
     pub schema_registries: Vec<SchemaRegistryEntry>,
+    /// The Kafka Connect clusters in this environment — MirrorMaker 2
+    /// deployments included, which are Connect clusters too.
+    #[serde(default)]
+    pub connect_clusters: Vec<ConnectClusterEntry>,
     /// Everything else here that kaas-ui does not dial: Connect, an MQTT
     /// broker, a REST proxy. Inventory, so that "what is in staging" has one
     /// answer and it is not only the brokers.
@@ -411,6 +544,7 @@ impl EnvironmentEntry {
     pub fn is_empty(&self) -> bool {
         self.kafka_clusters.is_empty()
             && self.schema_registries.is_empty()
+            && self.connect_clusters.is_empty()
             && self.resources.is_empty()
     }
 }
@@ -994,6 +1128,16 @@ impl Config {
         })
     }
 
+    /// Every Connect cluster in the fleet, paired with its environment.
+    pub fn connect_clusters(&self) -> impl Iterator<Item = (&str, &ConnectClusterEntry)> {
+        self.environments.iter().flat_map(|environment| {
+            environment
+                .connect_clusters
+                .iter()
+                .map(move |connect| (environment.id.as_str(), connect))
+        })
+    }
+
     /// Fill in what one block implies about another.
     ///
     /// Only one thing so far, and it exists because forgetting it was a total
@@ -1283,6 +1427,81 @@ impl Config {
                     return Err(ConfigError::Invalid(format!(
                         "duplicate resource id {:?} in environment {env:?}",
                         resource.id
+                    )));
+                }
+            }
+
+            for connect in &environment.connect_clusters {
+                let id = connect.id.as_str();
+                if id.is_empty() {
+                    return Err(ConfigError::Invalid(format!(
+                        "a Connect cluster in environment {env:?} has an empty id"
+                    )));
+                }
+                if !is_path_safe(id) {
+                    return Err(ConfigError::Invalid(format!(
+                        "Connect cluster id {id:?} in environment {env:?} may only contain \
+                         letters, digits, '-' and '_': it appears verbatim in every URL"
+                    )));
+                }
+                if environment
+                    .connect_clusters
+                    .iter()
+                    .filter(|other| other.id == connect.id)
+                    .count()
+                    > 1
+                {
+                    return Err(ConfigError::Invalid(format!(
+                        "duplicate Connect cluster id {id:?} in environment {env:?}"
+                    )));
+                }
+                // One Connect cluster, one place: declaring it dialled *and*
+                // listing it as inventory is two cards for one thing, which
+                // disagree the moment one of them is edited.
+                if resources.contains_key(id) {
+                    return Err(ConfigError::Invalid(format!(
+                        "{id:?} in environment {env:?} is declared under both `connect_clusters` \
+                         and `resources`: a Connect cluster kaas-ui dials is not also inventory. \
+                         Remove the `resources` entry."
+                    )));
+                }
+                if !connect.url.starts_with("http://") && !connect.url.starts_with("https://") {
+                    return Err(ConfigError::Invalid(format!(
+                        "Connect cluster {id:?} in environment {env:?} has url {:?}, which is not \
+                         an http(s) url",
+                        connect.url
+                    )));
+                }
+                claim(&mut secret_vars, "password", env, "Connect cluster", id)?;
+                claim(&mut secret_vars, "bearer_token", env, "Connect cluster", id)?;
+                if connect.username.is_none() && connect.password.is_some() {
+                    return Err(ConfigError::Invalid(format!(
+                        "Connect cluster {id:?} in environment {env:?} configures a password with \
+                         no username"
+                    )));
+                }
+                if connect.username.is_some() && connect.bearer_token.is_some() {
+                    return Err(ConfigError::Invalid(format!(
+                        "Connect cluster {id:?} in environment {env:?} configures both basic auth \
+                         and a bearer token: only one of them can be sent"
+                    )));
+                }
+                if let Some(tls) = &connect.tls
+                    && tls.cert_file.is_some() != tls.key_file.is_some()
+                {
+                    return Err(ConfigError::Invalid(format!(
+                        "Connect cluster {id:?} configures one half of a client certificate: \
+                         cert_file and key_file go together"
+                    )));
+                }
+                // Same rule as `schema_registry:`: the reference names
+                // something in *this* environment, or startup says so.
+                if let Some(kafka) = &connect.kafka_cluster
+                    && !clusters.contains_key(kafka.as_str())
+                {
+                    return Err(ConfigError::Invalid(format!(
+                        "Connect cluster {id:?} references Kafka cluster {kafka:?}, which \
+                         environment {env:?} does not declare"
                     )));
                 }
             }
@@ -2476,5 +2695,139 @@ auth:
         )
         .unwrap();
         assert_eq!(config.auth.as_ref().unwrap().internal_url, None);
+    }
+
+    const WITH_CONNECT: &str = r#"
+environments:
+  - id: dev
+    kafka_clusters:
+      - id: strimzi
+        bootstrap: ["a:9093"]
+    connect_clusters:
+      - id: connect
+        name: Kafka Connect
+        url: http://connect:8083
+        kafka_cluster: strimzi
+        request_timeout: 3s
+      - id: mm2
+        url: https://mm2:8083
+        bearer_token: inline
+        tls:
+          ca_file: /etc/ca.crt
+"#;
+
+    #[test]
+    fn a_connect_cluster_sits_in_an_environment_and_references_a_kafka_cluster() {
+        let config = Config::from_yaml(WITH_CONNECT).unwrap();
+        let connects: Vec<_> = config.connect_clusters().collect();
+        assert_eq!(connects.len(), 2);
+        let (env, connect) = connects[0];
+        assert_eq!(env, "dev");
+        assert_eq!(connect.display_name(), "Kafka Connect");
+        assert_eq!(connect.kafka_cluster.as_deref(), Some("strimzi"));
+
+        let settings = connect.to_settings("dev").unwrap();
+        assert_eq!(settings.request_timeout, Duration::from_secs(3));
+        assert_eq!(settings.auth, None);
+
+        let mm2 = connects[1].1.to_settings("dev").unwrap();
+        assert_eq!(mm2.auth, Some(ConnectAuth::Bearer("inline".into())));
+        assert!(mm2.tls.is_some());
+    }
+
+    #[test]
+    fn a_connect_reference_must_name_a_kafka_cluster_in_the_same_environment() {
+        let err = Config::from_yaml(
+            &WITH_CONNECT.replace("kafka_cluster: strimzi", "kafka_cluster: kaas"),
+        )
+        .unwrap_err();
+        assert!(format!("{err}").contains("\"kaas\""), "{err}");
+    }
+
+    #[test]
+    fn a_connect_cluster_is_not_also_inventory() {
+        let yaml = format!(
+            "{WITH_CONNECT}    resources:\n      - id: connect\n        kind: kafka_connect\n"
+        );
+        let err = Config::from_yaml(&yaml).unwrap_err();
+        assert!(
+            format!("{err}").contains("both `connect_clusters` and `resources`"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    // figment's own `Jail` returns its own error type; the size is theirs.
+    #[allow(clippy::result_large_err)]
+    fn a_connect_password_comes_from_the_environment_and_half_a_credential_is_refused() {
+        let yaml = WITH_CONNECT.replace(
+            "        request_timeout: 3s",
+            "        request_timeout: 3s\n        username: kaas-ui",
+        );
+        // A username with no password parses: the password is the variable's.
+        let config = Config::from_yaml(&yaml).unwrap();
+        figment::Jail::expect_with(|jail| {
+            jail.set_env("KAAS_UI_PASSWORD_DEV_CONNECT", "from-env");
+            let connect = config.connect_clusters().next().unwrap().1;
+            assert_eq!(
+                connect.to_settings("dev").unwrap().auth,
+                Some(ConnectAuth::Basic {
+                    username: "kaas-ui".into(),
+                    password: "from-env".into()
+                })
+            );
+            Ok(())
+        });
+
+        let err = Config::from_yaml(&WITH_CONNECT.replace(
+            "        request_timeout: 3s",
+            "        request_timeout: 3s\n        password: orphan",
+        ))
+        .unwrap_err();
+        assert!(
+            format!("{err}").contains("password with no username"),
+            "{err}"
+        );
+
+        let err = Config::from_yaml(&WITH_CONNECT.replace(
+            "        bearer_token: inline",
+            "        bearer_token: inline\n        username: both",
+        ))
+        .unwrap_err();
+        assert!(
+            format!("{err}").contains("both basic auth and a bearer token"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_connect_cluster_cannot_take_a_kafka_clusters_variable() {
+        let err = Config::from_yaml(
+            r#"
+environments:
+  - id: dev
+    kafka_clusters:
+      - id: shared
+        bootstrap: ["a:9093"]
+        sasl:
+          mechanism: scram-sha-512
+          username: kaas-ui
+    connect_clusters:
+      - id: shared
+        url: http://connect:8083
+"#,
+        )
+        .unwrap_err();
+        assert!(
+            format!("{err}").contains("KAAS_UI_PASSWORD_DEV_SHARED"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_connect_url_that_is_not_http_is_rejected_at_load() {
+        let err = Config::from_yaml(&WITH_CONNECT.replace("http://connect:8083", "connect:8083"))
+            .unwrap_err();
+        assert!(format!("{err}").contains("not an http(s) url"), "{err}");
     }
 }

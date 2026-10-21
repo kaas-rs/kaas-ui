@@ -4,6 +4,7 @@ members = [
     "xtask",
     "crates/kaas-ui-auth",
     "crates/kaas-ui-serde",
+    "crates/kaas-ui-connect",
     "crates/kaas-ui-core",
     "crates/kaas-ui-api",
     "crates/kaas-ui-server",
@@ -117,10 +118,11 @@ rustls = { version = "0.23.45", default-features = false, features = ["ring", "s
 x509-cert = { version = "0.2", default-features = false }
 
 # internal
-kaas-ui-auth  = { path = "crates/kaas-ui-auth" }
-kaas-ui-serde = { path = "crates/kaas-ui-serde" }
-kaas-ui-core  = { path = "crates/kaas-ui-core" }
-kaas-ui-api   = { path = "crates/kaas-ui-api" }
+kaas-ui-auth    = { path = "crates/kaas-ui-auth" }
+kaas-ui-serde   = { path = "crates/kaas-ui-serde" }
+kaas-ui-connect = { path = "crates/kaas-ui-connect" }
+kaas-ui-core    = { path = "crates/kaas-ui-core" }
+kaas-ui-api     = { path = "crates/kaas-ui-api" }
 
 [workspace.lints.clippy]
 unwrap_used              = "deny"

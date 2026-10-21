@@ -281,6 +281,24 @@ impl AppState {
             })
     }
 
+    /// A Connect cluster, or `404`.
+    ///
+    /// The same lookup rule again: absent, unconfigured and not-yours are one
+    /// answer, so Connect ids are no more enumerable than cluster ids.
+    pub fn connect_cluster(
+        &self,
+        env: &str,
+        id: &str,
+        who: &Caller,
+    ) -> ApiResult<Arc<kaas_ui_core::registry::ConnectHandle>> {
+        self.registry()
+            .connect_cluster(env, id, who.access())
+            .map(Arc::clone)
+            .ok_or_else(|| {
+                ApiError::not_found(format!("no Connect cluster {id:?} in environment {env:?}"))
+            })
+    }
+
     /// A connected cluster, or `503` with what the connector last saw.
     ///
     /// Never waits for a connection. A cluster that is still connecting, or
@@ -367,8 +385,8 @@ pub fn router(state: AppState) -> Router {
 
 fn api_router() -> Router<AppState> {
     use routes::{
-        admin, analysis, capabilities, clusters, configs, groups, me, messages, schemas, spec,
-        topics,
+        admin, analysis, capabilities, clusters, configs, connect, groups, me, messages, schemas,
+        spec, topics,
     };
 
     Router::new()
@@ -498,6 +516,31 @@ fn api_router() -> Router<AppState> {
         .route(
             "/environments/{env}/schema-registries/{registry}/subjects/{subject}/versions",
             get(schemas::versions),
+        )
+        // A Connect cluster is a peer of a cluster inside an environment too,
+        // dialled over REST. Its lookup refuses a caller who may not view
+        // topics on the Kafka cluster it is attached to.
+        .route(
+            "/environments/{env}/connect-clusters/{connect}",
+            get(connect::detail),
+        )
+        // The reverse index, under the topic it is about: which connectors on
+        // the Connect clusters attached to this Kafka cluster use it.
+        .route(
+            "/environments/{env}/clusters/{id}/topics/{topic}/connectors",
+            get(connect::topic_connectors),
+        )
+        .route(
+            "/environments/{env}/connect-clusters/{connect}/connectors",
+            get(connect::connectors),
+        )
+        .route(
+            "/environments/{env}/connect-clusters/{connect}/connectors/{name}",
+            get(connect::connector),
+        )
+        .route(
+            "/environments/{env}/connect-clusters/{connect}/plugins",
+            get(connect::plugins),
         )
 }
 

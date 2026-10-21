@@ -72,6 +72,49 @@ impl RegistryCard {
     }
 }
 
+/// One Connect cluster, as the fleet and its own page render it.
+///
+/// Unlike a [`ResourceCard`] this one has a status, because kaas-ui dials it —
+/// and `unprobed` is a real value of that status: nothing is asked of a
+/// Connect cluster until a page needs it, so a fleet view shows what it last
+/// knew rather than calling something healthy that nobody has asked.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectClusterCard {
+    /// The configured id.
+    pub id: String,
+    /// The name to render.
+    pub name: String,
+    /// The REST url, as configured.
+    pub url: String,
+    /// The Kafka cluster this entry says its workers use.
+    pub kafka_cluster: Option<String>,
+    /// Whether it has been reached, and how it failed if it has not.
+    pub status: kaas_ui_connect::ConnectStatus,
+    /// What went wrong, where something did.
+    pub error: Option<String>,
+    /// What `GET /` last said: version, commit, Kafka cluster id.
+    pub info: Option<kaas_ui_connect::ServerInfo>,
+}
+
+impl ConnectClusterCard {
+    /// Project a handle as it stands. Dials nothing.
+    #[must_use]
+    pub fn of(handle: &crate::registry::ConnectHandle) -> Self {
+        let client = handle.client();
+        let health = client.health();
+        Self {
+            id: client.id().to_owned(),
+            name: client.name().to_owned(),
+            url: client.url().to_owned(),
+            kafka_cluster: handle.kafka_cluster.clone(),
+            status: health.status(),
+            error: health.error().map(str::to_owned),
+            info: health.info().cloned(),
+        }
+    }
+}
+
 /// The caller, for the header and for deciding what to offer them.
 ///
 /// Not "what may I do" — that is per cluster and rides on [`ClusterCard`] as
@@ -380,6 +423,9 @@ pub struct EnvironmentSection {
     pub clusters: Vec<ClusterCard>,
     /// The schema registries in it that this caller may read.
     pub schema_registries: Vec<EnvironmentRegistry>,
+    /// The Connect clusters in it that this caller may see, in configured
+    /// order.
+    pub connect_clusters: Vec<ConnectClusterCard>,
     /// Everything else, in configured order.
     pub resources: Vec<ResourceCard>,
 }
@@ -440,6 +486,10 @@ impl EnvironmentSection {
             name: entry.display_name().to_owned(),
             description: entry.description.clone(),
             schema_registries: EnvironmentRegistry::of(entry, &cards, registry, who),
+            connect_clusters: registry
+                .connect_clusters_in(entry, who)
+                .map(|handle| ConnectClusterCard::of(handle))
+                .collect(),
             clusters: cards,
             resources,
         })

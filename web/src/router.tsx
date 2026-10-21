@@ -31,6 +31,10 @@ import { GroupDetailPage } from "@/pages/group-detail"
 import { SchemaRegistryPage } from "@/pages/schema-registry"
 import { SchemaDetailPage } from "@/pages/schema-detail"
 import { EnvironmentPage } from "@/pages/environment"
+import { CONNECT_VIEWS, ConnectClusterPage } from "@/pages/connect-cluster"
+import type { ConnectView } from "@/pages/connect-cluster"
+import { CONNECTOR_PANES, ConnectorPage } from "@/pages/connector"
+import type { ConnectorPane } from "@/pages/connector"
 import {
   messageSearchSchema,
   topicSearchSchema,
@@ -271,6 +275,61 @@ const schemaRoute = createRoute({
   },
 })
 
+/**
+ * A Kafka Connect cluster, a peer of a Kafka cluster inside its environment.
+ *
+ * `listing` and not `tab` or `view`, for the admin page's reason: every search key is typed
+ * across the whole tree. `.catch` lands a retired or hand-edited value on the
+ * connector list rather than on an error boundary.
+ */
+const connectRoute = createRoute({
+  getParentRoute: () => environmentRoute,
+  path: "connect-clusters/$connectId",
+  component: Outlet,
+})
+
+const connectIndexRoute = createRoute({
+  getParentRoute: () => connectRoute,
+  path: "/",
+  validateSearch: (input: { listing?: ConnectView } & SearchSchemaInput) =>
+    ({
+      listing: z.enum(CONNECT_VIEWS).catch("connectors").parse(input.listing),
+    }) as {
+      listing: ConnectView
+    },
+  component: function ConnectRoute() {
+    const { envId, connectId } = useParams({
+      from: "/environments/$envId/connect-clusters/$connectId",
+    })
+    return <ConnectClusterPage envId={envId} connectId={connectId} />
+  },
+})
+
+/**
+ * One connector. A connector name is free text and can hold a slash, so the
+ * router's own escaping keeps it one path parameter — as for a subject.
+ */
+const connectorRoute = createRoute({
+  getParentRoute: () => connectRoute,
+  path: "connectors/$connector",
+  validateSearch: (input: { pane?: ConnectorPane } & SearchSchemaInput) =>
+    ({ pane: z.enum(CONNECTOR_PANES).catch("tasks").parse(input.pane) }) as {
+      pane: ConnectorPane
+    },
+  component: function ConnectorRoute() {
+    const { envId, connectId, connector } = useParams({
+      from: "/environments/$envId/connect-clusters/$connectId/connectors/$connector",
+    })
+    return (
+      <ConnectorPage
+        envId={envId}
+        connectId={connectId}
+        connector={connector}
+      />
+    )
+  },
+})
+
 const routeTree = rootRoute.addChildren([
   indexRoute,
   accountRoute,
@@ -290,6 +349,7 @@ const routeTree = rootRoute.addChildren([
     ]),
     schemaRegistryRoute,
     schemaRoute,
+    connectRoute.addChildren([connectIndexRoute, connectorRoute]),
   ]),
 ])
 

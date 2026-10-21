@@ -1,0 +1,32 @@
+[package]
+name        = "kaas-ui-connect"
+description = "The Kafka Connect REST client for kaas-ui: reads, redaction, and the derived connector state."
+
+version.workspace      = true
+edition.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+rust-version.workspace = true
+
+[dependencies]
+# For the crypto provider only — the same `install_crypto_provider` the
+# registry client uses, so every reqwest client in the process shares one.
+kaas-ui-serde = { workspace = true }
+
+arc-swap   = { workspace = true }
+reqwest    = { workspace = true }
+serde      = { workspace = true }
+serde_json = { workspace = true }
+thiserror  = { workspace = true }
+tokio      = { workspace = true }
+tracing    = { workspace = true }
+utoipa     = { workspace = true }
+
+[dev-dependencies]
+# The stub worker the tests point at: a `TcpListener` that answers what it is
+# told and records every method and path it was asked, which is the property
+# the tests exist to assert.
+tokio = { workspace = true }
+
+[lints]
+workspace = true

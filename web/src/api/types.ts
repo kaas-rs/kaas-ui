@@ -117,6 +117,8 @@ export interface EnvironmentSection {
   clusters: ClusterCard[]
   /** The registries in it this caller may read. */
   schemaRegistries: EnvironmentRegistry[]
+  /** The Connect clusters in it this caller may see, in configured order. */
+  connectClusters: ConnectClusterCard[]
   resources: ResourceCard[]
 }
 
@@ -1141,4 +1143,186 @@ export interface Producer {
   coordinatorEpoch: number
   /** Set only where this producer has a transaction open. */
   currentTxnStartOffset: number | null
+}
+
+// --- Kafka Connect -----------------------------------------------------------
+//
+// A Connect cluster is a peer of a Kafka cluster inside an environment, dialled
+// over its REST API — read-only: the server's client has no method that sends
+// anything but GET, and connector configs are redacted before they leave it.
+
+/** Whether a Connect cluster has been reached. `unprobed` is a real state:
+    nothing is asked until a page needs it. */
+export type ConnectStatus =
+  "unprobed" | "ready" | "unreachable" | "misconfigured"
+
+/** What `GET /` says about the workers. The version is displayed, never compared. */
+export interface ServerInfo {
+  version: string | null
+  commit: string | null
+  /** The Kafka cluster the workers keep their state in. */
+  kafkaClusterId: string | null
+}
+
+export interface ConnectClusterCard {
+  id: string
+  name: string
+  url: string
+  /** The Kafka cluster this entry says its workers use. */
+  kafkaCluster: string | null
+  status: ConnectStatus
+  error: string | null
+  info: ServerInfo | null
+}
+
+export type KafkaClusterCheckState =
+  "verified" | "mismatch" | "unverified" | "notConfigured"
+
+export interface KafkaClusterCheck {
+  state: KafkaClusterCheckState
+  /** The id kaas-ui sees for the referenced Kafka cluster. */
+  expected: string | null
+  /** The id the workers report. */
+  actual: string | null
+}
+
+export interface ConnectorCounts {
+  total: number
+  running: number
+  degraded: number
+  failed: number
+  paused: number
+  stopped: number
+  other: number
+}
+
+export interface ConnectClusterDetail {
+  card: ConnectClusterCard
+  kafkaClusterCheck: KafkaClusterCheck
+  counts: ConnectorCounts | null
+  pluginCount: number | null
+  errors: ResourceError[]
+}
+
+export type ConnectorType = "source" | "sink" | "unknown"
+
+/**
+ * A connector's state folded with its tasks'. Paused is not failed — somebody
+ * chose it — and a running connector with no tasks is its own state.
+ */
+export type ConnectorStatus =
+  | "running"
+  | "degraded"
+  | "failed"
+  | "paused"
+  | "stopped"
+  | "unassigned"
+  | "restarting"
+  | "noTasks"
+  | "unknown"
+
+export interface TaskStatus {
+  id: number
+  /** RUNNING, FAILED, PAUSED, UNASSIGNED, RESTARTING — verbatim. */
+  state: string | null
+  workerId: string | null
+  trace: string | null
+  version: string | null
+}
+
+export interface ConnectorSummary {
+  name: string
+  class: string | null
+  type: ConnectorType
+  status: ConnectorStatus
+  /** The connector's own state, verbatim. */
+  state: string | null
+  workerId: string | null
+  trace: string | null
+  version: string | null
+  tasks: TaskStatus[]
+  tasksRunning: number
+  tasksFailed: number
+  /** The group a sink commits to; null for a source. */
+  consumerGroup: string | null
+}
+
+export interface ConnectorList {
+  card: ConnectClusterCard
+  connectors: ConnectorSummary[]
+  total: number
+}
+
+export type Redaction = "declared" | "patternsOnly"
+
+export interface ConnectorConfigEntry {
+  key: string
+  /** `******` where withheld. */
+  value: string
+  redacted: boolean
+  /** A config-provider reference — a pointer, not a secret. */
+  provider: boolean
+  group: string | null
+  documentation: string | null
+}
+
+export interface RedactedConfig {
+  entries: ConnectorConfigEntry[]
+  redaction: Redaction
+}
+
+export interface TaskConfig {
+  id: number
+  config: RedactedConfig
+}
+
+export interface ConnectorDetail {
+  summary: ConnectorSummary
+  config: RedactedConfig
+  taskConfigs: TaskConfig[]
+}
+
+/** Both halves are maps the connector defines. */
+export interface StoredOffset {
+  partition: Record<string, unknown>
+  /** null: the stored position was cleared — not a position of zero. */
+  offset: Record<string, unknown> | null
+}
+
+export interface ConnectorPage {
+  card: ConnectClusterCard
+  connector: ConnectorDetail
+  topics: string[] | null
+  /** Why `topics` is absent, where it is. */
+  topicsAbsent: string | null
+  offsets: StoredOffset[] | null
+  offsetsAbsent: string | null
+  errors: ResourceError[]
+}
+
+export interface Plugin {
+  class: string
+  type: ConnectorType
+  version: string | null
+}
+
+export interface PluginList {
+  card: ConnectClusterCard
+  plugins: Plugin[]
+}
+
+/** One connector that has used a topic, from its worker's active-topic list. */
+export interface TopicConnector {
+  connectCluster: string
+  connectName: string
+  name: string
+  type: ConnectorType
+  status: ConnectorStatus
+}
+
+export interface TopicConnectors {
+  connectors: TopicConnector[]
+  /** Connect clusters or connectors that could not be asked: the list is then
+      a lower bound. */
+  errors: ResourceError[]
 }

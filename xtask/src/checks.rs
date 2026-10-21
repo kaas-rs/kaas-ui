@@ -15,6 +15,7 @@ pub fn all() -> Task {
     no_committed_link_fence()?;
     login_is_a_navigation()?;
     consuming_builders_are_withers()?;
+    connect_is_read_only()?;
     Ok(())
 }
 
@@ -178,6 +179,66 @@ fn no_kafka_version_literal() -> Task {
     }
 
     println!("  ok  no Kafka version literal");
+    Ok(())
+}
+
+/// **6. The Connect client only reads.**
+///
+/// Connect has no read-only mode, and the credentials kaas-ui is given can
+/// usually delete connectors, so the guarantee is the client's shape: every
+/// call goes through one private `get_json`, and nothing in the crate can
+/// spell another method. `tests/reads.rs` asserts the same thing from the far
+/// side of the socket — a grep is defeated by a rename and a test by a call
+/// site nobody exercised, so it is both.
+///
+/// Phase 9d adds a `writer.rs` whose constructor takes a `Grant`; it will be
+/// the one file this check exempts, and the exemption lands with it.
+fn connect_is_read_only() -> Task {
+    let crate_root = root().join("crates").join("kaas-ui-connect").join("src");
+    let mut files = Vec::new();
+    collect(&crate_root, &mut files);
+    let needles = [
+        ".post(",
+        ".put(",
+        ".patch(",
+        ".delete(",
+        ".request(",
+        "Method::",
+    ];
+    let mut hits = Vec::new();
+    for path in &files {
+        let Ok(source) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        for (number, line) in source.lines().enumerate() {
+            if is_comment(line) {
+                continue;
+            }
+            if let Some(needle) = needles.iter().find(|needle| line.contains(**needle)) {
+                hits.push(format!(
+                    "{}:{}: {needle} in {}",
+                    path.display(),
+                    number + 1,
+                    line.trim()
+                ));
+            }
+        }
+    }
+    if files.is_empty() {
+        return Err(
+            "crates/kaas-ui-connect/src has no sources: the check would pass vacuously".into(),
+        );
+    }
+    if !hits.is_empty() {
+        return Err(format!(
+            "the Connect client can send something other than GET:\n  {}",
+            hits.join("\n  ")
+        ));
+    }
+    println!(
+        "  ok  the Connect client only reads ({} files)",
+        files.len()
+    );
     Ok(())
 }
 

@@ -4,6 +4,7 @@ import { byResourceKind } from "@/components/domain"
 import { FleetCard } from "@/features/fleet/fleet-card"
 import { plural } from "@/features/fleet/plural"
 import { RegistryTile } from "@/features/fleet/registry-tile"
+import { ConnectTile } from "@/features/connect/connect-tile"
 import { ResourceTile } from "@/features/fleet/resource-tile"
 
 /**
@@ -88,6 +89,9 @@ export function EnvironmentSection({
             envId={section.id}
             entry={entry}
           />
+        ))}
+        {section.connectClusters.map((card) => (
+          <ConnectTile key={card.id} envId={section.id} card={card} />
         ))}
         {byResourceKind(section.resources).map((card) => (
           <ResourceTile key={card.id} card={card} />

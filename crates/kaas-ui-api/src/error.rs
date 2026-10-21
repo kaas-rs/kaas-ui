@@ -239,6 +239,61 @@ impl From<Error> for ApiError {
     }
 }
 
+impl From<kaas_ui_connect::ConnectFault> for ApiError {
+    /// A Connect call that was the point of the request.
+    ///
+    /// Every failure of the far end is a `502`, and a refused credential is
+    /// one of them: Connect rejecting what kaas-ui was configured with says
+    /// nothing about who is signed in, so it must never read as a `401` that
+    /// logs the user out. A rebalance is `503` — try again in a moment.
+    fn from(fault: kaas_ui_connect::ConnectFault) -> Self {
+        use kaas_ui_connect::ConnectFault as F;
+        let retriable = fault.retriable();
+        let (status, kind) = match &fault {
+            F::Unreachable(_) => (StatusCode::BAD_GATEWAY, ErrorKind::Transport),
+            F::Refused(_) => (StatusCode::BAD_GATEWAY, ErrorKind::Auth),
+            F::Misconfigured(_) | F::Rejected(_) => (StatusCode::BAD_GATEWAY, ErrorKind::Invalid),
+            F::Rebalancing(_) => (StatusCode::SERVICE_UNAVAILABLE, ErrorKind::Transport),
+            F::NotFound(_) => (StatusCode::NOT_FOUND, ErrorKind::Invalid),
+            F::Absent(_) => (StatusCode::NOT_FOUND, ErrorKind::Unsupported),
+        };
+        Self {
+            status,
+            body: ApiErrorBody {
+                message: fault.to_string(),
+                kind: Some(kind),
+                code: None,
+                code_number: None,
+                unsupported_api: None,
+                retriable,
+            },
+        }
+    }
+}
+
+/// A Connect call that only *enriched* a page, as one named entry in it.
+pub fn connect_resource_error(
+    resource: &str,
+    fault: &kaas_ui_connect::ConnectFault,
+) -> kaas_ui_core::ResourceError {
+    let kind = match fault {
+        kaas_ui_connect::ConnectFault::Refused(_) => ErrorKind::Auth,
+        kaas_ui_connect::ConnectFault::Absent(_) => ErrorKind::Unsupported,
+        kaas_ui_connect::ConnectFault::Unreachable(_)
+        | kaas_ui_connect::ConnectFault::Rebalancing(_) => ErrorKind::Transport,
+        _ => ErrorKind::Invalid,
+    };
+    kaas_ui_core::ResourceError {
+        resource: resource.to_owned(),
+        kind,
+        code: None,
+        code_number: None,
+        message: fault.to_string(),
+        unsupported_api: None,
+        retriable: fault.retriable(),
+    }
+}
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         (self.status, Json(self.body)).into_response()

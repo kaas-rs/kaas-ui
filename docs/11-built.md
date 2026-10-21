@@ -20,8 +20,12 @@ is surprising.
 | 5 — groups | four group kinds, members, committed offsets, lag as states rather than a subtraction |
 | 6 — schema registry | one registry per environment, Avro/Protobuf/JSON Schema, the codec chip, the schema browser, the payload filter over decoded values |
 | 7 — read-only admin | ACLs, client quotas, SCRAM users, reassignments, the transaction inspector, and `CapabilityTab` at last |
+| 9a — Connect, read-only | `kaas-ui-connect`: Connect clusters dialled over REST, GET-only by construction; connectors, tasks, redacted configs, topics, offsets, plugins; the `kafka_cluster:` reference checked against the workers |
 
-Still open: [Phase 8](09-phase-8-cross-cluster.md).
+Still open: [Phase 8](09-phase-8-cross-cluster.md), the rest of
+[Phase 9](12-phase-9-connect-and-mm2.md) (9b–9d) and
+[Phase 10](13-phase-10-administration.md), in the order
+[README.md](README.md#order) gives.
 
 ## Acceptance, as it stands
 
@@ -706,6 +710,64 @@ is a set of `(environment, cluster)` keys in one process and needs no broker at
 all, so it moved to a unit test where the answer is deterministic, and `live`
 says why in the space it left. That is CLAUDE.md's cluster-free/live split
 being applied rather than quoted.
+
+## Phase 9a — the decisions
+
+**Read-only Connect is a construction site, as read-only Kafka is.** Connect
+has no read-only mode and the credentials kaas-ui is handed can usually
+delete connectors, so `ConnectClient` has one typed method per read endpoint
+and one private `get_json` they all go through. Invariant 6 in `checks.rs`
+greps `kaas-ui-connect` for `.post(`, `.put(`, `.patch(`, `.delete(`,
+`.request(` and `Method::`, and `tests/reads.rs` asserts from the far side of
+a stub worker's socket that nothing but `GET` arrives — both, for the reason
+the construction-site test and grep are both. The invariant was run against a
+planted `.post(` before it was trusted.
+
+**Visibility rides on the Kafka cluster the Connect cluster names.** A
+Connect cluster with `kafka_cluster: strimzi` is visible to a caller who may
+view topics on `strimzi`, and to nobody else — connectors say which topics
+flow where, and someone who cannot see the topics must not learn them from
+the connectors. One that names no cluster follows the rule for a registry
+nobody references: anyone who may view topics somewhere in the environment.
+`kafka_cluster:` is also *checked*: the page compares the referenced cluster's
+id from its metadata snapshot with the one `GET /` reports. Live, both are
+`RPquI6Y0R3uuCqz8FMrSvg`.
+
+**Measured on the Strimzi worker before writing the client, and it changed
+the client twice:**
+
+- **Two different 404s.** An unknown path answers
+  `{"message":"HTTP 404 Not Found"}`, an unknown connector `"Connector nope
+  not found"`. The body is the only thing that tells a feature an older worker
+  lacks (`ConnectFault::Absent`, a hidden panel) from a name that does not
+  exist (`NotFound`, a 404).
+- **`"offset": null` is a real value.** The GTFS schedule source reports a
+  null offset for every file it has finished. `#[serde(default)]` does not
+  cover a present null, and the first version of the client failed the whole
+  offsets read on it — found by the live run, fixed with an `Option`, and
+  rendered as "cleared" rather than zero.
+- **`PASSWORD` is reliable where declared, and prefixes defeat a plain
+  lookup.** MirrorSourceConnector declares nine `PASSWORD` keys, all bare
+  (`sasl.jaas.config`), while its real config keys are prefixed
+  (`source.cluster.sasl.jaas.config`). Redaction therefore matches any
+  `.`-boundary suffix, and falls back to kafbat's name list for secrets
+  declared as `STRING` — on the live worker that withholds exactly one value,
+  `connect.gtfsschedule.http.headers`. The live acceptance fetches each raw
+  config directly and greps kaas-ui's response for every withheld value.
+
+**Names that collided.** The redacted entry is `ConnectorConfigEntry`
+because `ConfigEntry` is the broker config's, and the two pages' tab state is
+`?listing=` and `?pane=` because the router types every search key across the
+tree and the topic page already owns `tab` and `view`.
+
+**Reachability is a NetworkPolicy, and it is not yet applied.** Strimzi's
+generated policy admits 8083 only from Connect pods and the operator.
+`kafka-connect-allow-kaas-ui` in k3s-cluster (`60a0c5f`) admits the kaas-ui
+pod and the code-server dev pod, for every `KafkaConnect` and
+`KafkaMirrorMaker2` in `strimzi`. It is pushed and awaits a sync; until then
+the live acceptance was run through a `kubectl port-forward` to one worker,
+with the config's url pointed at it — 95 of 96 green, the one failure being
+Phase 7's transaction fixture, which has no open transaction on Strimzi today.
 
 ## What is still unproven
 

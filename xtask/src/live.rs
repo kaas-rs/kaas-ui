@@ -2150,6 +2150,13 @@ async fn assertions() -> Result<Acceptance, String> {
         );
     }
 
+    // --- Kafka Connect (Phase 9a) ------------------------------------------
+    //
+    // The oracle is the Connect REST API itself, asked directly at the url the
+    // card reports — what `livetest probe` is for the brokers. Every assertion
+    // compares kaas-ui's answer with the worker's own.
+    connect_assertions(&client, &mut acceptance).await?;
+
     // --- an unknown id is absent, not forbidden -----------------------------
     let status = client
         .get(url(&format!(
@@ -2188,4 +2195,285 @@ async fn assertions() -> Result<Acceptance, String> {
     );
 
     Ok(acceptance)
+}
+
+/// Phase 9a's acceptance: read-only Connect against the live workers.
+async fn connect_assertions(
+    client: &reqwest::Client,
+    acceptance: &mut Acceptance,
+) -> Result<(), String> {
+    let section = get(client, &format!("/api/environments/{ENV}")).await?;
+    let cards = section["items"][0]["connectClusters"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    acceptance.check(
+        "the environment lists its Connect clusters",
+        if cards.is_empty() {
+            Err("no connectClusters in the dev section".into())
+        } else {
+            Ok(format!("{} declared", cards.len()))
+        },
+    );
+
+    for card in &cards {
+        let id = card["id"].as_str().unwrap_or_default().to_owned();
+        let worker = card["url"]
+            .as_str()
+            .unwrap_or_default()
+            .trim_end_matches('/')
+            .to_owned();
+        let base = format!("/api/environments/{ENV}/connect-clusters/{id}");
+
+        // A Connect cluster whose workers do not resolve is the dead-cluster
+        // fixture again: its page answers at once and says so, and nothing
+        // about it slows the live one.
+        if worker.contains(".invalid") {
+            let started = Instant::now();
+            let detail = get(client, &base).await;
+            let took = started.elapsed();
+            acceptance.check(
+                &format!("{id}: unreachable workers are a card that says so, not a failed page"),
+                match detail {
+                    Ok(body)
+                        if body["card"]["status"] == "unreachable"
+                            && !body["errors"].as_array().is_none_or(Vec::is_empty)
+                            && took < Duration::from_secs(5) =>
+                    {
+                        Ok(format!("{took:?}"))
+                    }
+                    Ok(body) => Err(format!("after {took:?}: {}", body["card"])),
+                    Err(error) => Err(error),
+                },
+            );
+            continue;
+        }
+
+        let raw_root: Value = client
+            .get(format!("{worker}/"))
+            .send()
+            .await
+            .map_err(|e| format!("{id}: the worker itself is unreachable from here: {e}"))?
+            .json()
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let detail = get(client, &base).await?;
+        acceptance.check(
+            &format!("{id}: workers answer and agree on what they are"),
+            if detail["card"]["status"] == "ready"
+                && detail["card"]["info"]["kafkaClusterId"] == raw_root["kafka_cluster_id"]
+            {
+                Ok(String::new())
+            } else {
+                Err(format!("card {} vs worker {raw_root}", detail["card"]))
+            },
+        );
+        acceptance.check(
+            &format!("{id}: kafka_cluster is checked against the workers, not trusted"),
+            match detail["kafkaClusterCheck"]["state"].as_str() {
+                Some("verified") | Some("notConfigured") => {
+                    Ok(detail["kafkaClusterCheck"]["state"].to_string())
+                }
+                other => Err(format!("{other:?}: {}", detail["kafkaClusterCheck"])),
+            },
+        );
+
+        // The list against the worker's own expanded list, connector by
+        // connector: same names, same connector state.
+        let raw: Value = client
+            .get(format!("{worker}/connectors?expand=status&expand=info"))
+            .send()
+            .await
+            .map_err(|e| e.to_string())?
+            .json()
+            .await
+            .map_err(|e| e.to_string())?;
+        let ours = get(client, &format!("{base}/connectors")).await?;
+        let raw_names: std::collections::BTreeSet<String> = raw
+            .as_object()
+            .map(|map| map.keys().cloned().collect())
+            .unwrap_or_default();
+        let our_rows = ours["connectors"].as_array().cloned().unwrap_or_default();
+        let our_names: std::collections::BTreeSet<String> = our_rows
+            .iter()
+            .filter_map(|row| row["name"].as_str().map(str::to_owned))
+            .collect();
+        let disagreements: Vec<String> = our_rows
+            .iter()
+            .filter_map(|row| {
+                let name = row["name"].as_str()?;
+                let theirs = &raw[name]["status"]["connector"]["state"];
+                (row["state"] != *theirs).then(|| format!("{name}: {} vs {theirs}", row["state"]))
+            })
+            .collect();
+        acceptance.check(
+            &format!("{id}: every connector the worker lists, in the state it reports"),
+            if raw_names == our_names && disagreements.is_empty() && !our_names.is_empty() {
+                Ok(format!("{} connectors", our_names.len()))
+            } else {
+                Err(format!(
+                    "worker {raw_names:?}, ours {our_names:?}, disagreeing {disagreements:?}"
+                ))
+            },
+        );
+
+        // No secret survives: for every connector, every key its plugin
+        // declares PASSWORD (prefixed or not) and every key we withheld must
+        // not have its raw value anywhere in our response.
+        let mut checked = 0;
+        let mut leaks = Vec::new();
+        let mut unredacted = Vec::new();
+        for name in &raw_names {
+            let config = &raw[name]["info"]["config"];
+            let class = config["connector.class"].as_str().unwrap_or_default();
+            let declared: Vec<String> = client
+                .get(format!("{worker}/connector-plugins/{class}/config"))
+                .send()
+                .await
+                .map_err(|e| e.to_string())?
+                .json::<Value>()
+                .await
+                .ok()
+                .and_then(|keys| keys.as_array().cloned())
+                .unwrap_or_default()
+                .iter()
+                .filter(|key| key["type"] == "PASSWORD")
+                .filter_map(|key| key["name"].as_str().map(str::to_owned))
+                .collect();
+            let page = client
+                .get(url(&format!("{base}/connectors/{}", urlencode(name))))
+                .send()
+                .await
+                .map_err(|e| e.to_string())?
+                .text()
+                .await
+                .map_err(|e| e.to_string())?;
+            let parsed: Value = serde_json::from_str(&page).map_err(|e| e.to_string())?;
+            for entry in parsed["connector"]["config"]["entries"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+            {
+                let key = entry["key"].as_str().unwrap_or_default();
+                let secret_by_declaration = declared
+                    .iter()
+                    .any(|password| key == password || key.ends_with(&format!(".{password}")));
+                let provider = entry["provider"] == true;
+                if secret_by_declaration && !provider && entry["redacted"] != true {
+                    unredacted.push(format!("{name}/{key}"));
+                }
+                if entry["redacted"] == true {
+                    checked += 1;
+                    if let Some(value) = config[key].as_str()
+                        && value.len() > 3
+                        && page.contains(value)
+                    {
+                        leaks.push(format!("{name}/{key}"));
+                    }
+                }
+            }
+        }
+        acceptance.check(
+            &format!("{id}: no withheld value and no PASSWORD-declared key reaches a response"),
+            if leaks.is_empty() && unredacted.is_empty() {
+                Ok(format!("{checked} withheld values checked"))
+            } else {
+                Err(format!("leaked {leaks:?}, unredacted {unredacted:?}"))
+            },
+        );
+
+        // Offsets and topics are absence-able; on a worker that has them they
+        // are present, and a connector that does not exist is a 404.
+        if let Some(first) = raw_names.iter().next() {
+            let page = get(client, &format!("{base}/connectors/{}", urlencode(first))).await?;
+            acceptance.check(
+                &format!("{id}: offsets and topics read on a worker that has them"),
+                if page["offsetsAbsent"].is_null()
+                    && page["topicsAbsent"].is_null()
+                    && page["errors"].as_array().is_some_and(Vec::is_empty)
+                {
+                    Ok(format!(
+                        "{} offsets, {} topics",
+                        page["offsets"].as_array().map_or(0, Vec::len),
+                        page["topics"].as_array().map_or(0, Vec::len)
+                    ))
+                } else {
+                    Err(format!(
+                        "absent {} / {}, errors {}",
+                        page["offsetsAbsent"], page["topicsAbsent"], page["errors"]
+                    ))
+                },
+            );
+        }
+        // The reverse index: a topic the worker says a connector used lists
+        // that connector, on the Kafka cluster the Connect cluster names.
+        if let (Some(kafka), Some(first)) = (card["kafkaCluster"].as_str(), raw_names.iter().next())
+        {
+            let active: Value = client
+                .get(format!("{worker}/connectors/{}/topics", urlencode(first)))
+                .send()
+                .await
+                .map_err(|e| e.to_string())?
+                .json()
+                .await
+                .map_err(|e| e.to_string())?;
+            if let Some(topic) = active[first.as_str()]["topics"][0].as_str() {
+                let reverse = get(
+                    client,
+                    &format!(
+                        "/api/environments/{ENV}/clusters/{kafka}/topics/{}/connectors",
+                        urlencode(topic)
+                    ),
+                )
+                .await?;
+                acceptance.check(
+                    &format!("{id}: a topic's page names the connector that used it"),
+                    if reverse["connectors"]
+                        .as_array()
+                        .is_some_and(|all| all.iter().any(|c| c["name"] == first.as_str()))
+                    {
+                        Ok(format!("{topic} <- {first}"))
+                    } else {
+                        Err(format!("{topic}: {reverse}"))
+                    },
+                );
+            }
+        }
+
+        let missing = client
+            .get(url(&format!(
+                "{base}/connectors/definitely-not-a-connector"
+            )))
+            .send()
+            .await
+            .map_err(|e| e.to_string())?
+            .status();
+        acceptance.check(
+            &format!("{id}: an unknown connector is 404"),
+            if missing == reqwest::StatusCode::NOT_FOUND {
+                Ok(String::new())
+            } else {
+                Err(format!("got {missing}"))
+            },
+        );
+    }
+
+    let unknown = client
+        .get(url(&format!(
+            "/api/environments/{ENV}/connect-clusters/definitely-not-configured"
+        )))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .status();
+    acceptance.check(
+        "an unconfigured Connect cluster is 404, not 403",
+        if unknown == reqwest::StatusCode::NOT_FOUND {
+            Ok(String::new())
+        } else {
+            Err(format!("got {unknown}"))
+        },
+    );
+    Ok(())
 }

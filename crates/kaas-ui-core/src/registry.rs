@@ -23,6 +23,7 @@ use std::time::{Duration, SystemTime};
 
 use arc_swap::{ArcSwap, ArcSwapOption};
 use kaas_ui_auth::Access;
+use kaas_ui_connect::ConnectClient;
 use kaas_ui_serde::{Codec, RegistryHandle};
 use kafka_admin::{Admin, ClusterConfig};
 use kafka_conn::{
@@ -31,8 +32,8 @@ use kafka_conn::{
 use tokio::sync::Notify;
 
 use crate::config::{
-    ClusterEntry, Config, ConfigError, EnvironmentEntry, PasswordCredentials, ResourceEntry,
-    SaslSettings, secret_from_env, secret_var,
+    ClusterEntry, Config, ConfigError, ConnectClusterEntry, EnvironmentEntry, PasswordCredentials,
+    ResourceEntry, SaslSettings, secret_from_env, secret_var,
 };
 use crate::error::ErrorKind;
 use crate::federated::{FederatedOauth, FederatedTokenProvider};
@@ -499,6 +500,44 @@ fn read_pem(path: &std::path::Path) -> Result<Vec<u8>, Error> {
 /// may not be allowed to cross.
 pub type Key = (String, String);
 
+/// One declared Connect cluster: its REST client, and where it sits.
+///
+/// No connector task and no background loop. A Connect cluster is asked when
+/// a page asks, through a client that is lazy and remembers its failures, so
+/// an unreachable one costs nothing until someone opens it.
+#[derive(Debug)]
+pub struct ConnectHandle {
+    /// The environment holding it, which leads every URL that reaches it.
+    pub environment: String,
+    /// The Kafka cluster in this environment its workers keep state in, as
+    /// configured. Checked against what the workers say on the page.
+    pub kafka_cluster: Option<String>,
+    client: ConnectClient,
+}
+
+impl ConnectHandle {
+    fn new(environment: &str, entry: &ConnectClusterEntry) -> Result<Self, ConfigError> {
+        let settings = entry.to_settings(environment)?;
+        let client =
+            ConnectClient::new(settings).map_err(|e| ConfigError::Invalid(e.to_string()))?;
+        Ok(Self {
+            environment: environment.to_owned(),
+            kafka_cluster: entry.kafka_cluster.clone(),
+            client,
+        })
+    }
+
+    /// The REST client — reads only; there is nothing on it to write with.
+    pub fn client(&self) -> &ConnectClient {
+        &self.client
+    }
+
+    /// The configured id.
+    pub fn id(&self) -> &str {
+        self.client.id()
+    }
+}
+
 /// Every configured cluster, and the fleet it is arranged into.
 #[derive(Debug)]
 pub struct Registry {
@@ -510,6 +549,8 @@ pub struct Registry {
     /// because a registry no cluster references is a configuration mistake
     /// worth being able to see rather than one that vanishes.
     registries: BTreeMap<Key, Arc<RegistryHandle>>,
+    /// One client per declared Connect cluster.
+    connects: BTreeMap<Key, Arc<ConnectHandle>>,
     /// The environments, in declaration order — which is display order. They
     /// carry the inventory too, so a reload swaps the fleet and its sections
     /// together because they are one value.
@@ -524,6 +565,7 @@ impl Registry {
     /// use, for the same reason a cluster is.
     pub fn from_config(config: &Config) -> Result<Self, ConfigError> {
         let registries = build_registries(config, &BTreeMap::new())?;
+        let connects = build_connects(config, &BTreeMap::new())?;
         let clusters = config
             .clusters()
             .map(|(environment, entry)| {
@@ -537,6 +579,7 @@ impl Registry {
         Ok(Self {
             clusters,
             registries,
+            connects,
             environments: config.environments.clone(),
         })
     }
@@ -678,6 +721,62 @@ impl Registry {
         })
     }
 
+    /// Look up a Connect cluster **as somebody**.
+    ///
+    /// The registry rule, applied to Connect: a Connect cluster that names its
+    /// Kafka cluster is visible to a caller who may view topics on *that* one
+    /// — connectors are a statement about which topics flow where, and someone
+    /// who cannot see the topics must not learn them from the connectors. One
+    /// that names none is visible to anyone who may view topics somewhere in
+    /// the environment. Anything else is `None`, which the router turns into
+    /// a 404.
+    pub fn connect_cluster(
+        &self,
+        environment: &str,
+        id: &str,
+        who: &Access,
+    ) -> Option<&Arc<ConnectHandle>> {
+        let handle = self
+            .connects
+            .get(&(environment.to_owned(), id.to_owned()))?;
+        let mut readers = self.readers_in(environment, who);
+        match &handle.kafka_cluster {
+            Some(kafka) => readers
+                .any(|cluster| cluster.id == *kafka)
+                .then_some(handle),
+            None => readers.next().map(|_| handle),
+        }
+    }
+
+    /// The Connect clusters this caller may see that keep their state in one
+    /// Kafka cluster — the ones whose connectors can be about its topics.
+    pub fn connect_clusters_of<'a>(
+        &'a self,
+        environment: &'a str,
+        kafka_cluster: &'a str,
+        who: &'a Access,
+    ) -> impl Iterator<Item = &'a Arc<ConnectHandle>> {
+        self.connects
+            .iter()
+            .filter(move |((env, _), handle)| {
+                env == environment && handle.kafka_cluster.as_deref() == Some(kafka_cluster)
+            })
+            .filter_map(move |((env, id), _)| self.connect_cluster(env, id, who))
+    }
+
+    /// The Connect clusters of one environment this caller may see, in
+    /// declaration order.
+    pub fn connect_clusters_in<'a>(
+        &'a self,
+        environment: &'a EnvironmentEntry,
+        who: &'a Access,
+    ) -> impl Iterator<Item = &'a Arc<ConnectHandle>> {
+        environment
+            .connect_clusters
+            .iter()
+            .filter_map(move |entry| self.connect_cluster(&environment.id, &entry.id, who))
+    }
+
     /// The clusters this caller can see in one environment.
     fn visible_in<'a>(
         &'a self,
@@ -762,6 +861,9 @@ impl Registry {
         // therefore its warm id→schema cache. Adding a cluster to `dev` must
         // not cost `dev` every schema it had already resolved.
         let registries = build_registries(config, &self.registries)?;
+        // Same reuse for Connect: an unchanged entry keeps its client, and
+        // with it the cached plugin definitions redaction leans on.
+        let connects = build_connects(config, &self.connects)?;
 
         let mut clusters = BTreeMap::new();
         for (environment, entry) in config.clusters() {
@@ -808,9 +910,31 @@ impl Registry {
         Ok(Self {
             clusters,
             registries,
+            connects,
             environments: config.environments.clone(),
         })
     }
+}
+
+/// Build one client per declared Connect cluster, reusing the unchanged ones.
+fn build_connects(
+    config: &Config,
+    existing: &BTreeMap<Key, Arc<ConnectHandle>>,
+) -> Result<BTreeMap<Key, Arc<ConnectHandle>>, ConfigError> {
+    let mut connects = BTreeMap::new();
+    for (environment, entry) in config.connect_clusters() {
+        let key = (environment.to_owned(), entry.id.clone());
+        let settings = entry.to_settings(environment)?;
+        if let Some(handle) = existing.get(&key)
+            && *handle.client.settings() == settings
+            && handle.kafka_cluster == entry.kafka_cluster
+        {
+            connects.insert(key, Arc::clone(handle));
+            continue;
+        }
+        connects.insert(key, Arc::new(ConnectHandle::new(environment, entry)?));
+    }
+    Ok(connects)
 }
 
 /// The registry handle a cluster's `schema_registry:` names, within its own
@@ -1264,5 +1388,82 @@ environments:
             mutating, 0,
             "a mutating Admin::connect exists in the workspace"
         );
+    }
+
+    fn connect_config() -> Config {
+        Config::from_yaml(
+            r#"
+environments:
+  - id: dev
+    kafka_clusters:
+      - id: kaas
+        bootstrap: ["kaas:9092"]
+      - id: strimzi
+        bootstrap: ["strimzi:9092"]
+    connect_clusters:
+      - id: connect
+        url: http://connect:8083
+        kafka_cluster: strimzi
+      - id: loose
+        url: http://loose:8083
+"#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_connect_cluster_is_seen_by_whoever_may_read_its_kafka_clusters_topics() {
+        use kaas_ui_auth::{Policy, Principal, Role};
+        let registry = Registry::from_config(&connect_config()).unwrap();
+
+        // Open deployment: both.
+        assert!(
+            registry
+                .connect_cluster("dev", "connect", &anyone())
+                .is_some()
+        );
+        assert!(
+            registry
+                .connect_cluster("dev", "loose", &anyone())
+                .is_some()
+        );
+        assert!(registry.connect_cluster("dev", "nope", &anyone()).is_none());
+        assert!(
+            registry
+                .connect_cluster("prod", "connect", &anyone())
+                .is_none()
+        );
+
+        // Someone who may see `kaas` only: the Connect cluster attached to
+        // `strimzi` does not exist for them, and the unattached one does.
+        let policy = Policy::enforcing(vec![Role {
+            clusters: vec!["kaas".to_owned()],
+            ..Role::admin("kaas-only", vec!["alice".to_owned()])
+        }]);
+        let alice = policy.access(&Principal::new("alice"));
+        assert!(registry.connect_cluster("dev", "connect", &alice).is_none());
+        assert!(registry.connect_cluster("dev", "loose", &alice).is_some());
+
+        // And nobody at all sees neither.
+        let nobody = Access::none();
+        assert!(registry.connect_cluster("dev", "loose", &nobody).is_none());
+    }
+
+    #[tokio::test]
+    async fn a_reload_keeps_an_unchanged_connect_client() {
+        let registry = Registry::from_config(&connect_config()).unwrap();
+        let before = Arc::clone(
+            registry
+                .connect_cluster("dev", "connect", &anyone())
+                .unwrap(),
+        );
+        let reloaded = registry.reloaded(&connect_config()).unwrap();
+        let after = reloaded
+            .connect_cluster("dev", "connect", &anyone())
+            .unwrap();
+        assert!(Arc::ptr_eq(&before, after));
+        for handle in reloaded.all() {
+            handle.retire();
+        }
     }
 }

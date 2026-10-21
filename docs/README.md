@@ -11,11 +11,11 @@ in [11-built.md](11-built.md).
 
 ## Status
 
-**Phases 0–7 are done.**
+**Phases 0–7 are done, and 9a.**
 The workspace is five crates, a frontend and an xtask.
 
 ```sh
-cargo xtask ci      # green: fmt, clippy, 275 unit tests, five invariant greps
+cargo xtask ci      # green: fmt, clippy, unit tests, six invariant greps
 cargo xtask live    # green: 71 assertions against kaas, strimzi and a dead cluster
 cargo xtask login   # 11 assertions, a real login. Needs the dex-test app
                     # synced; it is currently out of the cluster, so this
@@ -33,7 +33,7 @@ cargo xtask login   # 11 assertions, a real login. Needs the dex-test app
 | 6 — schema registry | **done** — one registry per environment, Avro/Protobuf/JSON Schema, the codec chip, the schema browser, the payload filter over decoded values |
 | 7 — read-only admin | **done** — ACLs, quotas, SCRAM users, reassignments, the transaction inspector, and the `CapabilityTab` the design system named in Phase 1 |
 | 8 — cross-cluster | not started — fleet topic search, cluster comparison, capability diff |
-| 9 — Connect and MM2 | proposed — Connect clusters, MirrorMaker 2 flows; writes behind Phase 10's gate |
+| 9 — Connect and MM2 | **9a done** — Connect clusters read-only; 9b–9d (MM2 flows, MM2 records, Connect writes) to come |
 | 10 — administration | proposed — writes under ceiling + RBAC + GitOps ownership; read-only stays the default |
 
 Phase *n* is milestone M*n* in PLAN.md §8. One numbering, not two.
@@ -45,8 +45,8 @@ is proven on Connect, which needs no kaas-lib release:
 
 | step | needs | delivers | state |
 |---|---|---|---|
-| **9a** | — | read-only Connect: `kaas-ui-connect`, connectors, tasks, redacted configs, links into topics and lag | in progress |
-| **10a** | 9a | the write gate — ceiling, grant, ownership, Origin check, audit intent/outcome, `/api/me` actions — proven on `connector.restart` | |
+| **9a** | — | read-only Connect: `kaas-ui-connect`, connectors, tasks, redacted configs, links into topics and lag | **done** — see [11-built.md](11-built.md#phase-9a--the-decisions) |
+| **10a** | 9a | the write gate — ceiling, grant, ownership, Origin check, audit intent/outcome, `/api/me` actions — proven on `connector.restart` | next |
 | kaas-lib asks 17–18 | parallel with 10a | mutation ceiling, `Admin::scoped` | |
 | **10a, Kafka half** | kaas-lib release | `consumer.reset_offsets` through the same gate | |
 | **9b · 9c · 9d** | 9a; 9d also 10a | MM2 flows, MM2 record decoding, the remaining Connect writes | |

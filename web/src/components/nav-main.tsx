@@ -28,6 +28,7 @@ import { useEffect } from "react"
 import { useFleet } from "@/api/client"
 import { byResourceKind } from "@/components/domain"
 import { NavClusterItem } from "@/components/nav-cluster-item"
+import { NavConnectItem } from "@/components/nav-connect-item"
 import { NavRegistryItem } from "@/components/nav-registry-item"
 import { NavResourceItem } from "@/components/nav-resource-item"
 import { SidebarGroup, SidebarMenu } from "@/components/ui/sidebar"
@@ -73,7 +74,11 @@ export function NavMain() {
   // decodes. Showing both is the same registry twice, once as a link and once
   // as dead text, which reads as two registries of which one is broken.
   const registries = active?.schemaRegistries ?? []
-  const urls = new Set(registries.map((entry) => entry.registry.url))
+  const connects = active?.connectClusters ?? []
+  const urls = new Set([
+    ...registries.map((entry) => entry.registry.url),
+    ...connects.map((card) => card.url),
+  ])
   const inventory = (active?.resources ?? []).filter(
     (resource) => !(resource.endpoint && urls.has(resource.endpoint))
   )
@@ -103,6 +108,9 @@ export function NavMain() {
             envId={active.id}
             entry={entry}
           />
+        ))}
+        {connects.map((card) => (
+          <NavConnectItem key={card.id} envId={active.id} card={card} />
         ))}
         {byResourceKind(inventory).map((resource) => (
           <NavResourceItem key={resource.id} resource={resource} />

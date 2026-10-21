@@ -7,6 +7,9 @@ import type {
   ClusterDetail,
   ClientQuota,
   ConfigResourceEntry,
+  ConnectClusterDetail,
+  ConnectorList,
+  ConnectorPage,
   Envelope,
   EnvironmentSection,
   GroupDetail,
@@ -18,7 +21,9 @@ import type {
   MessageDetail,
   MessagePage,
   PartitionOffsets,
+  PluginList,
   Producer,
+  TopicConnectors,
   Reassignment,
   ScramUser,
   SubjectDetail,
@@ -78,6 +83,11 @@ function cluster(env: string, id: string): string {
 /** The base of every schema-registry route. A registry is a peer of a cluster. */
 function schemaRegistry(env: string, id: string): string {
   return `/api/environments/${encode(env)}/schema-registries/${encode(id)}`
+}
+
+/** The base of every Connect route. A Connect cluster is a peer of a cluster. */
+function connectCluster(env: string, id: string): string {
+  return `/api/environments/${encode(env)}/connect-clusters/${encode(id)}`
 }
 
 /** How often a view that is backed by a metadata snapshot re-asks. */
@@ -702,5 +712,78 @@ export function useProducers(env: string, id: string, topic: string | null) {
       ),
     enabled: !!topic,
     staleTime: 10_000,
+  })
+}
+
+// --- Kafka Connect -------------------------------------------------------
+//
+// Polled, unlike the admin screens: connector state is exactly what someone
+// opens this to watch — a task failing, a restart taking. The server caches
+// the connector list for a few seconds, so a page and the fleet asking within
+// the same breath cost the workers one call.
+
+/** The Connect cluster's header: workers, Kafka-cluster check, counts. */
+export function useConnectCluster(env: string, id: string) {
+  return useQuery({
+    queryKey: ["connect", env, id],
+    queryFn: () => get<ConnectClusterDetail>(connectCluster(env, id)),
+    refetchInterval: 15_000,
+  })
+}
+
+export interface ConnectorQuery {
+  search?: string
+  status?: string[]
+  type?: "source" | "sink"
+}
+
+/** The connector table. */
+export function useConnectors(env: string, id: string, query: ConnectorQuery) {
+  const params = new URLSearchParams()
+  if (query.search) params.set("search", query.search)
+  if (query.status?.length) params.set("status", query.status.join(","))
+  if (query.type) params.set("type", query.type)
+  return useQuery({
+    queryKey: ["connectors", env, id, params.toString()],
+    queryFn: () =>
+      get<ConnectorList>(`${connectCluster(env, id)}/connectors?${params}`),
+    refetchInterval: 10_000,
+    placeholderData: (previous) => previous,
+  })
+}
+
+/** One connector: tasks, redacted config, topics, offsets. */
+export function useConnector(env: string, id: string, name: string) {
+  return useQuery({
+    queryKey: ["connector", env, id, name],
+    queryFn: () =>
+      get<ConnectorPage>(
+        `${connectCluster(env, id)}/connectors/${encode(name)}`
+      ),
+    refetchInterval: 10_000,
+  })
+}
+
+/** The installed connector plugins. Change only with a worker restart. */
+export function useConnectPlugins(env: string, id: string) {
+  return useQuery({
+    queryKey: ["connect-plugins", env, id],
+    queryFn: () => get<PluginList>(`${connectCluster(env, id)}/plugins`),
+    staleTime: 5 * 60_000,
+  })
+}
+
+/**
+ * The connectors that have used one topic — the reverse of a connector's
+ * topic list, across every Connect cluster attached to this Kafka cluster.
+ */
+export function useTopicConnectors(env: string, id: string, topic: string) {
+  return useQuery({
+    queryKey: ["topic-connectors", env, id, topic],
+    queryFn: () =>
+      get<TopicConnectors>(
+        `${cluster(env, id)}/topics/${encode(topic)}/connectors`
+      ),
+    staleTime: 30_000,
   })
 }

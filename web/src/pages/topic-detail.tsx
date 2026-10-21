@@ -26,6 +26,7 @@ import { TopicFacts } from "@/features/topics/topic-facts"
 import { TopicSchemas } from "@/features/topics/topic-schemas"
 import { PartitionTable } from "@/features/topics/partition-table"
 import { TopicConfigs } from "@/features/topics/topic-configs"
+import { TopicConnectorsLine } from "@/features/connect/topic-connectors"
 
 export function TopicDetailPage({
   envId,
@@ -152,6 +153,11 @@ export function TopicDetailPage({
             clusterId={clusterId}
             topic={topic}
             info={info}
+          />
+          <TopicConnectorsLine
+            envId={envId}
+            clusterId={clusterId}
+            topic={topic}
           />
           <TopicSchemas
             envId={envId}
