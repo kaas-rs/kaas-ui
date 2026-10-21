@@ -1,4 +1,4 @@
-// The writes a connector can take, and the one dialog they all go through.
+// The writes a connector can take, each in `WriteDialog`.
 //
 // Phase 10. Two things decide what appears here, both on the server: the
 // Connect cluster's `writes.allow` ceiling and the caller's roles. A button
@@ -39,6 +39,7 @@ import type {
   WriteResult,
 } from "@/api/types"
 import { Mono } from "@/components/domain"
+import { WriteDialog } from "@/components/write-dialog"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -55,16 +56,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog"
 
 const LABEL: Record<Operation, string> = {
   "connector.restart": "restart",
@@ -125,12 +116,6 @@ const PRIMARY: Operation[] = [
   "connector.stop",
   "connector.edit",
 ]
-
-/** The dialog every write opens in. Wider than the default for the config
-    box, and scrolling inside itself rather than past the viewport. The
-    submit buttons are plain buttons, not `AlertDialogAction`, which would
-    close the dialog before the result could be shown in it. */
-const DIALOG = "max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-xl"
 
 /** Whether an operation makes sense from this state — pausing a paused
     connector is not a button worth drawing. */
@@ -229,23 +214,15 @@ export function ConnectorWrites({
         </DropdownMenu>
       ) : null}
 
-      <AlertDialog
-        open={open !== null}
-        onOpenChange={(next) => {
-          if (!next) setOpen(null)
-        }}
-      >
-        <AlertDialogContent className={DIALOG}>
-          {open ? (
-            <WriteForm
-              key={open.write.operation}
-              subject={subject}
-              write={open.write}
-              task={open.task}
-            />
-          ) : null}
-        </AlertDialogContent>
-      </AlertDialog>
+      {open ? (
+        <WriteForm
+          key={open.write.operation}
+          subject={subject}
+          write={open.write}
+          task={open.task}
+          onClose={() => setOpen(null)}
+        />
+      ) : null}
     </div>
   )
 }
@@ -273,13 +250,14 @@ export function TaskRestart({
         <RotateCw aria-hidden />
         restart
       </Button>
-      <AlertDialog open={open} onOpenChange={setOpen}>
-        <AlertDialogContent className={DIALOG}>
-          {open ? (
-            <WriteForm subject={subject} write={write} task={task} />
-          ) : null}
-        </AlertDialogContent>
-      </AlertDialog>
+      {open ? (
+        <WriteForm
+          subject={subject}
+          write={write}
+          task={task}
+          onClose={() => setOpen(false)}
+        />
+      ) : null}
     </>
   )
 }
@@ -333,10 +311,12 @@ function WriteForm({
   subject,
   write,
   task,
+  onClose,
 }: {
   subject: Subject
   write: WriteOption
   task?: number
+  onClose: () => void
 }) {
   const { envId, connectId, connector } = subject
   const mutation = useConnectorWrite(envId, connectId, connector)
@@ -353,7 +333,6 @@ function WriteForm({
   const [offsetsDraft, setOffsetsDraft] = useState(() =>
     JSON.stringify(subject.offsets ?? [], null, 2)
   )
-  const [confirm, setConfirm] = useState("")
   const [verdict, setVerdict] = useState<WriteResult | null>(null)
   const destroy = write.tier === "destroy"
   const failure = mutation.error as ApiError | null
@@ -371,7 +350,7 @@ function WriteForm({
     (parsedOffsets && "error" in parsedOffsets && parsedOffsets.error) ||
     null
 
-  const send = (dryRun: boolean) => {
+  const send = (dryRun: boolean, confirm?: string) => {
     mutation.mutate(
       {
         operation,
@@ -386,7 +365,7 @@ function WriteForm({
           ...(parsedOffsets && "offsets" in parsedOffsets
             ? { offsets: parsedOffsets.offsets }
             : {}),
-          ...(destroy ? { confirm } : {}),
+          ...(confirm !== undefined ? { confirm } : {}),
           ...(dryRun ? { dryRun: true } : {}),
         },
       },
@@ -405,130 +384,83 @@ function WriteForm({
     )
   }
 
-  const applied = mutation.isSuccess && mutation.data.applied
-
   return (
-    <>
-      <AlertDialogHeader>
-        <AlertDialogTitle>
+    <WriteDialog
+      onClose={onClose}
+      title={
+        <>
           {LABEL[operation]}
           {task !== undefined ? ` ${task}` : ""} of{" "}
           <span className="font-mono">{connector}</span>
-        </AlertDialogTitle>
-        <AlertDialogDescription>{WHAT[operation]}</AlertDialogDescription>
-      </AlertDialogHeader>
+        </>
+      }
+      description={WHAT[operation]}
+      action={LABEL[operation]}
+      destructive={destroy || operation === "connector.stop"}
+      confirmName={destroy ? connector : undefined}
+      onValidate={operation === "connector.edit" ? () => send(true) : undefined}
+      canValidate={!inputError}
+      onSubmit={(confirm) => send(false, confirm)}
+      canSubmit={!inputError}
+      pending={mutation.isPending}
+      error={failure?.message}
+      auditId={mutation.data?.applied ? mutation.data.auditId : null}
+    >
+      {operation === "connector.restart" ? (
+        <fieldset className="space-y-2 text-[13px]">
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={includeTasks}
+              onChange={(event) => setIncludeTasks(event.target.checked)}
+            />
+            its tasks too
+          </label>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={onlyFailed}
+              onChange={(event) => setOnlyFailed(event.target.checked)}
+            />
+            only what has failed
+          </label>
+        </fieldset>
+      ) : null}
 
-      <div className="min-w-0 space-y-4">
-        {operation === "connector.restart" ? (
-          <fieldset className="space-y-2 text-[13px]">
-            <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={includeTasks}
-                onChange={(event) => setIncludeTasks(event.target.checked)}
-              />
-              its tasks too
-            </label>
-            <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={onlyFailed}
-                onChange={(event) => setOnlyFailed(event.target.checked)}
-              />
-              only what has failed
-            </label>
-          </fieldset>
-        ) : null}
+      {operation === "connector.edit" ? (
+        <ConfigBox
+          value={configDraft}
+          onChange={(next) => {
+            setConfigDraft(next)
+            setVerdict(null)
+          }}
+          hint="Secrets show as ****** and are kept as they are unless you replace them. A key you remove is removed."
+        />
+      ) : null}
 
-        {operation === "connector.edit" ? (
-          <ConfigBox
-            value={configDraft}
-            onChange={(next) => {
-              setConfigDraft(next)
-              setVerdict(null)
-            }}
-            hint="Secrets show as ****** and are kept as they are unless you replace them. A key you remove is removed."
-          />
-        ) : null}
+      {operation === "connector.alter_offsets" ? (
+        <ConfigBox
+          value={offsetsDraft}
+          onChange={setOffsetsDraft}
+          hint="The stored offsets as the worker reports them. Change an offset, or set it to null to clear that partition's."
+        />
+      ) : null}
 
-        {operation === "connector.alter_offsets" ? (
-          <ConfigBox
-            value={offsetsDraft}
-            onChange={setOffsetsDraft}
-            hint="The stored offsets as the worker reports them. Change an offset, or set it to null to clear that partition's."
-          />
-        ) : null}
-
-        {needsStop ? (
-          <p className="text-[13px] text-warn-ink">
-            This connector is {subject.status}; the worker refuses offset
-            changes until it is stopped. Stop it first.
-          </p>
-        ) : null}
-
-        {inputError ? (
-          <p className="text-[13px] text-danger">{inputError}</p>
-        ) : null}
-
-        {verdict?.validation ? (
-          <ValidationList validation={verdict.validation} />
-        ) : null}
-
-        {destroy ? (
-          <ConfirmName name={connector} value={confirm} onChange={setConfirm} />
-        ) : null}
-
-        <p className="text-[12px] text-ink-faint">
-          Recorded in the audit before it is sent, with your name and roles; if
-          it cannot be recorded, it is not sent.
+      {needsStop ? (
+        <p className="text-[13px] text-warn-ink">
+          This connector is {subject.status}; the worker refuses offset changes
+          until it is stopped. Stop it first.
         </p>
+      ) : null}
 
-        {applied ? (
-          <p className="text-[13px] text-ok">
-            Done. Audit <Mono>{mutation.data.auditId}</Mono>.
-          </p>
-        ) : null}
-        {failure ? (
-          <p className="text-[13px] text-danger">{failure.message}</p>
-        ) : null}
-      </div>
+      {inputError ? (
+        <p className="text-[13px] text-danger">{inputError}</p>
+      ) : null}
 
-      <AlertDialogFooter>
-        {applied ? (
-          <AlertDialogAction>close</AlertDialogAction>
-        ) : (
-          <>
-            <AlertDialogCancel disabled={mutation.isPending}>
-              cancel
-            </AlertDialogCancel>
-            {operation === "connector.edit" ? (
-              <Button
-                variant="outline"
-                disabled={mutation.isPending || !!inputError}
-                onClick={() => send(true)}
-              >
-                validate
-              </Button>
-            ) : null}
-            <Button
-              variant={
-                destroy || operation === "connector.stop"
-                  ? "destructive"
-                  : "default"
-              }
-              disabled={
-                mutation.isPending ||
-                !!inputError ||
-                (destroy && confirm !== connector)
-              }
-              onClick={() => send(false)}
-            >
-              {mutation.isPending ? "sending…" : LABEL[operation]}
-            </Button>
-          </>
-        )}
-      </AlertDialogFooter>
-    </>
+      {verdict?.validation ? (
+        <ValidationList validation={verdict.validation} />
+      ) : null}
+    </WriteDialog>
   )
 }
 
@@ -550,17 +482,13 @@ export function CreateConnector({
         <Plus aria-hidden />
         new connector
       </Button>
-      <AlertDialog open={open} onOpenChange={setOpen}>
-        <AlertDialogContent className={DIALOG}>
-          {open ? (
-            <CreateForm
-              envId={envId}
-              connectId={connectId}
-              onDone={() => setOpen(false)}
-            />
-          ) : null}
-        </AlertDialogContent>
-      </AlertDialog>
+      {open ? (
+        <CreateForm
+          envId={envId}
+          connectId={connectId}
+          onClose={() => setOpen(false)}
+        />
+      ) : null}
     </>
   )
 }
@@ -568,11 +496,11 @@ export function CreateConnector({
 function CreateForm({
   envId,
   connectId,
-  onDone,
+  onClose,
 }: {
   envId: string
   connectId: string
-  onDone: () => void
+  onClose: () => void
 }) {
   const plugins = useConnectPlugins(envId, connectId)
   const mutation = useConnectorCreate(envId, connectId)
@@ -585,6 +513,7 @@ function CreateForm({
   const parsed = parseConfig(draft)
   const failure = mutation.error as ApiError | null
   const inputError = "error" in parsed ? parsed.error : null
+  const ready = !inputError && !!name.trim()
 
   const choosePlugin = (plugin: string) => {
     const current = "config" in parsed ? parsed.config : {}
@@ -602,7 +531,7 @@ function CreateForm({
             setVerdict(result)
             return
           }
-          onDone()
+          onClose()
           void navigate({
             to: "/environments/$envId/connect-clusters/$connectId/connectors/$connector",
             params: { envId, connectId, connector: result.connector },
@@ -614,77 +543,59 @@ function CreateForm({
   }
 
   return (
-    <>
-      <AlertDialogHeader>
-        <AlertDialogTitle>new connector</AlertDialogTitle>
-        <AlertDialogDescription>
-          {WHAT["connector.create"]}
-        </AlertDialogDescription>
-      </AlertDialogHeader>
-      <div className="min-w-0 space-y-4">
-        <label className="block space-y-1 text-[13px]">
-          <span className="text-ink-muted">name</span>
-          <Input
-            value={name}
-            onChange={(event) => {
-              setName(event.target.value)
-              setVerdict(null)
-            }}
-            className="h-8 font-mono"
-          />
-        </label>
-        <div className="space-y-1 text-[13px]">
-          <span className="text-ink-muted">plugin</span>
-          <Select onValueChange={choosePlugin}>
-            <SelectTrigger className="w-full" aria-label="connector plugin">
-              <SelectValue placeholder="choose an installed plugin" />
-            </SelectTrigger>
-            <SelectContent>
-              {(plugins.data?.plugins ?? []).map((plugin) => (
-                <SelectItem key={plugin.class} value={plugin.class}>
-                  <span className="font-mono text-[12px]">{plugin.class}</span>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        <ConfigBox
-          value={draft}
-          onChange={(next) => {
-            setDraft(next)
+    <WriteDialog
+      onClose={onClose}
+      title="new connector"
+      description={WHAT["connector.create"]}
+      action="create"
+      onValidate={() => send(true)}
+      canValidate={ready}
+      onSubmit={() => send(false)}
+      canSubmit={ready}
+      pending={mutation.isPending}
+      error={failure?.message}
+    >
+      <label className="block space-y-1 text-[13px]">
+        <span className="text-ink-muted">name</span>
+        <Input
+          value={name}
+          onChange={(event) => {
+            setName(event.target.value)
             setVerdict(null)
           }}
-          hint="Prefer a config-provider reference — ${file:…} or ${secrets:…} — to a secret typed here."
+          className="h-8 font-mono"
         />
-        {inputError ? (
-          <p className="text-[13px] text-danger">{inputError}</p>
-        ) : null}
-        {verdict?.validation ? (
-          <ValidationList validation={verdict.validation} />
-        ) : null}
-        {failure ? (
-          <p className="text-[13px] text-danger">{failure.message}</p>
-        ) : null}
+      </label>
+      <div className="space-y-1 text-[13px]">
+        <span className="text-ink-muted">plugin</span>
+        <Select onValueChange={choosePlugin}>
+          <SelectTrigger className="w-full" aria-label="connector plugin">
+            <SelectValue placeholder="choose an installed plugin" />
+          </SelectTrigger>
+          <SelectContent>
+            {(plugins.data?.plugins ?? []).map((plugin) => (
+              <SelectItem key={plugin.class} value={plugin.class}>
+                <span className="font-mono text-[12px]">{plugin.class}</span>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
-      <AlertDialogFooter>
-        <AlertDialogCancel disabled={mutation.isPending}>
-          cancel
-        </AlertDialogCancel>
-        <Button
-          variant="outline"
-          disabled={mutation.isPending || !!inputError || !name.trim()}
-          onClick={() => send(true)}
-        >
-          validate
-        </Button>
-        <Button
-          disabled={mutation.isPending || !!inputError || !name.trim()}
-          onClick={() => send(false)}
-        >
-          {mutation.isPending ? "sending…" : "create"}
-        </Button>
-      </AlertDialogFooter>
-    </>
+      <ConfigBox
+        value={draft}
+        onChange={(next) => {
+          setDraft(next)
+          setVerdict(null)
+        }}
+        hint="Prefer a config-provider reference — ${file:…} or ${secrets:…} — to a secret typed here."
+      />
+      {inputError ? (
+        <p className="text-[13px] text-danger">{inputError}</p>
+      ) : null}
+      {verdict?.validation ? (
+        <ValidationList validation={verdict.validation} />
+      ) : null}
+    </WriteDialog>
   )
 }
 
@@ -708,30 +619,6 @@ function ConfigBox({
       />
       <p className="text-[12px] text-ink-faint">{hint}</p>
     </div>
-  )
-}
-
-function ConfirmName({
-  name,
-  value,
-  onChange,
-}: {
-  name: string
-  value: string
-  onChange: (next: string) => void
-}) {
-  return (
-    <label className="block space-y-1 text-[13px]">
-      <span className="text-danger">
-        This cannot be undone. Type <Mono>{name}</Mono> to confirm.
-      </span>
-      <Input
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        className="h-8 font-mono"
-        aria-label="connector name, to confirm"
-      />
-    </label>
   )
 }
 

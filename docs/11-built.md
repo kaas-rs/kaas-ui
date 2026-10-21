@@ -875,6 +875,13 @@ STOPPED state…"). It passes through verbatim and the outcome is audited as
 failed. Offsets are not stopped for you: the form says the connector must be
 stopped, and stopping is its own, separately-authorized write.
 
+**One dialog for every write.** `web/src/components/write-dialog.tsx` is the
+plan's `WriteDialog`: an alert dialog — a write does not close on a click
+outside it — that frames a form's own fields with the same title, audit note,
+typed-name confirmation for destroy, pending state, refusal and audit id, and
+the same buttons in the same order. A form supplies fields and what
+submitting sends; the Kafka half's forms are meant to be fields inside it.
+
 **Live, one of eleven:** `connector.restart_task` has run signed in against
 the Strimzi worker (see 10a above). The other ten operations' requests are
 asserted against a stub worker, through the real handler and writer.
