@@ -9,6 +9,9 @@ repository.workspace   = true
 rust-version.workspace = true
 
 [dependencies]
+# The `Grant` the writer's only constructor takes. Nothing else: the policy
+# that decides whether a grant exists is the gate's business, not this crate's.
+kaas-ui-auth  = { workspace = true }
 # For the crypto provider only — the same `install_crypto_provider` the
 # registry client uses, so every reqwest client in the process shares one.
 kaas-ui-serde = { workspace = true }

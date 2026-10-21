@@ -1852,6 +1852,7 @@ dependencies = [
  "serde_json",
  "time",
  "tokio",
+ "tower",
  "tracing",
  "utoipa",
 ]
@@ -1878,6 +1879,7 @@ name = "kaas-ui-connect"
 version = "0.14.0"
 dependencies = [
  "arc-swap",
+ "kaas-ui-auth",
  "kaas-ui-serde",
  "reqwest 0.13.5",
  "serde",

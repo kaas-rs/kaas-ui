@@ -4,8 +4,9 @@ PLAN.md §9 ordered these by value-to-effort against the library as it stood.
 This version sequences them against the **phases that need them** and adds one
 item that only appeared once the library was pointed at a real `kaas` broker.
 
-All read-side. Nothing here needs a producer, so kaas-lib's own roadmap can be
-sequenced entirely on its own merits.
+Read-side through 16. Phase 10 (administration under RBAC) adds 17–20, the
+first asks that touch writing — and all of them Kafka-only: Connect and the
+schema registry are REST and stay in kaas-ui.
 
 | # | item | blocks | urgency |
 |---|---|---|---|
@@ -22,6 +23,10 @@ sequenced entirely on its own merits.
 | 10 | `topic_offset_range` will not compile in an axum handler | Phase 2 | **worked around** |
 | 11 | streaming reads share a connection with everything else | Phase 3 | **high — a live view degrades the whole cluster's UI** |
 | 12 | `ScanProgress::fraction` ignores `spec.limit` | Phase 3 | **worked around** |
+| 17 | a mutation ceiling: an allowed `ApiKeySet` in place of `read_only: bool` | Phase 10a (Kafka half) | **blocks Kafka writes** |
+| 18 | `Admin::scoped(ApiKeySet)` and each operation's published key set | Phase 10a (Kafka half) | **blocks Kafka writes** |
+| 19 | `Producer` over an existing cluster handle, scoped | Phase 10b | medium |
+| 20 | `abort_transaction` (KIP-664) and `remove_group_members` (KIP-345) | Phase 10d | low |
 
 ---
 
@@ -427,6 +432,63 @@ than the RFC: the assertion has to be **re-read on every exchange** (SPIRE's
 default JWT-SVID TTL is five minutes, far shorter than the access token it
 buys), and a missing file has to be **retriable** — the sidecar that writes it
 is legitimately allowed to be a few seconds behind the process that reads it.
+
+---
+
+## 17. A mutation ceiling finer than a boolean
+
+**Filed by Phase 10a. Blocks every Kafka write; the Connect half of 10a needed
+nothing from kaas-lib and has landed.**
+
+`ConnectionConfig::read_only: bool` refuses every mutating api key before the
+socket, in `Connection::send`, deny-by-default via `ApiKey::is_mutating`. That
+check is exactly right and kaas-ui wants to keep standing on it — with an
+allowed set instead of all-or-nothing:
+
+```rust
+ConnectionConfig::default().with_allowed_mutations(ApiKeySet::from([ApiKey::OffsetCommit]))
+```
+
+Empty is today's `read_only`, and `connect_read_only` stays as its spelling so
+nothing downstream changes. `Error::ReadOnly { api_key }` keeps its name. A
+consuming `with_*` builder with `#[must_use]`, per the shared STYLE.md rule —
+this is the setting that is a safety gate, which is the case `#[must_use]`
+exists for.
+
+kaas-ui builds the set from a target's `writes.allow` (the ceiling), so a
+cluster that admits only `consumer.reset_offsets` has a connection that cannot
+emit `DeleteTopics` whatever a handler does.
+
+## 18. A narrower handle over the same pool, and each operation's key set
+
+**Filed by Phase 10a. Blocks every Kafka write.**
+
+```rust
+impl Admin { pub fn scoped(&self, keys: ApiKeySet) -> Admin }   // ceiling ∩ keys, never wider
+pub mod ops { pub const RESET_OFFSETS: ApiKeySet = …; pub const ALTER_CONFIGS: ApiKeySet = …; }
+```
+
+`scoped` intersects with the connection's ceiling, so it can only narrow: the
+handle kaas-ui gives a reset-offsets handler cannot emit anything but
+`OffsetCommit`. The `ops` constants belong here and not in kaas-ui because the
+set can depend on negotiation — `alter_configs` falling back from
+`IncrementalAlterConfigs` to `AlterConfigs` is a version decision kaas-ui must
+not make (rule 2). A testkit test per mutating method asserting it emits
+nothing outside its constant keeps the constants honest.
+
+## 19. A producer over an existing cluster handle
+
+**Phase 10b (`messages.produce`).** `Producer::connect` builds its own pool. A
+produce form wants `Producer::from_cluster(cluster, scope)` over the cluster's
+pool, scoped to `Produce` (+ `InitProducerId` when idempotent), so a click does
+not open a second set of connections per broker.
+
+## 20. The two missing admin RPCs
+
+**Phase 10d.** `abort_transaction` (WriteTxnMarkers, KIP-664) — what
+`kafka-transactions.sh abort` does for a hanging transaction, the one write the
+Phase 7 inspector most obviously wants — and `remove_group_members`
+(LeaveGroup, KIP-345), evicting a static member that will never return.
 
 ---
 

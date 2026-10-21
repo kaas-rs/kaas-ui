@@ -2459,6 +2459,44 @@ async fn connect_assertions(
         );
     }
 
+    // Phase 10: the open deployment views everything and writes nothing. A
+    // well-formed write — the header, a real connector — is refused by the
+    // gate, not by the guard, and never reaches a worker.
+    if let Some(card) = cards.iter().find(|card| card["status"] != "unreachable") {
+        let id = card["id"].as_str().unwrap_or_default();
+        let listed = get(
+            client,
+            &format!("/api/environments/{ENV}/connect-clusters/{id}/connectors"),
+        )
+        .await?;
+        if let Some(name) = listed["connectors"][0]["name"].as_str() {
+            let response = client
+                .post(url(&format!(
+                    "/api/environments/{ENV}/connect-clusters/{id}/connectors/{}/restart",
+                    urlencode(name)
+                )))
+                .header("x-kaas-ui", "1")
+                .json(&serde_json::json!({"includeTasks": true, "onlyFailed": true}))
+                .send()
+                .await
+                .map_err(|e| e.to_string())?;
+            let status = response.status();
+            let body: Value = response.json().await.unwrap_or_default();
+            acceptance.check(
+                "the open deployment writes nothing: a restart is refused by the gate",
+                if status == reqwest::StatusCode::FORBIDDEN
+                    && body["message"]
+                        .as_str()
+                        .is_some_and(|message| message.contains("signed-in"))
+                {
+                    Ok(format!("{status}"))
+                } else {
+                    Err(format!("{status}: {body}"))
+                },
+            );
+        }
+    }
+
     let unknown = client
         .get(url(&format!(
             "/api/environments/{ENV}/connect-clusters/definitely-not-configured"

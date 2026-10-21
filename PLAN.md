@@ -28,6 +28,18 @@ actually is — without ever knowing what version anything is.
 
 ## 1. Read-only is the architecture, not a setting
 
+> **Amended 2026-10-21: read-only *by default*.** The reason for read-only was
+> never that writing is wrong; it was that state belongs in Git and a UI that
+> writes is a second source of truth. That argument holds for declared state
+> and fails for acts that are not state — a restart, an offset reset during an
+> incident. So writing exists now, behind three gates (a per-target ceiling,
+> a role, Git ownership), each target defaulting to none of it, and an
+> anonymous caller never writes. The construction-site property below
+> survives unchanged in shape: a write is impossible to build without a
+> `Grant`, and only the gate mints one. The design is
+> [`docs/13-phase-10-administration.md`](docs/13-phase-10-administration.md);
+> what follows is the read-only default it preserves.
+
 `Admin::connect_read_only` refuses every mutating api key before opening a
 socket, enforced on `ApiKey::is_mutating` inside `Connection::send` rather than
 on the method surface. That is the whole security property, and it is already

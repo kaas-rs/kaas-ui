@@ -14,10 +14,17 @@
 //! would be a config surface that grants nothing — worse than absent, because
 //! it would read as protection.
 //!
-//! So there are two actions. [`Action::View`] is the metadata surface, and
+//! So the read actions are two. [`Action::View`] is the metadata surface, and
 //! [`Action::MessagesRead`] is the payloads — the boundary that matters,
 //! because browsing a topic's configuration is not the same act as reading
 //! customer data out of it.
+//!
+//! Writes arrived with Phase 10, and with them the verbs — but only the ones
+//! that exist. [`Action::Operate`] on [`Resource::Connector`] is the first:
+//! restart, pause, resume, stop. A verb this file offers is a verb some code
+//! path performs, and the write is still only reachable through a [`crate::Grant`],
+//! which also needs the target's configured ceiling to agree. A role alone
+//! writes nothing.
 //!
 //! # Absence is 404, not 403
 //!
@@ -47,13 +54,22 @@ pub enum Resource {
     Topic,
     /// Consumer groups, their members and their committed offsets.
     Consumer,
+    /// Connectors on a Connect cluster, by name. Granted on the Kafka cluster
+    /// the Connect cluster keeps its state in — the cluster a role's
+    /// `clusters:` and `cluster_labels:` already select.
+    Connector,
 }
 
 impl Resource {
     /// Every resource, for a role that says `all`.
     #[must_use]
-    pub fn every() -> [Self; 3] {
-        [Self::ClusterConfig, Self::Topic, Self::Consumer]
+    pub fn every() -> [Self; 4] {
+        [
+            Self::ClusterConfig,
+            Self::Topic,
+            Self::Consumer,
+            Self::Connector,
+        ]
     }
 
     /// Whether a `value` pattern means anything here.
@@ -63,7 +79,20 @@ impl Resource {
     /// pattern against it would silently match nothing.
     #[must_use]
     pub fn is_named(self) -> bool {
-        matches!(self, Self::Topic | Self::Consumer)
+        matches!(self, Self::Topic | Self::Consumer | Self::Connector)
+    }
+
+    /// The actions that mean something on this resource.
+    ///
+    /// What the config validator holds a role to, so `operate` on a topic is
+    /// a startup error rather than a line that silently grants nothing.
+    #[must_use]
+    pub fn actions(self) -> &'static [Action] {
+        match self {
+            Self::Topic => &[Action::View, Action::MessagesRead],
+            Self::ClusterConfig | Self::Consumer => &[Action::View],
+            Self::Connector => &[Action::Operate],
+        }
     }
 }
 
@@ -77,6 +106,11 @@ pub enum Action {
     ///
     /// Only meaningful on [`Resource::Topic`].
     MessagesRead,
+    /// Restart, pause, resume or stop — act on a thing without changing what
+    /// it is configured to be. kafbat-ui's word for the same set.
+    ///
+    /// Only meaningful on [`Resource::Connector`].
+    Operate,
     /// Every action this resource has. `all` in the config file.
     All,
 }
@@ -85,10 +119,7 @@ impl Action {
     /// The concrete actions `self` stands for on a resource.
     fn expand(self, resource: Resource) -> BTreeSet<Self> {
         match self {
-            Self::All if resource == Resource::Topic => {
-                [Self::View, Self::MessagesRead].into_iter().collect()
-            }
-            Self::All => [Self::View].into_iter().collect(),
+            Self::All => resource.actions().iter().copied().collect(),
             other => [other].into_iter().collect(),
         }
     }
@@ -385,6 +416,30 @@ impl Access {
             })
     }
 
+    /// Whether a *role* permits one action on one named thing.
+    ///
+    /// [`Access::may`] without the open deployment's blanket yes: a deployment
+    /// with no identity provider may view everything and write nothing, so
+    /// the write path asks this instead and the anonymous administrator holds
+    /// no role to answer it.
+    #[must_use]
+    pub fn role_permits(
+        &self,
+        cluster: &str,
+        labels: &BTreeMap<String, String>,
+        resource: Resource,
+        action: Action,
+        name: Option<&str>,
+    ) -> bool {
+        self.roles.iter().any(|role| {
+            role.selects(cluster, labels)
+                && role
+                    .permissions
+                    .iter()
+                    .any(|permission| permission.covers(resource, action, name))
+        })
+    }
+
     /// Whether this caller may read payloads out of one named topic.
     ///
     /// The action *and* the value pattern in one question, because they are
@@ -439,6 +494,14 @@ impl Access {
     pub fn role_names(&self) -> impl Iterator<Item = &str> {
         self.roles.iter().map(|role| role.name.as_str())
     }
+}
+
+/// The pattern language roles use, for other places that match names the
+/// same way — GitOps ownership patterns, so `gtfs-*` means one thing
+/// everywhere in a config file.
+#[must_use]
+pub fn glob(pattern: &str, value: &str) -> bool {
+    matches(pattern, value)
 }
 
 /// Glob matching, with `*` as the only wildcard.

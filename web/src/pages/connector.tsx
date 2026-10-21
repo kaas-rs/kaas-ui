@@ -1,5 +1,6 @@
 // One connector: its tasks, its config with the secrets withheld, the topics
-// it touches and the offsets it has stored.
+// it touches and the offsets it has stored — and, where the Connect cluster's
+// ceiling and the caller's roles allow, Phase 10's first writes.
 //
 // The links are the point of having this inside kaas-ui rather than beside
 // it: a topic it writes opens that topic, a sink's consumer group opens the
@@ -23,6 +24,7 @@ import {
 } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ConfigTable } from "@/features/connect/config-table"
+import { ConnectorWrites } from "@/features/connect/connector-writes"
 import {
   ConnectorStatusBadge,
   TaskState,
@@ -93,6 +95,16 @@ export function ConnectorPage({
         }
         actions={<ConnectorStatusBadge status={summary.status} />}
       />
+      <div className="-mt-3 mb-4">
+        <ConnectorWrites
+          envId={envId}
+          connectId={connectId}
+          connector={summary.name}
+          status={summary.status}
+          writes={data.writes}
+          managedInGit={data.managedInGit}
+        />
+      </div>
       <ErrorChips errors={data.errors} />
 
       <Card className="mb-6 py-4">

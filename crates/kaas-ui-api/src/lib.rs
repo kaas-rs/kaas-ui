@@ -3,11 +3,12 @@
 //! Knows about [`kaas_ui_core`] and axum, and never opens a socket. Two rules
 //! hold this crate together:
 //!
-//! * **Nothing here can write to a cluster.** Not because of the verbs on the
-//!   routes, but because the only admin client in the workspace is built by
-//!   `Admin::connect_read_only` — a handler reached by any method at all has
-//!   nothing to write with. The data routes are `GET`s because reading is what
-//!   they do, not because a rule forbids the alternative.
+//! * **Nothing here writes without a `Grant`.** The Kafka admin client is
+//!   built by `Admin::connect_read_only`, so no handler has anything to write
+//!   to a Kafka cluster with. Phase 10's writes — Connect connectors first —
+//!   go through a client method that takes a `Grant`, and only the gate in
+//!   `kaas-ui-auth` mints one, after the target's ceiling, a role and Git
+//!   ownership agree. Every non-GET under `/api` also passes [`write_guard`].
 //! * **The registry is reached through one lookup.** [`AppState::cluster`] is
 //!   the only way to a handle, and a cluster the caller cannot see is `404`
 //!   rather than `403`, so ids are not enumerable by probing.
@@ -26,7 +27,10 @@ use std::time::Duration;
 
 use arc_swap::ArcSwap;
 use axum::Router;
-use axum::extract::FromRef;
+use axum::extract::{FromRef, Request};
+use axum::http::{Method, header};
+use axum::middleware::{self, Next};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum_extra::extract::cookie::Key;
 use kaas_ui_auth::{Audit, Policy, Provider};
@@ -542,6 +546,53 @@ fn api_router() -> Router<AppState> {
             "/environments/{env}/connect-clusters/{connect}/plugins",
             get(connect::plugins),
         )
+        // Phase 10's first writes. One route per connector, the operation in
+        // the last segment; the handler mints a `Grant` or refuses, and the
+        // `ConnectWriter` it reaches checks the grant again.
+        .route(
+            "/environments/{env}/connect-clusters/{connect}/connectors/{name}/{operation}",
+            post(connect::write),
+        )
+        .layer(middleware::from_fn(write_guard))
+}
+
+/// The guard every non-GET under `/api` passes before it is routed.
+///
+/// The session cookie is `SameSite=Lax`, which already withholds it from a
+/// cross-site `POST`. Two more checks, because a write is the request that
+/// cookie must never be borrowed for:
+///
+/// * **`X-Kaas-Ui: 1` is required.** A cross-site form cannot set a header,
+///   and a cross-site `fetch` that tries triggers a CORS preflight kaas-ui
+///   never approves. This is the check that does the work.
+/// * **`Origin`, where sent, must name this host** — `Host`, or the
+///   `X-Forwarded-Host` a proxy in front set. Belt to the braces above.
+async fn write_guard(request: Request, next: Next) -> Response {
+    if matches!(
+        *request.method(),
+        Method::GET | Method::HEAD | Method::OPTIONS
+    ) {
+        return next.run(request).await;
+    }
+    let headers = request.headers();
+    if headers.get("x-kaas-ui").map(|value| value.as_bytes()) != Some(b"1".as_slice()) {
+        return ApiError::cross_origin(
+            "a change must come from kaas-ui's own page, which sends `X-Kaas-Ui: 1`",
+        )
+        .into_response();
+    }
+    if let Some(origin) = headers.get(header::ORIGIN).and_then(|o| o.to_str().ok()) {
+        let origin_host = origin.split_once("://").map_or(origin, |(_, rest)| rest);
+        let named = |name: &str| headers.get(name).and_then(|value| value.to_str().ok());
+        let ours = [named("host"), named("x-forwarded-host")];
+        if !ours.contains(&Some(origin_host)) {
+            return ApiError::cross_origin(&format!(
+                "a change from origin {origin:?}, which is not this host"
+            ))
+            .into_response();
+        }
+    }
+    next.run(request).await
 }
 
 #[cfg(test)]
@@ -630,6 +681,50 @@ environments:
         assert_eq!(error.status(), axum::http::StatusCode::NOT_FOUND);
         // And it is there for someone who can see it.
         assert!(state.cluster("dev", "kaas", &anyone()).is_ok());
+    }
+
+    /// The guard runs before routing, on the real router.
+    #[tokio::test]
+    async fn a_write_without_the_header_or_from_another_origin_never_reaches_a_handler() {
+        use axum::body::Body;
+        use axum::http::Request;
+        use tower::ServiceExt;
+
+        let path = "/api/environments/dev/connect-clusters/connect/connectors/x/restart";
+        let send = |request: Request<Body>| async move {
+            router(state(Policy::open()))
+                .oneshot(request)
+                .await
+                .unwrap()
+                .status()
+        };
+
+        let bare = Request::post(path).body(Body::empty()).unwrap();
+        assert_eq!(send(bare).await, axum::http::StatusCode::FORBIDDEN);
+
+        let foreign = Request::post(path)
+            .header("x-kaas-ui", "1")
+            .header("host", "kaas.example")
+            .header("origin", "https://evil.example")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(send(foreign).await, axum::http::StatusCode::FORBIDDEN);
+
+        // Past the guard, the route answers for itself: no such Connect
+        // cluster here, so 404 — which proves the guard let it through.
+        let ours = Request::post(path)
+            .header("x-kaas-ui", "1")
+            .header("host", "kaas.example")
+            .header("origin", "https://kaas.example")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(send(ours).await, axum::http::StatusCode::NOT_FOUND);
+
+        // And a GET is never asked for the header.
+        let read = Request::get("/api/environments")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(send(read).await, axum::http::StatusCode::OK);
     }
 
     #[test]

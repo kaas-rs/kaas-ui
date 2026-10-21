@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "kaas-ui",
-    "description": "A read-only, multi-cluster Kafka UI. Every data route is a GET; there is no mutating endpoint in this document because there is none in the router.",
+    "description": "A multi-cluster Kafka UI, read-only by default. Every data route is a GET; the few writes (tag `connect`) pass three gates — the target's configured ceiling, a role, and Git ownership — and are audited before they are sent.",
     "license": {
       "name": "Apache-2.0"
     },
@@ -1882,6 +1882,118 @@
         }
       }
     },
+    "/api/environments/{env}/connect-clusters/{connect}/connectors/{name}/{operation}": {
+      "post": {
+        "tags": [
+          "connect"
+        ],
+        "summary": "`POST /api/environments/{env}/connect-clusters/{connect}/connectors/{name}/{operation}`",
+        "description": "`operation` is `restart`, `pause`, `resume` or `stop`. The three gates\ndecide; their refusals are `403` (no ceiling, no role, nobody signed in) or\n`409` (Git owns the connector, with the change to make there in the body).\nThe intent is audited before the worker is asked anything, and a failure\nto record it is a failure to write.",
+        "operationId": "write",
+        "parameters": [
+          {
+            "name": "env",
+            "in": "path",
+            "description": "Environment id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "connect",
+            "in": "path",
+            "description": "Connect cluster id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "Connector name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "operation",
+            "in": "path",
+            "description": "restart | pause | resume | stop",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Kaas-Ui",
+            "in": "header",
+            "description": "Must be `1`: proves the request came from kaas-ui's own page",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "restart's options; the others take none",
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/WriteRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Done, and audited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WriteResult"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not enabled here, not permitted, or not signed in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such Connect cluster, connector or operation"
+          },
+          "409": {
+            "description": "Git owns the connector; the body carries the change to make there",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The workers refused or could not be reached"
+          }
+        }
+      }
+    },
     "/api/environments/{env}/connect-clusters/{connect}/plugins": {
       "get": {
         "tags": [
@@ -2181,6 +2293,7 @@
         "enum": [
           "view",
           "messages_read",
+          "operate",
           "all"
         ]
       },
@@ -2410,6 +2523,17 @@
             ],
             "format": "int32",
             "description": "Its number, which survives when the name does not."
+          },
+          "equivalent": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Equivalent",
+                "description": "On a refusal because Git owns the target: the change to make there."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "kind": {
             "oneOf": [
@@ -2937,7 +3061,8 @@
               "enum": [
                 "cluster_config",
                 "topic",
-                "consumer"
+                "consumer",
+                "connector"
               ]
             }
           },
@@ -3424,7 +3549,8 @@
         "required": [
           "card",
           "connector",
-          "errors"
+          "errors",
+          "writes"
         ],
         "properties": {
           "card": {
@@ -3441,6 +3567,17 @@
               "$ref": "#/components/schemas/ResourceError"
             },
             "description": "What could not be read for any other reason, by name."
+          },
+          "managedInGit": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Owned",
+                "description": "Set when Git owns this connector."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "offsets": {
             "type": [
@@ -3475,6 +3612,13 @@
               "null"
             ],
             "description": "Why `topics` is absent, where it is."
+          },
+          "writes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WriteOption"
+            },
+            "description": "Every write this connector could take, whether this caller may, and\nwhat each would be in Git. Empty where the Connect cluster has no\n`writes:` ceiling — the read-only default renders no write UI at all."
           }
         }
       },
@@ -4044,7 +4188,8 @@
                     "enum": [
                       "cluster_config",
                       "topic",
-                      "consumer"
+                      "consumer",
+                      "connector"
                     ]
                   }
                 },
@@ -5745,6 +5890,29 @@
           }
         }
       },
+      "Equivalent": {
+        "type": "object",
+        "description": "One write's equivalent.",
+        "required": [
+          "language",
+          "text",
+          "note"
+        ],
+        "properties": {
+          "language": {
+            "type": "string",
+            "description": "What kind of text this is: `yaml` for a manifest, `shell` for a\ncommand."
+          },
+          "note": {
+            "type": "string",
+            "description": "One line saying where it goes."
+          },
+          "text": {
+            "type": "string",
+            "description": "The text."
+          }
+        }
+      },
       "ErrorKind": {
         "type": "string",
         "description": "The error taxonomy as the frontend sees it.\n\nA projection of [`kafka_conn::Error`]'s variants, not a re-listing: the\nfrontend renders a transport failure and a closed connection identically,\nso they share a kind.",
@@ -6931,6 +7099,29 @@
           "nonConforming"
         ]
       },
+      "Operation": {
+        "type": "string",
+        "description": "One write kaas-ui can perform. A closed set: the catalogue in\n`docs/13-phase-10-administration.md`, landing one action at a time.\n\nThe serialised names are what `writes.allow` lists and what `/api` reports\nas available, so a config file and a page speak the same words.",
+        "enum": [
+          "connector.restart",
+          "connector.pause",
+          "connector.resume",
+          "connector.stop"
+        ]
+      },
+      "Owned": {
+        "type": "object",
+        "description": "Who owns a named thing in Git, when somebody does.",
+        "properties": {
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where it lives, as configured — a repository path, for a link."
+          }
+        }
+      },
       "Partition": {
         "type": "object",
         "description": "One partition.",
@@ -7494,6 +7685,16 @@
           "patternsOnly"
         ]
       },
+      "Refusal": {
+        "type": "string",
+        "description": "Which gate refused a write.",
+        "enum": [
+          "anonymous",
+          "notEnabled",
+          "forbidden",
+          "owned"
+        ]
+      },
       "RegistryCard": {
         "type": "object",
         "description": "One schema registry, as the browser and the fleet render it.\n\nA view of a **registry**, reached through a cluster. Two clusters that\nreference `dev` show the same subjects, so the card says which registry is\nanswering rather than implying the subjects belong to the cluster whose nav\nyou arrived through.",
@@ -7609,7 +7810,8 @@
         "enum": [
           "cluster_config",
           "topic",
-          "consumer"
+          "consumer",
+          "connector"
         ]
       },
       "ResourceCard": {
@@ -8602,6 +8804,15 @@
           }
         }
       },
+      "Tier": {
+        "type": "string",
+        "description": "How much a write can cost, which decides confirmation and the GitOps rule —\nnever authorization.",
+        "enum": [
+          "operate",
+          "edit",
+          "destroy"
+        ]
+      },
       "TlsSessionDto": {
         "type": "object",
         "description": "What one handshake agreed on, and the chain that came with it.",
@@ -9134,6 +9345,95 @@
               "format": "int32"
             },
             "description": "What this build speaks, as `[min, max]`."
+          }
+        }
+      },
+      "WriteOption": {
+        "type": "object",
+        "description": "One write a connector page could offer.",
+        "required": [
+          "operation",
+          "tier",
+          "allowed",
+          "equivalent"
+        ],
+        "properties": {
+          "allowed": {
+            "type": "boolean",
+            "description": "Whether every gate agrees for this caller now."
+          },
+          "equivalent": {
+            "$ref": "#/components/schemas/Equivalent",
+            "description": "What this write would be in Git, or as a REST call."
+          },
+          "operation": {
+            "$ref": "#/components/schemas/Operation",
+            "description": "The catalogue operation."
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The sentence a refusal renders."
+          },
+          "refusedBy": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Refusal",
+                "description": "Which gate refuses, where one does."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tier": {
+            "$ref": "#/components/schemas/Tier",
+            "description": "Operate, edit or destroy."
+          }
+        }
+      },
+      "WriteRequest": {
+        "type": "object",
+        "description": "The body of a restart. Pause, resume and stop take none.",
+        "properties": {
+          "includeTasks": {
+            "type": "boolean",
+            "description": "Restart the connector's tasks as well as the connector."
+          },
+          "onlyFailed": {
+            "type": "boolean",
+            "description": "Restart only what has failed. On a healthy connector this restarts\nnothing, which makes it the safe default for a button."
+          }
+        },
+        "additionalProperties": false
+      },
+      "WriteResult": {
+        "type": "object",
+        "description": "What a write did.",
+        "required": [
+          "auditId",
+          "operation",
+          "connector",
+          "equivalent"
+        ],
+        "properties": {
+          "auditId": {
+            "type": "string",
+            "description": "The id the intent and outcome audit lines share."
+          },
+          "connector": {
+            "type": "string",
+            "description": "To which connector."
+          },
+          "equivalent": {
+            "$ref": "#/components/schemas/Equivalent",
+            "description": "What it would have been in Git."
+          },
+          "operation": {
+            "$ref": "#/components/schemas/Operation",
+            "description": "What was done."
           }
         }
       }

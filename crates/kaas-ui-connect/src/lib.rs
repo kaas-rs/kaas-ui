@@ -6,6 +6,8 @@
 //!
 //! * [`ConnectClient`] — one per configured Connect cluster, lazy, read-only
 //!   by construction: every call is a `GET` through one private function.
+//! * [`ConnectWriter`] — Phase 10's write side, reachable only with a `Grant`
+//!   from the gate, and checked against the operation and connector it names.
 //! * [`redact`] — secrets taken out of connector configs before any public
 //!   type holds them, by the plugin's declared `PASSWORD` keys and by name.
 //! * [`ConnectorStatus`] — a connector's state and its tasks' folded into one,
@@ -26,16 +28,20 @@
 
 pub mod client;
 pub mod fault;
+pub mod manifest;
 pub mod model;
 pub mod redact;
 pub mod settings;
 mod wire;
+pub mod writer;
 
 pub use client::{ConnectClient, ConnectError, ConnectHealth, ConnectStatus};
 pub use fault::ConnectFault;
+pub use manifest::{Equivalent, Format, equivalent};
 pub use model::{
     ConnectorDetail, ConnectorStatus, ConnectorSummary, ConnectorType, Plugin, RedactedConfig,
     ServerInfo, StoredOffset, TaskConfig, TaskStatus,
 };
 pub use redact::{ConnectorConfigEntry, REDACTED, Redaction};
 pub use settings::{ConnectAuth, ConnectSettings, ConnectTls};
+pub use writer::ConnectWriter;

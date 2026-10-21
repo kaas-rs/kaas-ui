@@ -1298,6 +1298,11 @@ export interface ConnectorPage {
   offsets: StoredOffset[] | null
   offsetsAbsent: string | null
   errors: ResourceError[]
+  /** Every write on the Connect cluster's ceiling, checked for this caller.
+      Empty without a ceiling: the read-only default draws no write UI. */
+  writes: WriteOption[]
+  /** Set when Git owns this connector. */
+  managedInGit: Owned | null
 }
 
 export interface Plugin {
@@ -1325,4 +1330,54 @@ export interface TopicConnectors {
   /** Connect clusters or connectors that could not be asked: the list is then
       a lower bound. */
   errors: ResourceError[]
+}
+
+// --- Phase 10: writes behind the gate ----------------------------------------
+
+/** A catalogue operation, spelled as `writes.allow` spells it. */
+export type Operation =
+  | "connector.restart"
+  | "connector.pause"
+  | "connector.resume"
+  | "connector.stop"
+
+/** Operate: not state, allowed on what Git owns. Edit: declared state.
+    Destroy: loses data or position. */
+export type Tier = "operate" | "edit" | "destroy"
+
+export type Refusal = "anonymous" | "notEnabled" | "forbidden" | "owned"
+
+/** What a write would be in Git, or as the REST call it performs. */
+export interface Equivalent {
+  language: "yaml" | "shell" | string
+  text: string
+  note: string
+}
+
+export interface Owned {
+  /** Where the owned manifests live, as configured. */
+  source: string | null
+}
+
+export interface WriteOption {
+  operation: Operation
+  tier: Tier
+  /** Every gate agrees for this caller, now. */
+  allowed: boolean
+  refusedBy: Refusal | null
+  reason: string | null
+  equivalent: Equivalent
+}
+
+export interface WriteRequest {
+  includeTasks?: boolean
+  onlyFailed?: boolean
+}
+
+export interface WriteResult {
+  /** Joins the intent and outcome lines in the audit. */
+  auditId: string
+  operation: Operation
+  connector: string
+  equivalent: Equivalent
 }

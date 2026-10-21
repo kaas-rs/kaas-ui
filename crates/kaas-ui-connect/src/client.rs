@@ -1,12 +1,13 @@
 //! One Connect cluster's REST API, read-only.
 //!
-//! **Every call is a `GET`, and that is a construction property, not a
+//! **Every call here is a `GET`, and that is a construction property, not a
 //! habit.** [`ConnectClient`] has one typed method per read endpoint and one
 //! private [`ConnectClient::get_json`] that all of them go through. There is
-//! no method that takes an HTTP method, no passthrough, and no `.post(`,
-//! `.put(`, `.patch(` or `.delete(` anywhere in this crate — `cargo xtask ci`
-//! greps for them, and `tests/reads.rs` asserts against a stub worker that
-//! nothing but `GET` ever arrives.
+//! no method that takes an HTTP method and no passthrough. Writing lives in
+//! `writer.rs`, whose only constructor takes a `Grant` from the gate — and
+//! `cargo xtask ci` greps that no non-GET is spelled anywhere else in this
+//! crate, while `tests/reads.rs` asserts against a stub worker that the read
+//! path sends nothing but `GET`.
 //!
 //! The credentials kaas-ui is given for a Connect cluster can usually delete
 //! connectors. Connect has no read-only mode to ask for, so the guarantee has
@@ -474,49 +475,83 @@ impl ConnectClient {
         Some(keys)
     }
 
-    /// **The only request this crate makes.** A `GET`, authenticated, parsed.
-    async fn get_json<T: DeserializeOwned>(&self, path: &str) -> Result<T, ConnectFault> {
-        let url = format!("{}{path}", self.settings.base());
-        let mut request = self
-            .http
-            .get(&url)
-            .header(reqwest::header::ACCEPT, "application/json");
+    /// The HTTP client, for the writer — which builds its requests in its
+    /// own file, the one place `cargo xtask ci` lets a non-GET be spelled.
+    pub(crate) fn http(&self) -> &reqwest::Client {
+        &self.http
+    }
+
+    /// `path` joined onto the configured base.
+    pub(crate) fn url_for(&self, path: &str) -> String {
+        format!("{}{path}", self.settings.base())
+    }
+
+    /// Attach the configured credentials.
+    pub(crate) fn authenticate(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         match &self.settings.auth {
             Some(ConnectAuth::Basic { username, password }) => {
-                request = request.basic_auth(username, Some(password));
+                request.basic_auth(username, Some(password))
             }
-            Some(ConnectAuth::Bearer(token)) => {
-                request = request.bearer_auth(token);
-            }
-            None => {}
+            Some(ConnectAuth::Bearer(token)) => request.bearer_auth(token),
+            None => request,
         }
+    }
+
+    /// Forget the cached connector list, after a write changed it.
+    pub(crate) fn invalidate(&self) {
+        if let Ok(mut cache) = self.connectors.write() {
+            *cache = None;
+        }
+    }
+
+    /// Classify a failed response, recording an outage or a refusal as the
+    /// health it is — shared by reads and the writer.
+    pub(crate) async fn fault_of(&self, response: reqwest::Response, path: &str) -> ConnectFault {
+        let status = response.status();
+        let message = response
+            .json::<wire::ErrorBody>()
+            .await
+            .ok()
+            .and_then(|body| body.message);
+        let fault =
+            ConnectFault::of_status(status, message, &self.settings.id, &self.settings.url, path);
+        if matches!(
+            fault,
+            ConnectFault::Unreachable(_) | ConnectFault::Refused(_)
+        ) {
+            self.record_fault(&fault, 0);
+        }
+        fault
+    }
+
+    /// Record that the workers could not be reached at all.
+    pub(crate) fn unreachable(&self, error: &reqwest::Error) -> ConnectFault {
+        let fault = ConnectFault::Unreachable(format!(
+            "Connect cluster {:?} at {} could not be reached: {error}",
+            self.settings.id, self.settings.url
+        ));
+        self.record_fault(&fault, 0);
+        fault
+    }
+
+    /// **The only read request this crate makes.** A `GET`, authenticated,
+    /// parsed.
+    async fn get_json<T: DeserializeOwned>(&self, path: &str) -> Result<T, ConnectFault> {
+        let request = self.authenticate(
+            self.http
+                .get(self.url_for(path))
+                .header(reqwest::header::ACCEPT, "application/json"),
+        );
 
         self.requests.fetch_add(1, Ordering::Relaxed);
         let id = &self.settings.id;
-        let response = request.send().await.map_err(|error| {
-            let fault = ConnectFault::Unreachable(format!(
-                "Connect cluster {id:?} at {} could not be reached: {error}",
-                self.settings.url
-            ));
-            self.record_fault(&fault, 0);
-            fault
-        })?;
+        let response = request
+            .send()
+            .await
+            .map_err(|error| self.unreachable(&error))?;
 
-        let status = response.status();
-        if !status.is_success() {
-            let message = response
-                .json::<wire::ErrorBody>()
-                .await
-                .ok()
-                .and_then(|body| body.message);
-            let fault = ConnectFault::of_status(status, message, id, &self.settings.url, path);
-            if matches!(
-                fault,
-                ConnectFault::Unreachable(_) | ConnectFault::Refused(_)
-            ) {
-                self.record_fault(&fault, 0);
-            }
-            return Err(fault);
+        if !response.status().is_success() {
+            return Err(self.fault_of(response, path).await);
         }
 
         response.json::<T>().await.map_err(|error| {
@@ -529,6 +564,11 @@ impl ConnectClient {
                 self.settings.url
             ))
         })
+    }
+
+    /// Count one request — reads and writes alike.
+    pub(crate) fn count(&self) {
+        self.requests.fetch_add(1, Ordering::Relaxed);
     }
 
     fn record_fault(&self, fault: &ConnectFault, attempts: u32) {
@@ -573,7 +613,7 @@ fn read(path: &std::path::Path) -> Result<Vec<u8>, String> {
 ///
 /// Connector names are free text — spaces, slashes and all — and a name
 /// spliced into a path unescaped would address a different resource.
-fn segment(raw: &str) -> String {
+pub(crate) fn segment(raw: &str) -> String {
     let mut encoded = String::with_capacity(raw.len());
     for byte in raw.bytes() {
         if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {

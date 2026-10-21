@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import type {
   Acl,
   BrokerTls,
@@ -24,6 +24,10 @@ import type {
   PluginList,
   Producer,
   TopicConnectors,
+  Equivalent,
+  Operation,
+  WriteRequest,
+  WriteResult,
   Reassignment,
   ScramUser,
   SubjectDetail,
@@ -41,11 +45,47 @@ export class ApiError extends Error {
   constructor(
     readonly status: number,
     message: string,
-    readonly kind?: string
+    readonly kind?: string,
+    /** On a refusal because Git owns the target: the change to make there. */
+    readonly equivalent?: Equivalent
   ) {
     super(message)
     this.name = "ApiError"
   }
+}
+
+/**
+ * A write. The only non-GET this client sends.
+ *
+ * `X-Kaas-Ui: 1` is what the server's write guard requires before it routes
+ * anything that is not a GET: a cross-site form cannot set a header, so its
+ * presence says this request came from kaas-ui's own page.
+ */
+async function post<T>(path: string, body?: unknown): Promise<T> {
+  const response = await fetch(withBase(path), {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      "content-type": "application/json",
+      "x-kaas-ui": "1",
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+  if (!response.ok) {
+    let message = `${response.status} ${response.statusText}`
+    let kind: string | undefined
+    let equivalent: Equivalent | undefined
+    try {
+      const parsed = await response.json()
+      if (typeof parsed?.message === "string") message = parsed.message
+      if (typeof parsed?.kind === "string") kind = parsed.kind
+      if (parsed?.equivalent) equivalent = parsed.equivalent as Equivalent
+    } catch {
+      // A non-JSON error body is still an error; the status line stands.
+    }
+    throw new ApiError(response.status, message, kind, equivalent)
+  }
+  return (await response.json()) as T
 }
 
 async function get<T>(path: string): Promise<T> {
@@ -785,5 +825,43 @@ export function useTopicConnectors(env: string, id: string, topic: string) {
         `${cluster(env, id)}/topics/${encode(topic)}/connectors`
       ),
     staleTime: 30_000,
+  })
+}
+
+/** The last path segment for each connector operation. */
+const CONNECTOR_SEGMENT: Record<Operation, string> = {
+  "connector.restart": "restart",
+  "connector.pause": "pause",
+  "connector.resume": "resume",
+  "connector.stop": "stop",
+}
+
+/**
+ * One write to one connector, through the gate.
+ *
+ * On success the connector and its list are refetched rather than patched:
+ * what the worker says after the write is the answer, not what we asked for.
+ */
+export function useConnectorWrite(env: string, id: string, name: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      operation,
+      request,
+    }: {
+      operation: Operation
+      request?: WriteRequest
+    }) =>
+      post<WriteResult>(
+        `${connectCluster(env, id)}/connectors/${encode(name)}/${CONNECTOR_SEGMENT[operation]}`,
+        operation === "connector.restart" ? (request ?? {}) : undefined
+      ),
+    onSettled: () => {
+      void queryClient.invalidateQueries({
+        queryKey: ["connector", env, id, name],
+      })
+      void queryClient.invalidateQueries({ queryKey: ["connectors", env, id] })
+      void queryClient.invalidateQueries({ queryKey: ["connect", env, id] })
+    },
   })
 }

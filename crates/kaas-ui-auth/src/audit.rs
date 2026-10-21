@@ -1,4 +1,4 @@
-//! Who read which payloads.
+//! Who read which payloads — and, since Phase 10, who changed what.
 //!
 //! In a tool that cannot write, the audit question is **reads**: who opened
 //! which topic's messages, on which cluster, when, and how much of it they
@@ -158,6 +158,91 @@ impl Read {
     }
 }
 
+/// Which half of a write an entry records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Phase {
+    /// Written before the write is attempted. A failure to record it fails
+    /// the write — the same rule reads follow.
+    Intent,
+    /// Written after, with what the far end said.
+    Outcome,
+}
+
+/// One write, in two lines: its intent, then its outcome.
+///
+/// Phase 10. A read-only tool audited disclosures; one that can change a
+/// cluster audits that too, and the two share a sink so one query finds both.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Change {
+    /// RFC 3339, to milliseconds.
+    pub at: String,
+    /// What joins the two lines of one write.
+    pub id: String,
+    /// Which half this is.
+    pub phase: Phase,
+    /// The `sub` claim.
+    pub subject: String,
+    /// What the subject renders as.
+    pub display_name: String,
+    /// The roles that authorized it.
+    pub roles: Vec<String>,
+    /// The environment.
+    pub environment: String,
+    /// The addressed host: a Connect cluster or a Kafka cluster id.
+    pub target: String,
+    /// The named thing written to, where there is one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// The catalogue operation, as config spells it.
+    pub operation: String,
+    /// The request's parameters, secrets already removed by the caller.
+    #[serde(skip_serializing_if = "serde_json::Value::is_null")]
+    pub parameters: serde_json::Value,
+    /// On an outcome line: whether it worked.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ok: Option<bool>,
+    /// On a failed outcome: what the far end said, verbatim.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl Change {
+    /// The intent line for an authorized write.
+    #[must_use]
+    pub fn intent(grant: &crate::Grant, parameters: serde_json::Value) -> Self {
+        let target = grant.target();
+        Self {
+            at: humantime::format_rfc3339_millis(SystemTime::now()).to_string(),
+            id: grant.id().to_owned(),
+            phase: Phase::Intent,
+            subject: grant.subject().to_owned(),
+            display_name: grant.display_name().to_owned(),
+            roles: grant.roles().to_vec(),
+            environment: target.environment.clone(),
+            target: target.host.clone(),
+            name: target.name.clone(),
+            operation: grant.operation().name().to_owned(),
+            parameters,
+            ok: None,
+            error: None,
+        }
+    }
+
+    /// The outcome line that follows it.
+    #[must_use]
+    pub fn outcome(&self, result: Result<(), String>) -> Self {
+        Self {
+            at: humantime::format_rfc3339_millis(SystemTime::now()).to_string(),
+            phase: Phase::Outcome,
+            ok: Some(result.is_ok()),
+            error: result.err(),
+            ..self.clone()
+        }
+    }
+}
+
 /// A write that did not happen.
 #[derive(Debug, thiserror::Error)]
 #[error("the access audit could not be written: {0}")]
@@ -204,7 +289,7 @@ impl Audit {
     ///
     /// If the entry cannot be serialised, the lock is poisoned, or the write
     /// or flush fails. Every one of those fails the request that caused it.
-    pub fn record(&self, entry: &Read) -> Result<(), AuditError> {
+    pub fn record(&self, entry: &impl Serialize) -> Result<(), AuditError> {
         let line = serde_json::to_string(entry)
             .map_err(|error| AuditError(format!("the entry could not be serialised: {error}")))?;
 

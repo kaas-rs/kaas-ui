@@ -31,5 +31,9 @@ tokio        = { workspace = true }
 tracing      = { workspace = true }
 utoipa       = { workspace = true }
 
+[dev-dependencies]
+# `oneshot`, to drive the real router — middleware included — without a socket.
+tower = { workspace = true }
+
 [lints]
 workspace = true

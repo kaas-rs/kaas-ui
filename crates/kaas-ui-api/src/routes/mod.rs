@@ -1,9 +1,11 @@
 //! The handlers.
 //!
-//! Every one of them is a `GET`. Adding a `.post(` here is a CI failure, and
-//! that is deliberate: read-only is the architecture, not a setting, and the
-//! way an architecture stays true is that breaking it does not compile — or,
-//! failing that, does not merge.
+//! Every data route is a `GET`. The writes are few and listed — the openapi
+//! test holds the exact set of non-GET paths, so a new one is a reviewed
+//! change to that list — and each mints a `Grant` through the gate before its
+//! client will send anything. Read-only by default is the architecture: a
+//! target with no `writes:` ceiling has nothing a grant could be minted
+//! against.
 
 pub mod admin;
 pub mod analysis;

@@ -20,6 +20,7 @@ is surprising.
 | 5 — groups | four group kinds, members, committed offsets, lag as states rather than a subtraction |
 | 6 — schema registry | one registry per environment, Avro/Protobuf/JSON Schema, the codec chip, the schema browser, the payload filter over decoded values |
 | 7 — read-only admin | ACLs, client quotas, SCRAM users, reassignments, the transaction inspector, and `CapabilityTab` at last |
+| 10a — the write gate (Connect half) | `Grant`, the three gates, `X-Kaas-Ui` + Origin guard, intent/outcome audit, `ConnectWriter`; connector restart, pause, resume, stop; GitOps ownership by pattern and generated file, with each write's Git equivalent |
 | 9a — Connect, read-only | `kaas-ui-connect`: Connect clusters dialled over REST, GET-only by construction; connectors, tasks, redacted configs, topics, offsets, plugins; the `kafka_cluster:` reference checked against the workers |
 
 Still open: [Phase 8](09-phase-8-cross-cluster.md), the rest of
@@ -768,6 +769,62 @@ pod and the code-server dev pod, for every `KafkaConnect` and
 the live acceptance was run through a `kubectl port-forward` to one worker,
 with the config's url pointed at it — 95 of 96 green, the one failure being
 Phase 7's transaction fixture, which has no open transaction on Strimzi today.
+
+## Phase 10a — the decisions (the Connect half)
+
+**Proven on Connect, as the plan agreed, because Connect needed nothing from
+kaas-lib.** The Kafka half — `connect_with_mutations`, `ClusterHandle::writer`,
+`consumer.reset_offsets` — waits on upstream asks 17 and 18, now filed.
+
+**Four operations, not one.** The plan piloted `connector.restart` alone.
+Restart is operate-tier, which Git ownership allows by design, so a
+restart-only pilot would have shipped the ownership refusal — the 409 and the
+manifest — unreachable. Pause, resume and stop are edit-tier (`spec.state`
+under Strimzi), and with them every branch of the gate has a real operation
+behind it.
+
+**What the page may offer rides on the page, not on `/api/me`.** The plan put
+per-target actions on `/api/me`; that is a fan-out across every Connect
+cluster and connector for a list only one page reads. `ConnectorPage.writes`
+lists each operation on the Connect cluster's ceiling with whether this caller
+may perform it, which gate refuses if not, and its Git equivalent. Empty
+without a ceiling, so the read-only default draws no write UI at all.
+
+**`Access::check` and `Access::authorize` are one decision.** `check` answers
+for a button and mints nothing; `authorize` is the same three gates plus "is
+anyone signed in", and is the only constructor of `Grant` — invariant 7, a
+grep for a `Grant {` literal outside `gate.rs`, run against a planted one
+before it was trusted. The open deployment's anonymous administrator holds no
+role for `Access::role_permits`, so it views everything and writes nothing;
+a `writes:` block with no `auth` configured is a startup error rather than a
+ceiling nobody can reach.
+
+**The guard is a header, and the Origin check is belt to it.** Every non-GET
+under `/api` needs `X-Kaas-Ui: 1`: a cross-site form cannot set a header, and a
+cross-site `fetch` that tries triggers a preflight kaas-ui never approves.
+`Origin`, when sent, must match `Host` or `X-Forwarded-Host` — the forwarded
+one because the deployed shape and code-server both sit behind a proxy.
+
+**Audit: an intent line, then an outcome line, one id.** `Change` joins
+`Read` in the same sink. A failure to record the intent refuses the write and
+nothing reaches the worker (asserted against a sink that fails); a failure to
+record the outcome is a 500 that says the change *was* made.
+
+**Ownership is declared, and kaas-ui never asks Kubernetes.** Patterns
+(`writes.gitops.owns_connectors`) plus a generated `ownership_file` keyed
+`<environment>/<id>`, watched beside the config by `reload.rs`. A refusal is
+409 with the change to make in Git — a `KafkaConnector` patch setting
+`spec.state`, or for a restart the `strimzi.io/restart` annotation — and the
+same equivalent is shown in every write dialog, applied or not.
+
+**Measured, and not:** the stub-worker tests send real grants through the real
+writer and the real handler — what reaches the worker, the audit ordering, all
+four refusals, a grant reused for another operation or another Connect
+cluster. Live, the open deployment's refusal is asserted against the Strimzi
+worker (96 of 97, the failure again Phase 7's transaction fixture). **An
+authenticated write has not run against a live worker**: it needs a signed-in
+session, the acceptance identity provider `dex-test` is out of the cluster,
+and the dev config is open — where a `writes:` block is refused by design.
 
 ## What is still unproven
 

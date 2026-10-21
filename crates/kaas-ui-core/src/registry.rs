@@ -32,8 +32,8 @@ use kafka_conn::{
 use tokio::sync::Notify;
 
 use crate::config::{
-    ClusterEntry, Config, ConfigError, ConnectClusterEntry, EnvironmentEntry, PasswordCredentials,
-    ResourceEntry, SaslSettings, secret_from_env, secret_var,
+    ClusterEntry, Config, ConfigError, ConnectClusterEntry, EnvironmentEntry, ManifestFormat,
+    PasswordCredentials, ResourceEntry, SaslSettings, WritesConfig, secret_from_env, secret_var,
 };
 use crate::error::ErrorKind;
 use crate::federated::{FederatedOauth, FederatedTokenProvider};
@@ -513,10 +513,18 @@ pub struct ConnectHandle {
     /// configured. Checked against what the workers say on the page.
     pub kafka_cluster: Option<String>,
     client: ConnectClient,
+    /// The ceiling: what kaas-ui may change here. `None` is nothing.
+    writes: Option<WritesConfig>,
+    /// The connectors the ownership file says Git owns.
+    owned_names: Vec<String>,
 }
 
 impl ConnectHandle {
-    fn new(environment: &str, entry: &ConnectClusterEntry) -> Result<Self, ConfigError> {
+    fn new(
+        environment: &str,
+        entry: &ConnectClusterEntry,
+        owned_names: Vec<String>,
+    ) -> Result<Self, ConfigError> {
         let settings = entry.to_settings(environment)?;
         let client =
             ConnectClient::new(settings).map_err(|e| ConfigError::Invalid(e.to_string()))?;
@@ -524,7 +532,41 @@ impl ConnectHandle {
             environment: environment.to_owned(),
             kafka_cluster: entry.kafka_cluster.clone(),
             client,
+            writes: entry.writes.clone(),
+            owned_names,
         })
+    }
+
+    /// The operations this Connect cluster admits. Empty without `writes:`.
+    pub fn ceiling(&self) -> &[kaas_ui_auth::Operation] {
+        self.writes
+            .as_ref()
+            .map(|writes| writes.allow.as_slice())
+            .unwrap_or_default()
+    }
+
+    /// Whether Git owns a connector, by the ownership file or a pattern.
+    pub fn owned(&self, connector: &str) -> Option<kaas_ui_auth::Owned> {
+        let gitops = self.writes.as_ref().and_then(|w| w.gitops.as_ref());
+        let by_pattern = gitops.is_some_and(|gitops| {
+            gitops
+                .owns_connectors
+                .iter()
+                .any(|pattern| kaas_ui_auth::glob(pattern, connector))
+        });
+        let by_file = self.owned_names.iter().any(|name| name == connector);
+        (by_pattern || by_file).then(|| kaas_ui_auth::Owned {
+            source: gitops.and_then(|gitops| gitops.source.clone()),
+        })
+    }
+
+    /// How a write's Git equivalent is rendered here.
+    pub fn manifest_format(&self) -> ManifestFormat {
+        self.writes
+            .as_ref()
+            .and_then(|w| w.gitops.as_ref())
+            .map(|gitops| gitops.format)
+            .unwrap_or_default()
     }
 
     /// The REST client — reads only; there is nothing on it to write with.
@@ -764,6 +806,38 @@ impl Registry {
             .filter_map(move |((env, id), _)| self.connect_cluster(env, id, who))
     }
 
+    /// What a write to one connector is aimed at, for the gate.
+    ///
+    /// Roles select a connector by the Kafka cluster its Connect cluster keeps
+    /// state in — the same cluster that decides who may *see* it — so a role
+    /// file needs no new axis for Connect. One that names no Kafka cluster is
+    /// selected by its own id and the environment label.
+    pub fn connect_target(&self, handle: &ConnectHandle, connector: &str) -> kaas_ui_auth::Target {
+        let (cluster, labels) = match &handle.kafka_cluster {
+            Some(kafka) => {
+                let labels = self
+                    .clusters
+                    .get(&(handle.environment.clone(), kafka.clone()))
+                    .map(|cluster| cluster.labels.clone())
+                    .unwrap_or_else(|| {
+                        BTreeMap::from([("env".to_owned(), handle.environment.clone())])
+                    });
+                (kafka.clone(), labels)
+            }
+            None => (
+                handle.id().to_owned(),
+                BTreeMap::from([("env".to_owned(), handle.environment.clone())]),
+            ),
+        };
+        kaas_ui_auth::Target {
+            environment: handle.environment.clone(),
+            cluster,
+            labels,
+            host: handle.id().to_owned(),
+            name: Some(connector.to_owned()),
+        }
+    }
+
     /// The Connect clusters of one environment this caller may see, in
     /// declaration order.
     pub fn connect_clusters_in<'a>(
@@ -925,14 +999,24 @@ fn build_connects(
     for (environment, entry) in config.connect_clusters() {
         let key = (environment.to_owned(), entry.id.clone());
         let settings = entry.to_settings(environment)?;
+        let owned_names = config
+            .ownership
+            .get(&format!("{environment}/{}", entry.id))
+            .map(|owned| owned.connectors.clone())
+            .unwrap_or_default();
         if let Some(handle) = existing.get(&key)
             && *handle.client.settings() == settings
             && handle.kafka_cluster == entry.kafka_cluster
+            && handle.writes == entry.writes
+            && handle.owned_names == owned_names
         {
             connects.insert(key, Arc::clone(handle));
             continue;
         }
-        connects.insert(key, Arc::new(ConnectHandle::new(environment, entry)?));
+        connects.insert(
+            key,
+            Arc::new(ConnectHandle::new(environment, entry, owned_names)?),
+        );
     }
     Ok(connects)
 }

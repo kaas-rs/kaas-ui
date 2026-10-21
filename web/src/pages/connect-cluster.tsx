@@ -1,10 +1,8 @@
 // One Kafka Connect cluster: its workers, its connectors, its plugins.
 //
 // A peer of a Kafka cluster inside its environment, dialled over the Connect
-// REST API — read-only, and not by convention: the server's client has no
-// method that sends anything but GET. There is no action button on this page,
-// disabled or otherwise; a greyed "Restart" would be a promise this build
-// does not make. Phase 10's write gate is where that changes.
+// REST API. Reading is all this page does; writes live on the connector page,
+// drawn only where Phase 10's gate agrees, never as a greyed promise here.
 
 import { useState } from "react"
 import { Link, useNavigate, useSearch } from "@tanstack/react-router"

@@ -16,6 +16,7 @@ pub fn all() -> Task {
     login_is_a_navigation()?;
     consuming_builders_are_withers()?;
     connect_is_read_only()?;
+    grants_are_minted_once()?;
     Ok(())
 }
 
@@ -191,8 +192,8 @@ fn no_kafka_version_literal() -> Task {
 /// side of the socket — a grep is defeated by a rename and a test by a call
 /// site nobody exercised, so it is both.
 ///
-/// Phase 9d adds a `writer.rs` whose constructor takes a `Grant`; it will be
-/// the one file this check exempts, and the exemption lands with it.
+/// `writer.rs` is the one exemption: its only constructor takes a `Grant`
+/// from the gate, which invariant 7 keeps unforgeable.
 fn connect_is_read_only() -> Task {
     let crate_root = root().join("crates").join("kaas-ui-connect").join("src");
     let mut files = Vec::new();
@@ -207,6 +208,9 @@ fn connect_is_read_only() -> Task {
     ];
     let mut hits = Vec::new();
     for path in &files {
+        if path.file_name().is_some_and(|name| name == "writer.rs") {
+            continue;
+        }
         let Ok(source) = std::fs::read_to_string(path) else {
             continue;
         };
@@ -236,8 +240,70 @@ fn connect_is_read_only() -> Task {
         ));
     }
     println!(
-        "  ok  the Connect client only reads ({} files)",
+        "  ok  the Connect client only reads outside writer.rs ({} files)",
         files.len()
+    );
+    Ok(())
+}
+
+/// **7. A `Grant` is minted in one place.**
+///
+/// Every mutating client method takes a `&Grant`, so the whole write path
+/// rests on a `Grant` being unforgeable. Its seal is a private field, which
+/// the compiler enforces inside `kaas-ui-auth`; this is the same claim across
+/// the workspace, by grep, because a `Grant {` literal anywhere but the gate
+/// would mean a second constructor nobody reviewed.
+fn grants_are_minted_once() -> Task {
+    let gate = root()
+        .join("crates")
+        .join("kaas-ui-auth")
+        .join("src")
+        .join("gate.rs");
+    let mut sites = Vec::new();
+    for path in sources() {
+        let Ok(source) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        for (number, line) in source.lines().enumerate() {
+            if is_comment(line) {
+                continue;
+            }
+            // A literal, not a mention: `fn f() -> Grant {` is a return type
+            // and `impl Grant {` a block, and neither builds one.
+            let Some(at) = line.find("Grant {") else {
+                continue;
+            };
+            let before = line.get(..at).unwrap_or_default();
+            if before.contains("->")
+                || before.contains("struct ")
+                || before.trim_start().starts_with("impl")
+            {
+                continue;
+            }
+            sites.push((path.clone(), number + 1));
+        }
+    }
+    let elsewhere: Vec<String> = sites
+        .iter()
+        .filter(|(path, _)| *path != gate)
+        .map(|(path, line)| format!("{}:{line}", path.display()))
+        .collect();
+    if !elsewhere.is_empty() {
+        return Err(format!(
+            "a Grant is constructed outside the gate:\n  {}",
+            elsewhere.join("\n  ")
+        ));
+    }
+    if sites.len() != 1 {
+        return Err(format!(
+            "expected exactly one Grant construction, in gate.rs; found {}",
+            sites.len()
+        ));
+    }
+    println!(
+        "  ok  one Grant constructor: {}:{}",
+        gate.display(),
+        sites[0].1
     );
     Ok(())
 }

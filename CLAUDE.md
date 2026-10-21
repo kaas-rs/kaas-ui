@@ -2,7 +2,7 @@
 
 ## What this is
 
-A **read-only** Kafka cluster UI in the shape of kafbat-ui: an Axum backend on
+A Kafka cluster UI, **read-only by default**, in the shape of kafbat-ui: an Axum backend on
 [`kaas-lib`](https://github.com/kaas-rs/kaas-lib), a React/TanStack frontend,
 multi-cluster from day one, OIDC via Dex.
 
@@ -13,8 +13,9 @@ multi-cluster from day one, OIDC via Dex.
   plan, and what was measured. **A phase that lands loses its plan file**; what
   outlived it is here.
 
-Read `docs/README.md` first. Phases 0–7 are done, and 9a (read-only Connect);
-8, the rest of 9 and 10 are planned, in the order `docs/README.md` gives.
+Read `docs/README.md` first. Phases 0–7 are done, and 9a (read-only Connect)
+and the Connect half of 10a (the write gate); 8, the rest of 9 and 10 are
+planned, in the order `docs/README.md` gives.
 
 ## The shape
 
@@ -65,18 +66,27 @@ was committed.
 
 ## Hard rules
 
-**1. Read-only is the architecture, not a setting.** Exactly one
-`Admin::connect_read_only(` in the workspace, in `kaas-ui-core/src/registry.rs`.
-No `Admin::connect(` anywhere. That is the guarantee, and it holds whatever
-HTTP verb reaches a handler: a read-only admin cannot write to a cluster. If
-`Error::ReadOnly` ever reaches a user, kaas-ui has a bug: it built a request it
-should have been incapable of building. Treat it as a 500, not a 405.
+**1. Read-only by default is the architecture; writing is constructed, not
+permitted.** A target with no `writes:` block cannot be written to by any code
+path. For Kafka that is still exactly one `Admin::connect_read_only(` in the
+workspace, in `kaas-ui-core/src/registry.rs`, and no `Admin::connect(`
+anywhere. For Connect it is `kaas-ui-connect`: every read goes through one
+private `get_json`, and the only non-GET is in `writer.rs`, whose constructor
+takes a `Grant`. A `Grant` is minted only by `Access::authorize` in
+`kaas-ui-auth/src/gate.rs`, and only when three gates agree — the target's
+`writes.allow` ceiling, a role, and Git ownership (declared state Git owns is
+refused with a 409 carrying the change to make in Git; operating on it, like a
+restart, is not). An anonymous caller never holds a grant, so the open
+deployment views everything and writes nothing. Every non-GET under `/api`
+needs `X-Kaas-Ui: 1`, and the intent is audited *before* anything is sent —
+a write that cannot be recorded does not happen. If `Error::ReadOnly` ever
+reaches a user, kaas-ui built a request its own ceiling forbade: a 500, not a
+403. Phase 10 (`docs/13-phase-10-administration.md`) is the design; the Kafka
+half lands with kaas-lib's mutation ceiling.
 
-The HTTP surface used to claim more than this — "every route is a `GET`" — and
-that claim is gone. It was a proxy for the property above, and a weaker one:
-the auth flow needs `POST`, and the Dex proxy forwards whatever the browser
-sends. What is enforced is the construction site, which is where writing would
-have to begin.
+Rule 1's invariants are greps in `cargo xtask ci`: one construction site, the
+Connect client reads outside `writer.rs`, and one `Grant` constructor. The
+openapi test holds the exact set of non-GET paths.
 
 **2. No Kafka version number appears anywhere.** No `if version >= 3.5`, no
 parsing of a broker version string, no per-version branch. kaas-lib owns version

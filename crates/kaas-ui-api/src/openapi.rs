@@ -14,9 +14,10 @@ use utoipa::OpenApi;
 #[openapi(
     info(
         title = "kaas-ui",
-        description = "A read-only, multi-cluster Kafka UI. Every data route is a GET; \
-                       there is no mutating endpoint in this document because there is \
-                       none in the router.",
+        description = "A multi-cluster Kafka UI, read-only by default. Every data route \
+                       is a GET; the few writes (tag `connect`) pass three gates — the \
+                       target's configured ceiling, a role, and Git ownership — and are \
+                       audited before they are sent.",
         license(name = "Apache-2.0"),
     ),
     paths(
@@ -49,6 +50,7 @@ use utoipa::OpenApi;
         crate::routes::connect::connector,
         crate::routes::connect::plugins,
         crate::routes::connect::topic_connectors,
+        crate::routes::connect::write,
         crate::routes::admin::acls,
         crate::routes::admin::quotas,
         crate::routes::admin::scram_users,
@@ -77,6 +79,14 @@ use utoipa::OpenApi;
         crate::routes::connect::PluginList,
         crate::routes::connect::TopicConnector,
         crate::routes::connect::TopicConnectors,
+        crate::routes::connect::Refusal,
+        crate::routes::connect::WriteOption,
+        crate::routes::connect::WriteRequest,
+        crate::routes::connect::WriteResult,
+        kaas_ui_auth::Operation,
+        kaas_ui_auth::Owned,
+        kaas_ui_auth::Tier,
+        kaas_ui_connect::Equivalent,
         kaas_ui_core::dto::ConnectClusterCard,
         kaas_ui_connect::ConnectorConfigEntry,
         kaas_ui_connect::ConnectStatus,
@@ -208,22 +218,30 @@ pub fn spec_json() -> Result<String, serde_json::Error> {
 mod tests {
     use super::*;
 
+    /// Every path that is not a `GET`. Phase 10's writes, one per line, so a
+    /// new one is a change to this list that a reviewer sees.
+    const WRITES: [(&str, &str); 1] = [(
+        "post",
+        "/api/environments/{env}/connect-clusters/{connect}/connectors/{name}/{operation}",
+    )];
+
     #[test]
-    fn the_document_builds_and_has_no_mutating_path() {
+    fn the_document_builds_and_its_only_writes_are_the_gated_ones() {
         let spec = spec_json().unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&spec).unwrap();
         let paths = parsed["paths"].as_object().unwrap();
         assert!(!paths.is_empty());
 
-        // The claim PLAN.md makes, checked against the generated document
-        // rather than against intent.
+        // Checked against the generated document rather than against intent:
+        // a mutating route that is not on the list above fails here.
+        let mut writes = Vec::new();
         for (path, item) in paths {
             for method in item.as_object().unwrap().keys() {
-                assert_eq!(
-                    method, "get",
-                    "{path} exposes {method}: kaas-ui has no mutating routes"
-                );
+                if method != "get" {
+                    writes.push((method.as_str(), path.as_str()));
+                }
             }
         }
+        assert_eq!(writes, WRITES, "the non-GET routes changed");
     }
 }

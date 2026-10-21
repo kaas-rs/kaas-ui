@@ -394,18 +394,17 @@ Phase 9's remaining Connect writes (9d) depend on 10a and nothing after it.
   manifest is the 80% that needs none of those.
 - **Step-up authentication** for destroy (re-prompt via Dex `max_age`).
 
-## Decisions to make before starting
+## Decisions — settled 2026-10-20
 
-1. **Rule 1's new wording** (below) — and whether PLAN.md's "why read-only"
-   section is rewritten as "why read-only by default".
-2. **403 for visible-but-forbidden.** This plan says yes; the alternative is
-   404 everywhere, which keeps one rule but makes a missing permission look
-   like a missing resource.
-3. **Open mode** — "view everything, write nothing", and a `writes:` block
-   without an IdP is a startup error. Agreed?
-4. **Ownership default** — nothing owned unless the generated file or a
-   pattern says so (this plan), or everything owned unless listed, which is
-   the more GitOps-first and more annoying choice.
+1. **Rule 1's new wording** — landed with 10a, in CLAUDE.md; PLAN.md §1
+   carries an amendment note rather than a rewrite.
+2. **403 for visible-but-forbidden** — yes. 404 stays for what the caller
+   cannot see.
+3. **Open mode** — views everything, writes nothing; a `writes:` block with no
+   identity provider is a startup error. The dev config gets an IdP when
+   writes need exercising live.
+4. **Ownership default** — not owned unless the generated file or a pattern
+   says so.
 
 ## Rule 1, rewritten
 
