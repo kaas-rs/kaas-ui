@@ -1,4 +1,4 @@
-// The writes a connector can take, and the one sheet they all go through.
+// The writes a connector can take, and the one dialog they all go through.
 //
 // Phase 10. Two things decide what appears here, both on the server: the
 // Connect cluster's `writes.allow` ceiling and the caller's roles. A button
@@ -56,13 +56,15 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetFooter,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet"
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 
 const LABEL: Record<Operation, string> = {
   "connector.restart": "restart",
@@ -92,7 +94,7 @@ const ICON: Record<Operation, typeof RotateCw> = {
   "connector.alter_offsets": Pencil,
 }
 
-/** What each operation does, in one sentence, for the sheet's description. */
+/** What each operation does, in one sentence, for the dialog's description. */
 const WHAT: Record<Operation, string> = {
   "connector.restart":
     "Restarts the connector — and, as chosen, its tasks or only what failed.",
@@ -124,6 +126,12 @@ const PRIMARY: Operation[] = [
   "connector.edit",
 ]
 
+/** The dialog every write opens in. Wider than the default for the config
+    box, and scrolling inside itself rather than past the viewport. The
+    submit buttons are plain buttons, not `AlertDialogAction`, which would
+    close the dialog before the result could be shown in it. */
+const DIALOG = "max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-xl"
+
 /** Whether an operation makes sense from this state — pausing a paused
     connector is not a button worth drawing. */
 function fits(operation: Operation, status: ConnectorStatus): boolean {
@@ -142,7 +150,7 @@ function fits(operation: Operation, status: ConnectorStatus): boolean {
   }
 }
 
-/** What the sheet needs to know about the connector it is changing. */
+/** What the dialog needs to know about the connector it is changing. */
 interface Subject {
   envId: string
   connectId: string
@@ -221,24 +229,23 @@ export function ConnectorWrites({
         </DropdownMenu>
       ) : null}
 
-      <Sheet
+      <AlertDialog
         open={open !== null}
         onOpenChange={(next) => {
           if (!next) setOpen(null)
         }}
       >
-        <SheetContent className="w-full overflow-y-auto sm:max-w-xl">
+        <AlertDialogContent className={DIALOG}>
           {open ? (
             <WriteForm
               key={open.write.operation}
               subject={subject}
               write={open.write}
               task={open.task}
-              onDone={() => setOpen(null)}
             />
           ) : null}
-        </SheetContent>
-      </Sheet>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
@@ -266,18 +273,13 @@ export function TaskRestart({
         <RotateCw aria-hidden />
         restart
       </Button>
-      <Sheet open={open} onOpenChange={setOpen}>
-        <SheetContent className="w-full overflow-y-auto sm:max-w-xl">
+      <AlertDialog open={open} onOpenChange={setOpen}>
+        <AlertDialogContent className={DIALOG}>
           {open ? (
-            <WriteForm
-              subject={subject}
-              write={write}
-              task={task}
-              onDone={() => setOpen(false)}
-            />
+            <WriteForm subject={subject} write={write} task={task} />
           ) : null}
-        </SheetContent>
-      </Sheet>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   )
 }
@@ -331,12 +333,10 @@ function WriteForm({
   subject,
   write,
   task,
-  onDone,
 }: {
   subject: Subject
   write: WriteOption
   task?: number
-  onDone: () => void
 }) {
   const { envId, connectId, connector } = subject
   const mutation = useConnectorWrite(envId, connectId, connector)
@@ -409,16 +409,16 @@ function WriteForm({
 
   return (
     <>
-      <SheetHeader>
-        <SheetTitle>
+      <AlertDialogHeader>
+        <AlertDialogTitle>
           {LABEL[operation]}
           {task !== undefined ? ` ${task}` : ""} of{" "}
           <span className="font-mono">{connector}</span>
-        </SheetTitle>
-        <SheetDescription>{WHAT[operation]}</SheetDescription>
-      </SheetHeader>
+        </AlertDialogTitle>
+        <AlertDialogDescription>{WHAT[operation]}</AlertDialogDescription>
+      </AlertDialogHeader>
 
-      <div className="space-y-4 px-4">
+      <div className="min-w-0 space-y-4">
         {operation === "connector.restart" ? (
           <fieldset className="space-y-2 text-[13px]">
             <label className="flex items-center gap-2">
@@ -493,11 +493,14 @@ function WriteForm({
         ) : null}
       </div>
 
-      <SheetFooter>
+      <AlertDialogFooter>
         {applied ? (
-          <Button onClick={onDone}>close</Button>
+          <AlertDialogAction>close</AlertDialogAction>
         ) : (
-          <div className="flex flex-wrap justify-end gap-2">
+          <>
+            <AlertDialogCancel disabled={mutation.isPending}>
+              cancel
+            </AlertDialogCancel>
             {operation === "connector.edit" ? (
               <Button
                 variant="outline"
@@ -522,9 +525,9 @@ function WriteForm({
             >
               {mutation.isPending ? "sending…" : LABEL[operation]}
             </Button>
-          </div>
+          </>
         )}
-      </SheetFooter>
+      </AlertDialogFooter>
     </>
   )
 }
@@ -547,8 +550,8 @@ export function CreateConnector({
         <Plus aria-hidden />
         new connector
       </Button>
-      <Sheet open={open} onOpenChange={setOpen}>
-        <SheetContent className="w-full overflow-y-auto sm:max-w-xl">
+      <AlertDialog open={open} onOpenChange={setOpen}>
+        <AlertDialogContent className={DIALOG}>
           {open ? (
             <CreateForm
               envId={envId}
@@ -556,8 +559,8 @@ export function CreateConnector({
               onDone={() => setOpen(false)}
             />
           ) : null}
-        </SheetContent>
-      </Sheet>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   )
 }
@@ -612,11 +615,13 @@ function CreateForm({
 
   return (
     <>
-      <SheetHeader>
-        <SheetTitle>new connector</SheetTitle>
-        <SheetDescription>{WHAT["connector.create"]}</SheetDescription>
-      </SheetHeader>
-      <div className="space-y-4 px-4">
+      <AlertDialogHeader>
+        <AlertDialogTitle>new connector</AlertDialogTitle>
+        <AlertDialogDescription>
+          {WHAT["connector.create"]}
+        </AlertDialogDescription>
+      </AlertDialogHeader>
+      <div className="min-w-0 space-y-4">
         <label className="block space-y-1 text-[13px]">
           <span className="text-ink-muted">name</span>
           <Input
@@ -661,23 +666,24 @@ function CreateForm({
           <p className="text-[13px] text-danger">{failure.message}</p>
         ) : null}
       </div>
-      <SheetFooter>
-        <div className="flex flex-wrap justify-end gap-2">
-          <Button
-            variant="outline"
-            disabled={mutation.isPending || !!inputError || !name.trim()}
-            onClick={() => send(true)}
-          >
-            validate
-          </Button>
-          <Button
-            disabled={mutation.isPending || !!inputError || !name.trim()}
-            onClick={() => send(false)}
-          >
-            {mutation.isPending ? "sending…" : "create"}
-          </Button>
-        </div>
-      </SheetFooter>
+      <AlertDialogFooter>
+        <AlertDialogCancel disabled={mutation.isPending}>
+          cancel
+        </AlertDialogCancel>
+        <Button
+          variant="outline"
+          disabled={mutation.isPending || !!inputError || !name.trim()}
+          onClick={() => send(true)}
+        >
+          validate
+        </Button>
+        <Button
+          disabled={mutation.isPending || !!inputError || !name.trim()}
+          onClick={() => send(false)}
+        >
+          {mutation.isPending ? "sending…" : "create"}
+        </Button>
+      </AlertDialogFooter>
     </>
   )
 }
