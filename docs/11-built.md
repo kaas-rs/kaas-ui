@@ -827,6 +827,19 @@ authenticated write has not run against a live worker**: it needs a signed-in
 session, the acceptance identity provider `dex-test` is out of the cluster,
 and the dev config is open — where a `writes:` block is refused by design.
 
+**Since 2026-10-21 there is a signed-in dev config,** `config.dev-auth.yaml`,
+against **production's Dex** rather than a test one: the same GitHub (kaas-rs)
+and Microsoft logins as the deployment, the deployment's two subjects as
+roles, and every Connect write enabled on a Connect cluster Git owns entirely
+(`strimzi.io/use-connector-resources: "true"`) — so a session can restart and
+gets 409 with a KafkaConnector change for everything else. Dex holds its
+callback, `https://remote.smeding.cloud/proxy/8099/auth/callback`, from
+k3s-cluster `f144624`. Booted and checked as far as a terminal can: discovery
+over the internal Service, the login redirect carrying that callback with
+S256, and — before that commit is synced — Dex answering `Unregistered
+redirect_uri` at its connector step. The sign-in itself is a browser's, and has
+not happened yet.
+
 ## Phase 9d — the decisions
 
 **Eleven operations, one handler.** Every write runs `perform`: lookup, gate,

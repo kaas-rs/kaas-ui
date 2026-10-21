@@ -10,13 +10,12 @@
   // that is the thing worth getting straight:
   //
   //   /absproxy/5173/  → Vite. Hot reload. API proxied to the binary, so Rust
-  //                      breakpoints still hit. This is what the one
+  //                      breakpoints still hit. This is what the first
   //                      configuration below is for.
   //   /proxy/8099/     → the binary, serving web/dist. No hot reload; edits
-  //                      appear only after `npm run build`. There is no launch
-  //                      configuration for it any more — run the binary from a
-  //                      terminal with KAAS_UI_SERVER__BASE_PATH=/proxy/8099
-  //                      if you need to check what actually ships.
+  //                      appear only after `npm run build`. The signed-in
+  //                      configuration serves this one, because it is the URL
+  //                      production's Dex holds as the callback.
   //
   // A debug build reads web/dist off disk per request — rust-embed is built
   // without `debug-embed` — so a frontend change never needs `cargo build`.
@@ -60,6 +59,34 @@
         // `debug` is where the message stream announces itself — one line per
         // stream open, with the cluster, topic, mode and caller.
         "RUST_LOG": "info,kaas_ui=debug,kaas_ui_api=debug"
+      },
+      "sourceLanguages": ["rust"]
+    },
+    {
+      // The same clusters, **signed in through production's Dex** — GitHub
+      // or Microsoft, as on kaas.smeding.cloud — with Phase 10's writes on
+      // the Connect cluster. See config.dev-auth.yaml for what it needs from
+      // k3s-cluster.
+      //
+      // Open **https://<host>/proxy/8099/** — the binary's URL, not Vite's.
+      // Dex sends the browser back to exactly
+      // https://remote.smeding.cloud/proxy/8099/auth/callback, and Vite at
+      // /absproxy/5173 neither serves that path nor proxies /auth. The
+      // frontend is built into web/dist first; run "web: rebuild dist on
+      // change" alongside for edits, and refresh.
+      "type": "lldb",
+      "request": "launch",
+      "name": "kaas-ui, signed in (production Dex)",
+      "preLaunchTask": "debug: prepare signed in",
+      "cargo": {
+        "args": ["build", "--bin=kaas-ui", "--package=kaas-ui-server"],
+        "filter": { "name": "kaas-ui", "kind": "bin" }
+      },
+      "args": ["--config", "config.dev-auth.yaml"],
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.dev/credentials.env",
+      "env": {
+        "RUST_LOG": "info,kaas_ui=debug,kaas_ui_api=debug,kaas_ui_auth=debug"
       },
       "sourceLanguages": ["rust"]
     }

@@ -3056,4 +3056,36 @@ environments:
             Ok(())
         });
     }
+
+    /// The two development configs, held in their roles: one open, one
+    /// signed in. Parsed as committed, so an edit that breaks either — or
+    /// quietly makes the open one enforce something — fails here rather than
+    /// at somebody's next launch.
+    #[test]
+    fn the_development_configs_are_one_open_and_one_signed_in() {
+        let open = Config::from_yaml(include_str!("../../../config.dev.yaml")).unwrap();
+        assert!(open.auth.is_none() && open.roles.is_empty());
+        assert!(
+            open.connect_clusters()
+                .all(|(_, connect)| connect.writes.is_none()),
+            "the open config may not carry a ceiling: an anonymous caller never writes"
+        );
+
+        let signed_in = Config::from_yaml(include_str!("../../../config.dev-auth.yaml")).unwrap();
+        let auth = signed_in.auth.as_ref().unwrap();
+        assert_eq!(auth.issuer, "https://kaas.smeding.cloud/dex");
+        assert_eq!(
+            auth.redirect_url, "https://remote.smeding.cloud/proxy/8099/auth/callback",
+            "the callback production's Dex has registered for this instance"
+        );
+        assert!(!signed_in.roles.is_empty());
+        let (_, connect) = signed_in.connect_clusters().next().unwrap();
+        let writes = connect.writes.as_ref().unwrap();
+        assert_eq!(writes.allow.len(), Operation::ALL.len());
+        assert_eq!(
+            writes.gitops.as_ref().unwrap().owns_connectors,
+            ["*"],
+            "Strimzi reconciles every connector on this KafkaConnect"
+        );
+    }
 }

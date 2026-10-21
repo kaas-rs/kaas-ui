@@ -10,6 +10,15 @@
       "problemMatcher": []
     },
     {
+      // The signed-in launch's preLaunchTask: credentials, then the frontend
+      // into web/dist — that launch serves it from the binary on /proxy/8099,
+      // because that is the URL Dex holds as the callback.
+      "label": "debug: prepare signed in",
+      "dependsOrder": "sequence",
+      "dependsOn": ["dev: fetch cluster credentials", "web: build into the binary"],
+      "problemMatcher": []
+    },
+    {
       // Both development clusters authenticate on every listener. This reads
       // the `kafbat-ui` SCRAM password and the two CA bundles out of the
       // cluster into .dev/ (gitignored) — see scripts/dev-credentials.sh.

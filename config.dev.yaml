@@ -13,8 +13,12 @@
 
 # No `dex` block and no `roles`: development runs **unauthenticated**, behind
 # code-server's /proxy/8099, with one anonymous caller who sees every cluster.
-# That is the default rather than a fallback — `cargo test -p kaas-ui-server`
+# That is the default rather than a fallback — a config test in kaas-ui-core
 # holds it in place — so a login provider never has to exist for this to work.
+# It is also what `cargo xtask live` asserts against.
+#
+# Signed in — production's GitHub and Microsoft logins, and Phase 10's writes
+# — is `config.dev-auth.yaml`, the same clusters behind roles.
 server:
   listen: "127.0.0.1:8099"
   # The twin of the port above, and it belongs here rather than in an

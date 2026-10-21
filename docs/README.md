@@ -46,7 +46,7 @@ is proven on Connect, which needs no kaas-lib release:
 | step | needs | delivers | state |
 |---|---|---|---|
 | **9a** | — | read-only Connect: `kaas-ui-connect`, connectors, tasks, redacted configs, links into topics and lag | **done** — see [11-built.md](11-built.md#phase-9a--the-decisions) |
-| **10a** | 9a | the write gate — ceiling, grant, ownership, Origin check, audit intent/outcome — proven on connector restart, pause, resume, stop | **done** — authenticated live write unproven (no IdP in dev); see [11-built.md](11-built.md#phase-10a--the-decisions-the-connect-half) |
+| **10a** | 9a | the write gate — ceiling, grant, ownership, Origin check, audit intent/outcome — proven on connector restart, pause, resume, stop | **done** — authenticated live write unproven until a sign-in through `config.dev-auth.yaml` (production's Dex); see [11-built.md](11-built.md#phase-10a--the-decisions-the-connect-half) |
 | kaas-lib asks 17–18 | parallel with 10a | mutation ceiling, `Admin::scoped` | **filed** — [upstream-asks.md](reference/upstream-asks.md) |
 | **10a, Kafka half** | kaas-lib release | `consumer.reset_offsets` through the same gate | |
 | **9d** | 9a, 10a | the remaining Connect writes: task restart, reset topics, edit, create, delete, offsets | **done** — authenticated live write unproven, as for 10a |

@@ -1,0 +1,155 @@
+# The development fleet, signed in — through production's Dex.
+#
+# `config.dev.yaml` is the default and stays open: one anonymous caller who
+# sees everything, which is what `cargo xtask live` asserts against. This file
+# is the other half: the same clusters, behind the **same login providers as
+# the deployment** — GitHub (members of kaas-rs) and Microsoft (the tenant) —
+# so Phase 10's writes can be tried by a real session instead of only by unit
+# tests. Run it with the "kaas-ui, signed in" launch, or:
+#
+#   scripts/dev-credentials.sh && set -a && . .dev/credentials.env && set +a
+#   cargo run -p kaas-ui-server -- --config config.dev-auth.yaml
+#
+# Then open https://remote.smeding.cloud/proxy/8099/ and sign in.
+#
+# What this needs from k3s-cluster, both applied by `argocd app sync`:
+#   * the dev callback below in Dex's `redirectURIs`
+#     (apps/kaas-ui/dex-config.yaml) — otherwise Dex refuses the login with
+#     "Unregistered redirect_uri";
+#   * the NetworkPolicy `kafka-connect-allow-kaas-ui` (apps/strimzi) — otherwise
+#     the Connect cluster below is unreachable from this pod.
+
+server:
+  # The same port and prefix as config.dev.yaml, because the redirect URL Dex
+  # holds names them. Run one or the other, not both.
+  listen: "127.0.0.1:8099"
+  base_path: "/proxy/8099"
+
+auth:
+  # The public issuer, exactly as the deployment's: it is compared against
+  # every token's `iss`.
+  issuer: https://kaas.smeding.cloud/dex
+  # And the Service behind it, which this pod can reach directly. Discovery,
+  # the token exchange and the key set go here; only the browser's hops go to
+  # the public issuer, through the deployment that proxies `/dex`.
+  internal_url: http://kaas-ui-dex.kaas-ui.svc.cluster.local:5556/dex
+  client_id: kaas-ui
+  # Registered with Dex for exactly this instance. code-server strips
+  # `/proxy/8099` before kaas-ui sees the request, so this arrives as
+  # `/auth/callback`.
+  redirect_url: https://remote.smeding.cloud/proxy/8099/auth/callback
+  # Without `groups`, as the deployment: asking for it makes Dex's Microsoft
+  # connector need tenant admin consent. Roles below name people by `sub`.
+  scopes: [openid, profile, email]
+  # One button per provider, ids equal to `connectors[].id` in Dex's config.
+  connectors:
+    - id: github
+      name: GitHub
+    - id: microsoft
+      name: Microsoft
+  # Short: a development session should not outlive the afternoon.
+  session_ttl: 2h
+
+# The deployment's two subjects, matched by `sub` — Dex's protobuf of (user
+# id, connector id), so each names one person through one provider. See
+# apps/kaas-ui/configmap.yaml in k3s-cluster for how to decode them.
+roles:
+  # Woestebanaan via GitHub: everything, and every Connect write.
+  - name: admin
+    subjects:
+      - "CgxXb2VzdGViYW5hYW4SBmdpdGh1Yg"
+    clusters: ["*"]
+    permissions:
+      - resource: cluster_config
+        actions: [all]
+      - resource: topic
+        actions: [all]
+      - resource: consumer
+        actions: [all]
+      - resource: connector
+        actions: [all]
+      - resource: connect
+        actions: [all]
+
+  # Benjamin via Entra: one topic, and nothing else — the boundary the
+  # deployment tests with a second login, kept here so a session through the
+  # Microsoft button shows the other side of it, write buttons included.
+  - name: canary-reader
+    subjects:
+      - "CiRkMjE2N2Y1MC01MDQwLTQyZTYtYTBhMS00ZWJhOWQ2YTRkMTcSCW1pY3Jvc29mdA"
+    clusters: ["*"]
+    permissions:
+      - resource: topic
+        value: "kaas-canary-v1"
+        actions: [view, messages_read]
+
+environments:
+  - id: dev
+    name: Development
+    description: The two live clusters and the Connect cluster beside them, signed in.
+
+    schema_registries:
+      - id: apicurio
+        name: Apicurio
+        url: http://apicurio-registry.apicurio.svc.cluster.local:8080/apis/ccompat/v7
+
+    # As in config.dev.yaml: SCRAM over TLS as `kafbat-ui`, from .dev/.
+    kafka_clusters:
+      - id: kaas
+        name: kaas (dev)
+        bootstrap: ["kaas.kaas.svc.cluster.local:9095"]
+        tls:
+          ca_file: .dev/kaas-ca.crt
+        sasl:
+          mechanism: scram-sha-512
+          username: kafbat-ui
+        labels:
+          kind: kaas
+        refresh_interval: 30s
+        schema_registry: apicurio
+
+      - id: strimzi
+        name: kafka-cluster (strimzi)
+        bootstrap:
+          ["kafka-cluster-kafka-bootstrap.strimzi.svc.cluster.local:9095"]
+        tls:
+          ca_file: .dev/strimzi-ca.crt
+        sasl:
+          mechanism: scram-sha-512
+          username: kafbat-ui
+        labels:
+          kind: strimzi
+        refresh_interval: 30s
+        schema_registry: apicurio
+
+    connect_clusters:
+      - id: connect
+        name: Kafka Connect
+        url: http://kafka-connect-connect-api.strimzi.svc.cluster.local:8083
+        kafka_cluster: strimzi
+        # Every write in the catalogue is enabled here — and Git owns every
+        # connector, because this KafkaConnect has
+        # `strimzi.io/use-connector-resources: "true"`: the operator reconciles
+        # each connector from its KafkaConnector resource and puts back what
+        # the REST API changed. So what a session can actually do is the
+        # operate tier — restart, restart a task, reset active topics — and
+        # every edit, create, delete or offset change answers 409 with the
+        # KafkaConnector change to commit instead. That is the honest shape of
+        # this cluster, and a safe one to try writes against.
+        writes:
+          allow:
+            - connector.restart
+            - connector.restart_task
+            - connector.pause
+            - connector.resume
+            - connector.stop
+            - connector.reset_topics
+            - connector.edit
+            - connector.create
+            - connector.delete
+            - connector.reset_offsets
+            - connector.alter_offsets
+          gitops:
+            owns_connectors: ["*"]
+            source: https://github.com/Woestebanaan/k3s-cluster/tree/master/apps/strimzi/kafka-connectors
+            format: strimzi
