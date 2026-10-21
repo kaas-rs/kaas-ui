@@ -293,7 +293,6 @@ export function TlsDetail({
 
   return (
     <div className="space-y-3">
-
       {session.chain.map((cert, index) => (
         <CertificateCard
           key={cert.sha256Fingerprint}
