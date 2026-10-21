@@ -41,11 +41,11 @@ import type {
 import { Mono } from "@/components/domain"
 import { WriteDialog } from "@/components/write-dialog"
 import { Button } from "@/components/ui/button"
+import { ButtonGroup } from "@/components/ui/button-group"
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
@@ -108,15 +108,6 @@ const WHAT: Record<Operation, string> = {
     "Sets the stored position partition by partition. The connector must be stopped.",
 }
 
-/** The operations on the header itself; the rest go under "more". */
-const PRIMARY: Operation[] = [
-  "connector.restart",
-  "connector.pause",
-  "connector.resume",
-  "connector.stop",
-  "connector.edit",
-]
-
 /** Whether an operation makes sense from this state — pausing a paused
     connector is not a button worth drawing. */
 function fits(operation: Operation, status: ConnectorStatus): boolean {
@@ -157,62 +148,57 @@ export function ConnectorWrites({
   const allowed = writes.filter(
     (write) => write.allowed && fits(write.operation, subject.status)
   )
-  const primary = allowed.filter((write) => PRIMARY.includes(write.operation))
-  const more = allowed.filter((write) => !PRIMARY.includes(write.operation))
+  // Everything that can be undone is a segment of the group, in catalogue
+  // order; what cannot — delete, the offsets — is one step further away, in
+  // the group's last segment.
+  const inline = allowed.filter((write) => write.tier !== "destroy")
+  const destroy = allowed.filter((write) => write.tier === "destroy")
   if (allowed.length === 0) return null
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      {primary.map((write) => {
-        const Icon = ICON[write.operation]
-        return (
-          <Button
-            key={write.operation}
-            variant="outline"
-            size="sm"
-            onClick={() => setOpen({ write })}
-          >
-            <Icon aria-hidden />
-            {LABEL[write.operation]}
-          </Button>
-        )
-      })}
-      {more.length > 0 ? (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="sm">
-              more
-              <ChevronDown aria-hidden />
+    <>
+      <ButtonGroup aria-label="connector writes">
+        {inline.map((write) => {
+          const Icon = ICON[write.operation]
+          return (
+            <Button
+              key={write.operation}
+              variant="outline"
+              size="sm"
+              onClick={() => setOpen({ write })}
+            >
+              <Icon aria-hidden />
+              {/* Icons alone on a phone: five labelled segments do not fit. */}
+              <span className="max-sm:sr-only">{LABEL[write.operation]}</span>
             </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start">
-            {more
-              .filter((write) => write.tier !== "destroy")
-              .map((write) => (
-                <DropdownMenuItem
-                  key={write.operation}
-                  onSelect={() => setOpen({ write })}
-                >
-                  {LABEL[write.operation]}
-                </DropdownMenuItem>
-              ))}
-            {more.some((write) => write.tier === "destroy") ? (
-              <DropdownMenuSeparator />
-            ) : null}
-            {more
-              .filter((write) => write.tier === "destroy")
-              .map((write) => (
-                <DropdownMenuItem
-                  key={write.operation}
-                  className="text-danger"
-                  onSelect={() => setOpen({ write })}
-                >
-                  {LABEL[write.operation]}…
-                </DropdownMenuItem>
-              ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      ) : null}
+          )
+        })}
+        {destroy.length > 0 ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm" aria-label="more writes">
+                more
+                <ChevronDown aria-hidden />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {destroy.map((write) => {
+                const Icon = ICON[write.operation]
+                return (
+                  <DropdownMenuItem
+                    key={write.operation}
+                    className="text-danger"
+                    onSelect={() => setOpen({ write })}
+                  >
+                    <Icon aria-hidden />
+                    {LABEL[write.operation]}…
+                  </DropdownMenuItem>
+                )
+              })}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : null}
+      </ButtonGroup>
 
       {open ? (
         <WriteForm
@@ -223,7 +209,7 @@ export function ConnectorWrites({
           onClose={() => setOpen(null)}
         />
       ) : null}
-    </div>
+    </>
   )
 }
 
