@@ -7,8 +7,8 @@
 //!   built by `Admin::connect_read_only`, so no handler has anything to write
 //!   to a Kafka cluster with. Phase 10's writes — Connect connectors first —
 //!   go through a client method that takes a `Grant`, and only the gate in
-//!   `kaas-ui-auth` mints one, after the target's ceiling, a role and Git
-//!   ownership agree. Every non-GET under `/api` also passes [`write_guard`].
+//!   `kaas-ui-auth` mints one, after the target's ceiling and a role agree.
+//!   Every non-GET under `/api` also passes [`write_guard`].
 //! * **The registry is reached through one lookup.** [`AppState::cluster`] is
 //!   the only way to a handle, and a cluster the caller cannot see is `404`
 //!   rather than `403`, so ids are not enumerable by probing.

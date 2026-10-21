@@ -74,14 +74,13 @@ workspace, in `kaas-ui-core/src/registry.rs`, and no `Admin::connect(`
 anywhere. For Connect it is `kaas-ui-connect`: every read goes through one
 private `get_json`, and the only non-GET is in `writer.rs`, whose constructor
 takes a `Grant`. A `Grant` is minted only by `Access::authorize` in
-`kaas-ui-auth/src/gate.rs`, and only when three gates agree — the target's
-`writes.allow` ceiling, a role, and Git ownership (a write changing an aspect
-Git declares — a connector's config, existence, state or offsets — is refused
-with a 409 carrying the change to make in Git; one changing none, like a
-restart, is not). Which aspects Git declares, and in what format, is
-configured per target, so no one tool's model is assumed — Strimzi's is one
-format of several. An anonymous caller never holds a grant, so the open
-deployment views everything and writes nothing. Every non-GET under `/api`
+`kaas-ui-auth/src/gate.rs`, and only when two gates agree — the target's
+`writes.allow` ceiling and a role. kaas-ui does not model Git ownership: a
+target whose state an operator or pipeline reconciles leaves the operations
+that would fight it out of its ceiling (a GitOps layer was built and removed
+as Strimzi's model in disguise — `docs/11-built.md`). An anonymous caller
+never holds a grant, so the open deployment views everything and writes
+nothing. Every non-GET under `/api`
 needs `X-Kaas-Ui: 1`, and the intent is audited *before* anything is sent —
 a write that cannot be recorded does not happen. If `Error::ReadOnly` ever
 reaches a user, kaas-ui built a request its own ceiling forbade: a 500, not a

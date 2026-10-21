@@ -37,35 +37,17 @@ pub struct ApiErrorBody {
     pub unsupported_api: Option<UnsupportedApiDetail>,
     /// Whether retrying is worth offering.
     pub retriable: bool,
-    /// On a refusal because Git owns the target: the change to make there.
-    ///
-    /// Boxed: three strings would more than double every error's size for a
-    /// field almost none of them carry.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub equivalent: Option<Box<kaas_ui_connect::Equivalent>>,
 }
 
 impl ApiError {
-    /// A write the gate refused: `403` for a missing grant or ceiling, `409`
-    /// when Git owns the target.
+    /// `403`: a write the gate refused, for a missing grant or ceiling.
     ///
     /// 403 and not 404, because reaching the gate means the target was already
     /// visible through its lookup — the id is no secret from this caller, and
-    /// "not allowed" is the honest answer. 409 because the caller may well be
-    /// allowed; it is Git that owns the thing, and the body carries the change
-    /// to make there.
-    pub fn denied(
-        denied: &kaas_ui_auth::Denied,
-        target: &kaas_ui_auth::Target,
-        equivalent: Option<kaas_ui_connect::Equivalent>,
-    ) -> Self {
-        let owned = matches!(denied, kaas_ui_auth::Denied::Owned(..));
+    /// "not allowed" is the honest answer.
+    pub fn denied(denied: &kaas_ui_auth::Denied, target: &kaas_ui_auth::Target) -> Self {
         Self {
-            status: if owned {
-                StatusCode::CONFLICT
-            } else {
-                StatusCode::FORBIDDEN
-            },
+            status: StatusCode::FORBIDDEN,
             body: ApiErrorBody {
                 message: denied.message(target),
                 kind: Some(ErrorKind::Authorization),
@@ -73,11 +55,6 @@ impl ApiError {
                 code_number: None,
                 unsupported_api: None,
                 retriable: false,
-                equivalent: if owned {
-                    equivalent.map(Box::new)
-                } else {
-                    None
-                },
             },
         }
     }
@@ -93,7 +70,6 @@ impl ApiError {
                 code_number: None,
                 unsupported_api: None,
                 retriable: false,
-                equivalent: None,
             },
         }
     }
@@ -114,7 +90,6 @@ impl ApiError {
                 code_number: None,
                 unsupported_api: None,
                 retriable: true,
-                equivalent: None,
             },
         }
     }
@@ -133,7 +108,6 @@ impl ApiError {
                 code_number: None,
                 unsupported_api: None,
                 retriable: false,
-                equivalent: None,
             },
         }
     }
@@ -149,7 +123,6 @@ impl ApiError {
                 code_number: None,
                 unsupported_api: None,
                 retriable: false,
-                equivalent: None,
             },
         }
     }
@@ -172,7 +145,6 @@ impl ApiError {
                 code_number: None,
                 unsupported_api: None,
                 retriable: false,
-                equivalent: None,
             },
         }
     }
@@ -191,7 +163,6 @@ impl ApiError {
                 code_number: None,
                 unsupported_api: None,
                 retriable: true,
-                equivalent: None,
             },
         }
     }
@@ -213,7 +184,6 @@ impl ApiError {
                 code_number: None,
                 unsupported_api: None,
                 retriable: true,
-                equivalent: None,
             },
         }
     }
@@ -230,7 +200,6 @@ impl ApiError {
                 code_number: None,
                 unsupported_api: None,
                 retriable: true,
-                equivalent: None,
             },
         }
     }
@@ -246,7 +215,6 @@ impl ApiError {
                 code_number: None,
                 unsupported_api: None,
                 retriable: false,
-                equivalent: None,
             },
         }
     }
@@ -270,7 +238,6 @@ impl ApiError {
                 code_number: None,
                 unsupported_api: None,
                 retriable: false,
-                equivalent: None,
             },
         }
     }
@@ -290,7 +257,6 @@ impl ApiError {
                 code_number: None,
                 unsupported_api: None,
                 retriable: true,
-                equivalent: None,
             },
         }
     }
@@ -306,7 +272,6 @@ impl ApiError {
                 code_number: None,
                 unsupported_api: None,
                 retriable: true,
-                equivalent: None,
             },
         }
     }
@@ -314,11 +279,6 @@ impl ApiError {
     /// The status, for tests and for the timing assertions in `xtask live`.
     pub fn status(&self) -> StatusCode {
         self.status
-    }
-
-    /// The body, for tests.
-    pub fn body(&self) -> &ApiErrorBody {
-        &self.body
     }
 }
 
@@ -345,7 +305,6 @@ impl From<Error> for ApiError {
                 code_number: code.map(|c| c.code()),
                 unsupported_api: UnsupportedApiDetail::of(&error),
                 retriable: error.retriable(),
-                equivalent: None,
             },
         }
     }
@@ -379,7 +338,6 @@ impl From<kaas_ui_connect::ConnectFault> for ApiError {
                 code_number: None,
                 unsupported_api: None,
                 retriable,
-                equivalent: None,
             },
         }
     }

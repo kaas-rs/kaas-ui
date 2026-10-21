@@ -4,9 +4,7 @@
 //!
 //! 1. **the lookup** — the Connect cluster as this caller may see it, or 404;
 //! 2. **the gate** — `Access::authorize` mints a `Grant` or names the gate
-//!    that refused: 403 for the ceiling, a role, or nobody signed in; 409 when
-//!    Git owns the connector and declares what this changes, with the change
-//!    to make in Git in the body;
+//!    that refused: 403 for the ceiling, a role, or nobody signed in;
 //! 3. **confirmation** — a destroy-tier write must carry the connector's name
 //!    in `confirm`, typed;
 //! 4. **the intent**, audited — a write that cannot be recorded is not sent;
@@ -25,8 +23,8 @@ use std::collections::BTreeMap;
 
 use axum::Json;
 use axum::extract::{Path, State};
-use kaas_ui_auth::{Change, Denied, Operation, Owned, Tier};
-use kaas_ui_connect::{ConnectFault, Detail, Equivalent, RedactedConfig, StoredOffset, Validation};
+use kaas_ui_auth::{Change, Denied, Operation, Tier};
+use kaas_ui_connect::{ConnectFault, RedactedConfig, StoredOffset, Validation};
 use kaas_ui_core::registry::ConnectHandle;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -47,8 +45,6 @@ pub struct WriteOption {
     pub refused_by: Option<Refusal>,
     /// The sentence a refusal renders.
     pub reason: Option<String>,
-    /// What this write would be in Git, or as a REST call.
-    pub equivalent: Equivalent,
 }
 
 /// Which gate refused a write.
@@ -61,8 +57,6 @@ pub enum Refusal {
     NotEnabled,
     /// No role of the caller's permits it.
     Forbidden,
-    /// Git owns the connector and declares what this changes.
-    Owned,
 }
 
 impl Refusal {
@@ -71,7 +65,6 @@ impl Refusal {
             Denied::Anonymous => Self::Anonymous,
             Denied::NotEnabled(_) => Self::NotEnabled,
             Denied::Forbidden(_) => Self::Forbidden,
-            Denied::Owned(..) => Self::Owned,
         }
     }
 }
@@ -81,63 +74,39 @@ fn option(
     handle: &ConnectHandle,
     target: &kaas_ui_auth::Target,
     operation: Operation,
-    owned: Option<&Owned>,
-    name: &str,
 ) -> WriteOption {
-    let checked = caller
-        .access()
-        .check(operation, target, handle.ceiling(), owned);
+    let checked = caller.access().check(operation, target, handle.ceiling());
     WriteOption {
         operation,
         tier: operation.tier(),
         allowed: checked.is_ok(),
         refused_by: checked.as_ref().err().map(Refusal::of),
         reason: checked.err().map(|denied| denied.message(target)),
-        equivalent: kaas_ui_connect::equivalent(
-            operation,
-            name,
-            handle.client().url(),
-            handle.format(),
-        ),
     }
 }
 
 /// The writes a connector page can offer: everything on the Connect cluster's
-/// ceiling but `create`, checked against this caller, each with its Git
-/// equivalent. Empty without a ceiling.
+/// ceiling but `create`, checked against this caller. Empty without a
+/// ceiling.
 pub(crate) fn write_options(
     state: &AppState,
     handle: &ConnectHandle,
     connector: &str,
     caller: &Caller,
-) -> (Vec<WriteOption>, Option<Owned>) {
-    let owned = handle.owned(connector);
+) -> Vec<WriteOption> {
     if handle.ceiling().is_empty() {
-        return (Vec::new(), owned);
+        return Vec::new();
     }
     let target = state.registry().connect_target(handle, Some(connector));
-    let options = Operation::ALL
+    Operation::ALL
         .into_iter()
         .filter(|operation| *operation != Operation::ConnectorCreate)
         .filter(|operation| handle.ceiling().contains(operation))
-        .map(|operation| {
-            option(
-                caller,
-                handle,
-                &target,
-                operation,
-                owned.as_ref(),
-                connector,
-            )
-        })
-        .collect();
-    (options, owned)
+        .map(|operation| option(caller, handle, &target, operation))
+        .collect()
 }
 
 /// Creating a connector on this Connect cluster, where the ceiling lists it.
-///
-/// Asked without a name — there is none yet — so ownership is decided at
-/// submit, against the name the caller chose.
 pub(crate) fn create_option(
     state: &AppState,
     handle: &ConnectHandle,
@@ -147,14 +116,7 @@ pub(crate) fn create_option(
         return None;
     }
     let target = state.registry().connect_target(handle, None);
-    Some(option(
-        caller,
-        handle,
-        &target,
-        Operation::ConnectorCreate,
-        None,
-        "<name>",
-    ))
+    Some(option(caller, handle, &target, Operation::ConnectorCreate))
 }
 
 /// What a write to an existing connector carries. Every field is optional;
@@ -210,8 +172,6 @@ pub struct WriteResult {
     pub operation: Operation,
     /// To which connector.
     pub connector: String,
-    /// What it would be in Git.
-    pub equivalent: Equivalent,
     /// For a dry run: what the plugin made of the config.
     pub validation: Option<Validation>,
     /// For an edit or a create: the config as sent, redacted.
@@ -254,7 +214,6 @@ fn operation_of(segment: &str) -> Option<Operation> {
         (status = 400, description = "Missing input, an unconfirmed destroy, or the worker refused the request as given", body = crate::error::ApiErrorBody),
         (status = 403, description = "Not enabled here, not permitted, or not signed in", body = crate::error::ApiErrorBody),
         (status = 404, description = "No such Connect cluster, connector or operation"),
-        (status = 409, description = "Git owns the connector and declares what this changes; the body carries the change to make there", body = crate::error::ApiErrorBody),
         (status = 502, description = "The workers refused or could not be reached"),
     ),
     tag = "connect",
@@ -315,9 +274,7 @@ pub async fn write_task(
 /// `POST /api/environments/{env}/connect-clusters/{connect}/connectors`
 ///
 /// Creates a connector — or, with `dryRun`, asks the plugin what it makes of
-/// the config. Ownership is decided against the chosen name: where Git owns
-/// it and declares which connectors exist, the create is refused with what
-/// to commit instead.
+/// the config.
 #[utoipa::path(
     post,
     path = "/api/environments/{env}/connect-clusters/{connect}/connectors",
@@ -331,7 +288,6 @@ pub async fn write_task(
         (status = 200, description = "Created and audited, or a dry run's verdict", body = WriteResult),
         (status = 400, description = "An unusable config, or the worker refused it", body = crate::error::ApiErrorBody),
         (status = 403, description = "Not enabled here, not permitted, or not signed in", body = crate::error::ApiErrorBody),
-        (status = 409, description = "Git owns that name; the body carries the resource to commit", body = crate::error::ApiErrorBody),
         (status = 502, description = "The workers refused or could not be reached"),
     ),
     tag = "connect",
@@ -379,29 +335,6 @@ async fn perform(
     let handle = state.connect_cluster(env, id, caller)?;
     let client = handle.client();
     let target = state.registry().connect_target(&handle, Some(name));
-    let owned = handle.owned(name);
-    let format = handle.format();
-
-    // What a refusal shows as the change to make in Git: the submitted
-    // config, redacted like a read, never as typed.
-    let submitted = match &request.config {
-        Some(config) => Some(client.redacted(config).await),
-        None => None,
-    };
-    let restart = (operation == Operation::ConnectorRestart)
-        .then_some((request.include_tasks, request.only_failed));
-    let refusal_equivalent = kaas_ui_connect::equivalent_with(
-        operation,
-        name,
-        client.url(),
-        format,
-        Detail {
-            task,
-            restart,
-            config: submitted.as_ref().map(|config| config.entries.as_slice()),
-            offsets: request.offsets.as_deref(),
-        },
-    );
 
     let grant = caller
         .access()
@@ -410,9 +343,8 @@ async fn perform(
             operation,
             target.clone(),
             handle.ceiling(),
-            owned.as_ref(),
         )
-        .map_err(|denied| ApiError::denied(&denied, &target, Some(refusal_equivalent.clone())))?;
+        .map_err(|denied| ApiError::denied(&denied, &target))?;
 
     if operation.tier() == Tier::Destroy && request.confirm.as_deref() != Some(name) {
         return Err(ApiError::bad_request(format!(
@@ -456,18 +388,6 @@ async fn perform(
         Some(prepared) => Some(writer.describe(prepared).await),
         None => None,
     };
-    let equivalent = kaas_ui_connect::equivalent_with(
-        operation,
-        name,
-        client.url(),
-        format,
-        Detail {
-            task,
-            restart,
-            config: described.as_ref().map(|config| config.entries.as_slice()),
-            offsets: request.offsets.as_deref(),
-        },
-    );
 
     if request.dry_run {
         let validation = match &prepared {
@@ -479,7 +399,6 @@ async fn perform(
             applied: false,
             operation,
             connector: name.to_owned(),
-            equivalent,
             validation,
             config: described,
         }));
@@ -544,7 +463,6 @@ async fn perform(
         applied: true,
         operation,
         connector: name.to_owned(),
-        equivalent,
         validation: None,
         config: described,
     }))
@@ -699,13 +617,7 @@ mod tests {
         (format!("http://{addr}"), worker)
     }
 
-    /// A Connect cluster whose `owned-*` connectors Git holds as
-    /// `KafkaConnector` resources — every aspect declared.
     fn state(url: &str, audit: Lines, allow: &str) -> AppState {
-        state_as(url, audit, allow, "strimzi_kafka_connector")
-    }
-
-    fn state_as(url: &str, audit: Lines, allow: &str, format: &str) -> AppState {
         let config = Config::from_yaml(&format!(
             r#"
 auth:
@@ -723,10 +635,6 @@ environments:
         kafka_cluster: strimzi
         writes:
           allow: {allow}
-          gitops:
-            owns_connectors: ["owned-*"]
-            source: k3s-cluster/apps/strimzi/kafka-connectors
-            format: {format}
 "#
         ))
         .unwrap();
@@ -854,11 +762,6 @@ environments:
             .unwrap_err();
         assert_eq!(not_enabled.status(), StatusCode::FORBIDDEN);
 
-        let owned = post(&state, "alice", "owned-a", "pause", WriteRequest::default())
-            .await
-            .unwrap_err();
-        assert_eq!(owned.status(), StatusCode::CONFLICT);
-
         let anonymous = write(
             State(state.clone()),
             Caller::new(
@@ -881,13 +784,6 @@ environments:
 
         assert!(worker.writes().is_empty(), "{:?}", worker.writes());
         assert!(audit.read().is_empty(), "a refused write leaves no intent");
-
-        // A restart of an owned connector is operate-tier and goes through.
-        assert!(
-            post(&state, "alice", "owned-a", "restart", restart_request())
-                .await
-                .is_ok()
-        );
     }
 
     #[tokio::test]
@@ -974,7 +870,7 @@ environments:
     }
 
     #[tokio::test]
-    async fn a_create_git_owns_is_refused_with_the_resource_to_commit() {
+    async fn a_create_needs_create_on_the_connect_cluster_and_reaches_the_worker() {
         let (url, worker) = worker().await;
         let state = state(&url, Lines::default(), EVERYTHING);
         let request = |name: &str| CreateRequest {
@@ -986,15 +882,15 @@ environments:
             dry_run: false,
         };
 
-        let owned = create(
+        let viewer = create(
             State(state.clone()),
-            caller(&state, "alice"),
+            caller(&state, "bob"),
             Path(("dev".into(), "connect".into())),
-            Json(request("owned-new")),
+            Json(request("fresh")),
         )
         .await
         .unwrap_err();
-        assert_eq!(owned.status(), StatusCode::CONFLICT);
+        assert_eq!(viewer.status(), StatusCode::FORBIDDEN);
         assert!(worker.writes().is_empty());
 
         let Json(created) = create(
@@ -1006,8 +902,6 @@ environments:
         .await
         .unwrap();
         assert!(created.applied);
-        assert!(created.equivalent.text.contains("kind: KafkaConnector"));
-        assert!(created.equivalent.text.contains("tasksMax: 2"));
         let sent = worker.writes();
         assert_eq!(sent.last().unwrap().line, "POST /connectors");
         assert!(sent.last().unwrap().body.contains(r#""name":"fresh""#));
@@ -1089,7 +983,7 @@ environments:
         )
         .await
         .unwrap();
-        assert!(task.equivalent.text.contains("strimzi.io/restart-task=3"));
+        assert_eq!(task.operation, Operation::ConnectorRestartTask);
         let _reset = post(
             &state,
             "alice",
@@ -1127,7 +1021,7 @@ environments:
     }
 
     #[tokio::test]
-    async fn the_pages_offer_what_the_caller_may_do_and_say_what_git_owns() {
+    async fn the_pages_offer_what_the_ceiling_lists_and_say_what_the_caller_may_do() {
         let (url, _) = worker().await;
         let state = state(
             &url,
@@ -1138,12 +1032,14 @@ environments:
             .connect_cluster("dev", "connect", &caller(&state, "alice"))
             .unwrap();
 
-        let (alice, _) = write_options(&state, &handle, "owned-a", &caller(&state, "alice"));
-        let find = |operation| alice.iter().find(|o| o.operation == operation).unwrap();
-        assert!(find(Operation::ConnectorRestart).allowed);
-        let pause = find(Operation::ConnectorPause);
-        assert_eq!(pause.refused_by, Some(Refusal::Owned));
-        assert!(pause.equivalent.text.contains("state: paused"));
+        let alice = write_options(&state, &handle, "gtfs", &caller(&state, "alice"));
+        assert_eq!(alice.len(), 2, "restart and pause: create is the cluster's");
+        assert!(alice.iter().all(|option| option.allowed));
+        let bob = write_options(&state, &handle, "gtfs", &caller(&state, "bob"));
+        assert!(
+            bob.iter()
+                .all(|option| option.refused_by == Some(Refusal::Forbidden))
+        );
         // Only what the ceiling lists is offered; create is the cluster's.
         assert!(
             !alice
@@ -1160,67 +1056,5 @@ environments:
         assert!(create.allowed);
         let bob = create_option(&state, &handle, &caller(&state, "bob")).unwrap();
         assert_eq!(bob.refused_by, Some(Refusal::Forbidden));
-    }
-
-    #[tokio::test]
-    async fn connector_files_in_git_refuse_an_edit_and_leave_running_state_to_the_ui() {
-        let (url, worker) = worker().await;
-        let state = state_as(&url, Lines::default(), EVERYTHING, "connector_json");
-
-        // Git holds the file, not whether it is paused: the pause goes through.
-        assert!(
-            post(&state, "alice", "owned-a", "pause", WriteRequest::default())
-                .await
-                .is_ok()
-        );
-        assert_eq!(
-            worker.writes().last().unwrap().line,
-            "PUT /connectors/owned-a/pause"
-        );
-
-        // An edit is the file's to make: 409, and the file is the change.
-        let refused = post(
-            &state,
-            "alice",
-            "owned-a",
-            "edit",
-            WriteRequest {
-                config: Some(
-                    [("connector.class", "io.x.Mqtt"), ("tasks.max", "4")]
-                        .into_iter()
-                        .map(|(k, v)| (k.to_owned(), v.to_owned()))
-                        .collect(),
-                ),
-                ..WriteRequest::default()
-            },
-        )
-        .await
-        .unwrap_err();
-        assert_eq!(refused.status(), StatusCode::CONFLICT);
-        let body = serde_json::to_value(refused.body()).unwrap();
-        assert!(
-            body["message"]
-                .as_str()
-                .unwrap()
-                .contains("declares its config"),
-            "{body}"
-        );
-        let file: serde_json::Value =
-            serde_json::from_str(body["equivalent"]["text"].as_str().unwrap()).unwrap();
-        assert_eq!(file["name"], "owned-a");
-        assert_eq!(file["config"]["tasks.max"], "4");
-        assert_eq!(worker.writes().len(), 1, "the edit reached nothing");
-
-        let handle = state
-            .connect_cluster("dev", "connect", &caller(&state, "alice"))
-            .unwrap();
-        let (_, owned) = write_options(&state, &handle, "owned-a", &caller(&state, "alice"));
-        assert_eq!(
-            owned.unwrap().declares,
-            [
-                kaas_ui_auth::Aspect::Config,
-                kaas_ui_auth::Aspect::Existence
-            ]
-        );
     }
 }

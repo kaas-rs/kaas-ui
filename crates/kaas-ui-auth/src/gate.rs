@@ -1,18 +1,13 @@
 //! The write gate: the only place a [`Grant`] is made.
 //!
-//! A write happens when three things agree, each configured somewhere
-//! different so no single mistake opens all of them:
+//! A write happens when two things agree, each configured somewhere
+//! different so no single mistake opens both:
 //!
 //! * **the ceiling** — which operations the target's `writes.allow` admits at
 //!   all. Absent, there is nothing to agree with and no grant exists;
 //! * **a role** — which callers may perform the operation on which named
 //!   things, asked with [`Access::role_permits`] so the open deployment's
-//!   anonymous administrator holds nothing here;
-//! * **ownership** — whether Git owns the named thing, and which of its
-//!   [`Aspect`]s Git declares. A write that changes a declared aspect is
-//!   refused, whatever applies Git — an operator, a pipeline, a person with
-//!   `curl` — would put it back; one that changes none of them (a restart) is
-//!   allowed.
+//!   anonymous administrator holds nothing here.
 //!
 //! [`Grant`] has a private field, so this module is the only place one can be
 //! constructed, and every mutating client method in the workspace takes one.
@@ -74,7 +69,7 @@ pub enum Operation {
 }
 
 /// How much a write can cost, which decides how much confirmation it asks
-/// for — never authorization, and never ownership: that is [`Aspect`]'s.
+/// for — never authorization.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum Tier {
@@ -84,47 +79,6 @@ pub enum Tier {
     Edit,
     /// Loses data or position. The thing's name, typed.
     Destroy,
-}
-
-/// One part of a connector that Git can declare.
-///
-/// The GitOps rule is per aspect because the tools that keep connectors in
-/// Git do not agree on what they keep. A `KafkaConnector` resource declares
-/// all four; a directory of connector JSON files applied by a pipeline
-/// declares the config and which connectors exist, and has no opinion on
-/// whether one is paused. A write is refused on an owned connector when it
-/// changes an aspect that connector's Git declares, so each deployment says
-/// which — `writes.gitops.declares` — instead of kaas-ui assuming one tool's
-/// model.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize, ToSchema,
-)]
-#[serde(rename_all = "snake_case")]
-pub enum Aspect {
-    /// The connector's config.
-    Config,
-    /// Whether the connector exists at all.
-    Existence,
-    /// Whether it is running, paused or stopped.
-    State,
-    /// Its stored source offsets or consumer position.
-    Offsets,
-}
-
-impl Aspect {
-    /// Every aspect: what Git declares when nothing narrower is said.
-    pub const ALL: [Self; 4] = [Self::Config, Self::Existence, Self::State, Self::Offsets];
-
-    /// The name, as config spells it.
-    #[must_use]
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Config => "config",
-            Self::Existence => "existence",
-            Self::State => "state",
-            Self::Offsets => "offsets",
-        }
-    }
 }
 
 impl Operation {
@@ -162,26 +116,6 @@ impl Operation {
             Self::ConnectorDelete | Self::ConnectorResetOffsets | Self::ConnectorAlterOffsets => {
                 Tier::Destroy
             }
-        }
-    }
-
-    /// The aspect of a connector this changes, if any.
-    ///
-    /// A restart changes none: Git cannot declare that a task was restarted,
-    /// so no ownership refuses one. Nor can it declare which topics a
-    /// connector has been *seen* using — the history `reset_topics` clears.
-    #[must_use]
-    pub fn changes(self) -> Option<Aspect> {
-        match self {
-            Self::ConnectorRestart | Self::ConnectorRestartTask | Self::ConnectorResetTopics => {
-                None
-            }
-            Self::ConnectorPause | Self::ConnectorResume | Self::ConnectorStop => {
-                Some(Aspect::State)
-            }
-            Self::ConnectorEdit => Some(Aspect::Config),
-            Self::ConnectorCreate | Self::ConnectorDelete => Some(Aspect::Existence),
-            Self::ConnectorResetOffsets | Self::ConnectorAlterOffsets => Some(Aspect::Offsets),
         }
     }
 
@@ -243,35 +177,6 @@ pub struct Target {
     pub name: Option<String>,
 }
 
-/// Who owns a named thing in Git, when somebody does, and how much of it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct Owned {
-    /// Where it lives, as configured — a repository path, for a link.
-    pub source: Option<String>,
-    /// What Git declares of it. A write changing any of these is refused.
-    pub declares: Vec<Aspect>,
-}
-
-impl Owned {
-    /// Owned entirely: every aspect declared.
-    #[must_use]
-    pub fn entirely(source: Option<String>) -> Self {
-        Self {
-            source,
-            declares: Aspect::ALL.to_vec(),
-        }
-    }
-
-    /// The declared aspect `operation` would change, if it changes one.
-    #[must_use]
-    pub fn refuses(&self, operation: Operation) -> Option<Aspect> {
-        operation
-            .changes()
-            .filter(|aspect| self.declares.contains(aspect))
-    }
-}
-
 /// Why a write was refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Denied {
@@ -282,8 +187,6 @@ pub enum Denied {
     NotEnabled(Operation),
     /// No role of the caller's permits it on this target.
     Forbidden(Operation),
-    /// Git owns the named thing and declares the aspect this changes.
-    Owned(Operation, Aspect, Owned),
 }
 
 impl Denied {
@@ -306,17 +209,6 @@ impl Denied {
                 op.permission().1,
                 op.permission().0,
                 target.cluster
-            ),
-            Self::Owned(op, aspect, owned) => format!(
-                "{what:?} is managed in Git{}, which declares its {}: make {} there — whatever \
-                 applies Git would put back a change made here",
-                owned
-                    .source
-                    .as_deref()
-                    .map(|source| format!(" ({source})"))
-                    .unwrap_or_default(),
-                aspect.name(),
-                op.name()
             ),
         }
     }
@@ -390,7 +282,6 @@ impl Access {
         operation: Operation,
         target: &Target,
         ceiling: &[Operation],
-        owned: Option<&Owned>,
     ) -> Result<(), Denied> {
         if self.is_administrator() {
             return Err(Denied::Anonymous);
@@ -408,11 +299,6 @@ impl Access {
         if !self.role_permits(&target.cluster, &target.labels, resource, action, named) {
             return Err(Denied::Forbidden(operation));
         }
-        if let Some(owned) = owned
-            && let Some(aspect) = owned.refuses(operation)
-        {
-            return Err(Denied::Owned(operation, aspect, owned.clone()));
-        }
         Ok(())
     }
 
@@ -425,12 +311,11 @@ impl Access {
         operation: Operation,
         target: Target,
         ceiling: &[Operation],
-        owned: Option<&Owned>,
     ) -> Result<Grant, Denied> {
         if !who.is_authenticated() {
             return Err(Denied::Anonymous);
         }
-        self.check(operation, &target, ceiling, owned)?;
+        self.check(operation, &target, ceiling)?;
         Ok(Grant {
             operation,
             target,
@@ -490,31 +375,19 @@ mod tests {
         let access = Policy::open().access(&anonymous);
         assert!(access.is_administrator());
         let refused = access
-            .authorize(
-                &anonymous,
-                Operation::ConnectorRestart,
-                target("x"),
-                ALL,
-                None,
-            )
+            .authorize(&anonymous, Operation::ConnectorRestart, target("x"), ALL)
             .unwrap_err();
         assert_eq!(refused, Denied::Anonymous);
     }
 
     #[test]
-    fn all_three_gates_must_agree() {
+    fn both_gates_must_agree() {
         let alice = Principal::new("alice");
         let access = operator("gtfs-*").access(&alice);
 
-        // Ceiling, role and ownership all agree.
+        // Ceiling and role agree.
         let grant = access
-            .authorize(
-                &alice,
-                Operation::ConnectorRestart,
-                target("gtfs-a"),
-                ALL,
-                None,
-            )
+            .authorize(&alice, Operation::ConnectorRestart, target("gtfs-a"), ALL)
             .unwrap();
         assert_eq!(grant.operation(), Operation::ConnectorRestart);
         assert_eq!(grant.roles(), ["oncall"]);
@@ -522,94 +395,17 @@ mod tests {
         // The ceiling does not list it.
         assert_eq!(
             access
-                .authorize(
-                    &alice,
-                    Operation::ConnectorRestart,
-                    target("gtfs-a"),
-                    &[],
-                    None
-                )
+                .authorize(&alice, Operation::ConnectorRestart, target("gtfs-a"), &[],)
                 .unwrap_err(),
             Denied::NotEnabled(Operation::ConnectorRestart)
         );
         // The role's pattern does not cover the name.
         assert_eq!(
             access
-                .authorize(
-                    &alice,
-                    Operation::ConnectorRestart,
-                    target("mqtt"),
-                    ALL,
-                    None
-                )
+                .authorize(&alice, Operation::ConnectorRestart, target("mqtt"), ALL,)
                 .unwrap_err(),
             Denied::Forbidden(Operation::ConnectorRestart)
         );
-    }
-
-    #[test]
-    fn git_ownership_refuses_what_git_declares_and_permits_the_rest() {
-        let alice = Principal::new("alice");
-        let access = operator("*").access(&alice);
-        let entirely = Owned::entirely(Some("k3s-cluster/apps/strimzi".into()));
-        assert!(
-            access
-                .authorize(
-                    &alice,
-                    Operation::ConnectorRestart,
-                    target("a"),
-                    ALL,
-                    Some(&entirely)
-                )
-                .is_ok(),
-            "Git cannot declare a restart"
-        );
-        assert!(matches!(
-            access
-                .authorize(
-                    &alice,
-                    Operation::ConnectorPause,
-                    target("a"),
-                    ALL,
-                    Some(&entirely)
-                )
-                .unwrap_err(),
-            Denied::Owned(Operation::ConnectorPause, Aspect::State, _)
-        ));
-
-        // Connector files applied by a pipeline: config and existence are in
-        // Git, running state is not — so a pause is the UI's to make.
-        let files = Owned {
-            source: None,
-            declares: vec![Aspect::Config, Aspect::Existence],
-        };
-        assert!(
-            access
-                .check(Operation::ConnectorPause, &target("a"), ALL, Some(&files))
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn every_operation_changes_at_most_one_aspect_and_restarts_change_none() {
-        for operation in Operation::ALL {
-            let restart = matches!(
-                operation,
-                Operation::ConnectorRestart
-                    | Operation::ConnectorRestartTask
-                    | Operation::ConnectorResetTopics
-            );
-            assert_eq!(operation.changes().is_none(), restart, "{operation:?}");
-        }
-        // And no aspect is declared by nothing: each one some operation changes.
-        for aspect in Aspect::ALL {
-            assert!(
-                Operation::ALL
-                    .iter()
-                    .any(|operation| operation.changes() == Some(aspect)),
-                "{aspect:?}"
-            );
-        }
     }
 
     #[test]
@@ -621,7 +417,7 @@ mod tests {
         // role is an admin role.
         assert!(
             access
-                .check(Operation::ConnectorStop, &target("a"), ALL, None)
+                .check(Operation::ConnectorStop, &target("a"), ALL)
                 .is_ok()
         );
 
@@ -639,7 +435,7 @@ mod tests {
         .access(&alice);
         assert_eq!(
             viewer
-                .check(Operation::ConnectorRestart, &target("a"), ALL, None)
+                .check(Operation::ConnectorRestart, &target("a"), ALL)
                 .unwrap_err(),
             Denied::Forbidden(Operation::ConnectorRestart)
         );
@@ -666,17 +462,17 @@ mod tests {
         let editor = role(Resource::Connector, None, Action::Edit);
         assert!(
             editor
-                .check(Operation::ConnectorEdit, &target("a"), ALL, None)
+                .check(Operation::ConnectorEdit, &target("a"), ALL)
                 .is_ok()
         );
         assert!(
             editor
-                .check(Operation::ConnectorDelete, &target("a"), ALL, None)
+                .check(Operation::ConnectorDelete, &target("a"), ALL)
                 .is_err()
         );
         assert!(
             editor
-                .check(Operation::ConnectorRestart, &target("a"), ALL, None)
+                .check(Operation::ConnectorRestart, &target("a"), ALL)
                 .is_err()
         );
 
@@ -685,7 +481,7 @@ mod tests {
             Operation::ConnectorResetOffsets,
             Operation::ConnectorAlterOffsets,
         ] {
-            assert!(resetter.check(operation, &target("a"), ALL, None).is_ok());
+            assert!(resetter.check(operation, &target("a"), ALL).is_ok());
         }
 
         // `create` is granted on the Connect cluster, matched by its id —
@@ -693,43 +489,15 @@ mod tests {
         let creator = role(Resource::Connect, Some("conn*"), Action::Create);
         assert!(
             creator
-                .check(Operation::ConnectorCreate, &target("new"), ALL, None)
+                .check(Operation::ConnectorCreate, &target("new"), ALL)
                 .is_ok()
         );
         let elsewhere = role(Resource::Connect, Some("mm2"), Action::Create);
         assert!(
             elsewhere
-                .check(Operation::ConnectorCreate, &target("new"), ALL, None)
+                .check(Operation::ConnectorCreate, &target("new"), ALL)
                 .is_err()
         );
-    }
-
-    #[test]
-    fn owned_entirely_refuses_edit_delete_and_offsets_and_allows_restarts() {
-        let alice = Principal::new("alice");
-        let access =
-            Policy::enforcing(vec![Role::admin("admin", vec!["alice".into()])]).access(&alice);
-        let owned = Owned::entirely(None);
-        for operation in [
-            Operation::ConnectorDelete,
-            Operation::ConnectorResetOffsets,
-            Operation::ConnectorEdit,
-        ] {
-            assert!(matches!(
-                access.check(operation, &target("a"), ALL, Some(&owned)),
-                Err(Denied::Owned(..))
-            ));
-        }
-        for operation in [
-            Operation::ConnectorRestartTask,
-            Operation::ConnectorResetTopics,
-        ] {
-            assert!(
-                access
-                    .check(operation, &target("a"), ALL, Some(&owned))
-                    .is_ok()
-            );
-        }
     }
 
     #[test]

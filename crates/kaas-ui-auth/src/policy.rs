@@ -517,14 +517,6 @@ impl Access {
     }
 }
 
-/// The pattern language roles use, for other places that match names the
-/// same way — GitOps ownership patterns, so `gtfs-*` means one thing
-/// everywhere in a config file.
-#[must_use]
-pub fn glob(pattern: &str, value: &str) -> bool {
-    matches(pattern, value)
-}
-
 /// Glob matching, with `*` as the only wildcard.
 ///
 /// Hand-written rather than pulled in: the pattern language is one character

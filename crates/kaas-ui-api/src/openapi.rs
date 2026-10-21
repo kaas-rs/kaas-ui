@@ -15,9 +15,9 @@ use utoipa::OpenApi;
     info(
         title = "kaas-ui",
         description = "A multi-cluster Kafka UI, read-only by default. Every data route \
-                       is a GET; the few writes (tag `connect`) pass three gates — the \
-                       target's configured ceiling, a role, and Git ownership — and are \
-                       audited before they are sent.",
+                       is a GET; the few writes (tag `connect`) pass two gates — the \
+                       target's configured ceiling and a role — and are audited before \
+                       they are sent.",
         license(name = "Apache-2.0"),
     ),
     paths(
@@ -105,9 +105,7 @@ use utoipa::OpenApi;
         kaas_ui_connect::Validation,
         kaas_ui_connect::ValidationError,
         kaas_ui_auth::Operation,
-        kaas_ui_auth::Owned,
         kaas_ui_auth::Tier,
-        kaas_ui_connect::Equivalent,
         kaas_ui_core::dto::ConnectClusterCard,
         kaas_ui_connect::ConnectorConfigEntry,
         kaas_ui_connect::ConnectStatus,

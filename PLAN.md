@@ -29,12 +29,13 @@ actually is — without ever knowing what version anything is.
 ## 1. Read-only is the architecture, not a setting
 
 > **Amended 2026-10-21: read-only *by default*.** The reason for read-only was
-> never that writing is wrong; it was that state belongs in Git and a UI that
-> writes is a second source of truth. That argument holds for declared state
-> and fails for acts that are not state — a restart, an offset reset during an
-> incident. So writing exists now, behind three gates (a per-target ceiling,
-> a role, Git ownership), each target defaulting to none of it, and an
-> anonymous caller never writes. The construction-site property below
+> never that writing is wrong; it was that a UI that writes can become a
+> second source of truth. Whether it does depends on the deployment — what
+> Git or an operator reconciles — and that is the deployment's to say. So
+> writing exists now, behind two gates (a per-target ceiling and a role),
+> each target defaulting to none of it, and an anonymous caller never writes;
+> a target whose state something else owns leaves out of its ceiling what
+> would fight it. kaas-ui does not model Git ownership. The construction-site property below
 > survives unchanged in shape: a write is impossible to build without a
 > `Grant`, and only the gate mints one. The design is
 > [`docs/13-phase-10-administration.md`](docs/13-phase-10-administration.md);

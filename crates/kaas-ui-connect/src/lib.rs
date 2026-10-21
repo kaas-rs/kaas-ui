@@ -28,7 +28,6 @@
 
 pub mod client;
 pub mod fault;
-pub mod manifest;
 pub mod model;
 pub mod redact;
 pub mod settings;
@@ -37,7 +36,6 @@ pub mod writer;
 
 pub use client::{ConnectClient, ConnectError, ConnectHealth, ConnectStatus};
 pub use fault::ConnectFault;
-pub use manifest::{Detail, Equivalent, Format, equivalent, equivalent_with};
 pub use model::{
     ConnectorDetail, ConnectorStatus, ConnectorSummary, ConnectorType, MirrorKind, MirrorRole,
     Plugin, RedactedConfig, ReplicationPolicy, ServerInfo, StoredOffset, TaskConfig, TaskStatus,

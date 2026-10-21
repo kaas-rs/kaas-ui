@@ -23,7 +23,7 @@ use std::time::{Duration, SystemTime};
 
 use arc_swap::{ArcSwap, ArcSwapOption};
 use kaas_ui_auth::Access;
-use kaas_ui_connect::{ConnectClient, Format};
+use kaas_ui_connect::ConnectClient;
 use kaas_ui_serde::{Codec, RegistryHandle};
 use kafka_admin::{Admin, ClusterConfig};
 use kafka_conn::{
@@ -32,8 +32,8 @@ use kafka_conn::{
 use tokio::sync::Notify;
 
 use crate::config::{
-    ClusterEntry, Config, ConfigError, ConnectClusterEntry, EnvironmentEntry, GitopsConfig,
-    PasswordCredentials, ResourceEntry, SaslSettings, WritesConfig, secret_from_env, secret_var,
+    ClusterEntry, Config, ConfigError, ConnectClusterEntry, EnvironmentEntry, PasswordCredentials,
+    ResourceEntry, SaslSettings, WritesConfig, secret_from_env, secret_var,
 };
 use crate::error::ErrorKind;
 use crate::federated::{FederatedOauth, FederatedTokenProvider};
@@ -515,16 +515,10 @@ pub struct ConnectHandle {
     client: ConnectClient,
     /// The ceiling: what kaas-ui may change here. `None` is nothing.
     writes: Option<WritesConfig>,
-    /// The connectors the ownership file says Git owns.
-    owned_names: Vec<String>,
 }
 
 impl ConnectHandle {
-    fn new(
-        environment: &str,
-        entry: &ConnectClusterEntry,
-        owned_names: Vec<String>,
-    ) -> Result<Self, ConfigError> {
+    fn new(environment: &str, entry: &ConnectClusterEntry) -> Result<Self, ConfigError> {
         let settings = entry.to_settings(environment)?;
         let client =
             ConnectClient::new(settings).map_err(|e| ConfigError::Invalid(e.to_string()))?;
@@ -533,7 +527,6 @@ impl ConnectHandle {
             kafka_cluster: entry.kafka_cluster.clone(),
             client,
             writes: entry.writes.clone(),
-            owned_names,
         })
     }
 
@@ -542,36 +535,6 @@ impl ConnectHandle {
         self.writes
             .as_ref()
             .map(|writes| writes.allow.as_slice())
-            .unwrap_or_default()
-    }
-
-    /// Whether Git owns a connector, by the ownership file or a pattern, and
-    /// what of it Git declares.
-    pub fn owned(&self, connector: &str) -> Option<kaas_ui_auth::Owned> {
-        let gitops = self.writes.as_ref().and_then(|w| w.gitops.as_ref());
-        let by_pattern = gitops.is_some_and(|gitops| {
-            gitops
-                .owns_connectors
-                .iter()
-                .any(|pattern| kaas_ui_auth::glob(pattern, connector))
-        });
-        let by_file = self.owned_names.iter().any(|name| name == connector);
-        (by_pattern || by_file).then(|| kaas_ui_auth::Owned {
-            source: gitops.and_then(|gitops| gitops.source.clone()),
-            declares: gitops.map_or_else(
-                || Format::default().declares().to_vec(),
-                GitopsConfig::declared,
-            ),
-        })
-    }
-
-    /// How Git holds this Connect cluster's connectors, which is how a
-    /// write's equivalent is rendered here.
-    pub fn format(&self) -> Format {
-        self.writes
-            .as_ref()
-            .and_then(|w| w.gitops.as_ref())
-            .map(|gitops| gitops.format)
             .unwrap_or_default()
     }
 
@@ -1049,24 +1012,15 @@ fn build_connects(
     for (environment, entry) in config.connect_clusters() {
         let key = (environment.to_owned(), entry.id.clone());
         let settings = entry.to_settings(environment)?;
-        let owned_names = config
-            .ownership
-            .get(&format!("{environment}/{}", entry.id))
-            .map(|owned| owned.connectors.clone())
-            .unwrap_or_default();
         if let Some(handle) = existing.get(&key)
             && *handle.client.settings() == settings
             && handle.kafka_cluster == entry.kafka_cluster
             && handle.writes == entry.writes
-            && handle.owned_names == owned_names
         {
             connects.insert(key, Arc::clone(handle));
             continue;
         }
-        connects.insert(
-            key,
-            Arc::new(ConnectHandle::new(environment, entry, owned_names)?),
-        );
+        connects.insert(key, Arc::new(ConnectHandle::new(environment, entry)?));
     }
     Ok(connects)
 }

@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "kaas-ui",
-    "description": "A multi-cluster Kafka UI, read-only by default. Every data route is a GET; the few writes (tag `connect`) pass three gates — the target's configured ceiling, a role, and Git ownership — and are audited before they are sent.",
+    "description": "A multi-cluster Kafka UI, read-only by default. Every data route is a GET; the few writes (tag `connect`) pass two gates — the target's configured ceiling and a role — and are audited before they are sent.",
     "license": {
       "name": "Apache-2.0"
     },
@@ -1827,7 +1827,7 @@
           "connect"
         ],
         "summary": "`POST /api/environments/{env}/connect-clusters/{connect}/connectors`",
-        "description": "Creates a connector — or, with `dryRun`, asks the plugin what it makes of\nthe config. Ownership is decided against the chosen name: where Git owns\nit and declares which connectors exist, the create is refused with what\nto commit instead.",
+        "description": "Creates a connector — or, with `dryRun`, asks the plugin what it makes of\nthe config.",
         "operationId": "create",
         "parameters": [
           {
@@ -1891,16 +1891,6 @@
           },
           "403": {
             "description": "Not enabled here, not permitted, or not signed in",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Git owns that name; the body carries the resource to commit",
             "content": {
               "application/json": {
                 "schema": {
@@ -2164,16 +2154,6 @@
           },
           "404": {
             "description": "No such Connect cluster, connector or operation"
-          },
-          "409": {
-            "description": "Git owns the connector and declares what this changes; the body carries the change to make there",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
           },
           "502": {
             "description": "The workers refused or could not be reached"
@@ -2803,17 +2783,6 @@
             "format": "int32",
             "description": "Its number, which survives when the name does not."
           },
-          "equivalent": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/Equivalent",
-                "description": "On a refusal because Git owns the target: the change to make there.\n\nBoxed: three strings would more than double every error's size for a\nfield almost none of them carry."
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "kind": {
             "oneOf": [
               {
@@ -2899,16 +2868,6 @@
             "description": "This build's range."
           }
         }
-      },
-      "Aspect": {
-        "type": "string",
-        "description": "One part of a connector that Git can declare.\n\nThe GitOps rule is per aspect because the tools that keep connectors in\nGit do not agree on what they keep. A `KafkaConnector` resource declares\nall four; a directory of connector JSON files applied by a pipeline\ndeclares the config and which connectors exist, and has no opinion on\nwhether one is paused. A write is refused on an owned connector when it\nchanges an aspect that connector's Git declares, so each deployment says\nwhich — `writes.gitops.declares` — instead of kaas-ui assuming one tool's\nmodel.",
-        "enum": [
-          "config",
-          "existence",
-          "state",
-          "offsets"
-        ]
       },
       "Assumptions": {
         "type": "object",
@@ -3930,17 +3889,6 @@
             },
             "description": "What could not be read for any other reason, by name."
           },
-          "managedInGit": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/Owned",
-                "description": "Set when Git owns this connector."
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "offsets": {
             "type": [
               "array",
@@ -3980,7 +3928,7 @@
             "items": {
               "$ref": "#/components/schemas/WriteOption"
             },
-            "description": "Every write this connector could take, whether this caller may, and\nwhat each would be in Git. Empty where the Connect cluster has no\n`writes:` ceiling — the read-only default renders no write UI at all."
+            "description": "Every write this connector could take, and whether this caller may.\nEmpty where the Connect cluster has no `writes:` ceiling — the\nread-only default renders no write UI at all."
           }
         }
       },
@@ -6293,29 +6241,6 @@
           }
         }
       },
-      "Equivalent": {
-        "type": "object",
-        "description": "One write's equivalent.",
-        "required": [
-          "language",
-          "text",
-          "note"
-        ],
-        "properties": {
-          "language": {
-            "type": "string",
-            "description": "What kind of text this is: `yaml` or `json` for a file, `shell` for a\ncommand."
-          },
-          "note": {
-            "type": "string",
-            "description": "One line saying where it goes."
-          },
-          "text": {
-            "type": "string",
-            "description": "The text."
-          }
-        }
-      },
       "ErrorKind": {
         "type": "string",
         "description": "The error taxonomy as the frontend sees it.\n\nA projection of [`kafka_conn::Error`]'s variants, not a re-listing: the\nfrontend renders a transport failure and a closed connection identically,\nso they share a kind.",
@@ -7943,29 +7868,6 @@
           "connector.alter_offsets"
         ]
       },
-      "Owned": {
-        "type": "object",
-        "description": "Who owns a named thing in Git, when somebody does, and how much of it.",
-        "required": [
-          "declares"
-        ],
-        "properties": {
-          "declares": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Aspect"
-            },
-            "description": "What Git declares of it. A write changing any of these is refused."
-          },
-          "source": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Where it lives, as configured — a repository path, for a link."
-          }
-        }
-      },
       "Partition": {
         "type": "object",
         "description": "One partition.",
@@ -8535,8 +8437,7 @@
         "enum": [
           "anonymous",
           "notEnabled",
-          "forbidden",
-          "owned"
+          "forbidden"
         ]
       },
       "RegistryCard": {
@@ -9711,7 +9612,7 @@
       },
       "Tier": {
         "type": "string",
-        "description": "How much a write can cost, which decides how much confirmation it asks\nfor — never authorization, and never ownership: that is [`Aspect`]'s.",
+        "description": "How much a write can cost, which decides how much confirmation it asks\nfor — never authorization.",
         "enum": [
           "operate",
           "edit",
@@ -10302,17 +10203,12 @@
         "required": [
           "operation",
           "tier",
-          "allowed",
-          "equivalent"
+          "allowed"
         ],
         "properties": {
           "allowed": {
             "type": "boolean",
             "description": "Whether every gate agrees for this caller now."
-          },
-          "equivalent": {
-            "$ref": "#/components/schemas/Equivalent",
-            "description": "What this write would be in Git, or as a REST call."
           },
           "operation": {
             "$ref": "#/components/schemas/Operation",
@@ -10397,8 +10293,7 @@
         "required": [
           "applied",
           "operation",
-          "connector",
-          "equivalent"
+          "connector"
         ],
         "properties": {
           "applied": {
@@ -10426,10 +10321,6 @@
           "connector": {
             "type": "string",
             "description": "To which connector."
-          },
-          "equivalent": {
-            "$ref": "#/components/schemas/Equivalent",
-            "description": "What it would be in Git."
           },
           "operation": {
             "$ref": "#/components/schemas/Operation",

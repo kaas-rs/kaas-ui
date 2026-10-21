@@ -54,8 +54,8 @@ pub mod oidc;
 pub mod policy;
 
 pub use audit::{Audit, AuditError, Change, Kind, Phase, Read};
-pub use gate::{Aspect, Denied, Grant, Operation, Owned, Target, Tier};
+pub use gate::{Denied, Grant, Operation, Target, Tier};
 pub use identity::Principal;
 pub use oidc::{Connector, OidcConfig, OidcError, Pending, Provider};
 pub use policy::Action;
-pub use policy::{Access, Permission, Policy, Resource, Role, glob};
+pub use policy::{Access, Permission, Policy, Resource, Role};

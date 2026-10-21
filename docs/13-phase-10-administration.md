@@ -10,36 +10,34 @@ messages, schemas, connectors — when, and only when, configuration and a role
 both say so. A deployment that says nothing is exactly as read-only as today,
 by construction, not by a flag a handler checks.
 
-## GitOps first, not GitOps only
+## Read-only by default, writable by grant
 
-Read-only was never the point. The point was that state belongs in Git and a
-UI that writes is a second source of truth that drifts. That argument holds
-for **declared state** — a topic's partitions, a connector's config, an ACL —
-and fails for things that are not state at all: restarting a failed task,
-resetting a stuck group's offsets during an incident, deleting a poison record.
-Nobody puts "restart task 0" in a pull request.
-
-So the design does three things rather than one:
+Read-only was never the point. The point was that a UI that writes can become
+a second source of truth. Whether it does depends on the deployment — some
+clusters' topics and connectors are reconciled from Git, some are not — and
+that is the deployment's knowledge, not kaas-ui's. So:
 
 1. **Read-only stays the default at every layer.** No config, no role, no
    write — and no anonymous write, ever.
-2. **Every write form can answer "what would this be in Git?"** — whether or
-   not the caller may apply it. The manifest is the first-class output; the
-   Apply button is the exception a deployment opts into.
-3. **A resource Git owns refuses edits through the UI**, with the manifest and
-   a link to where it lives, because the operator will revert the change
-   within a reconcile loop and the user will be confused about why.
+2. **Which writes a target admits is configured per target.** A target whose
+   state something else reconciles leaves out of its ceiling the operations
+   that would fight it, and keeps the ones that would not, like a restart.
 
-## Three gates, all required
+kaas-ui does not model who owns what. A GitOps layer — ownership as a third
+gate, a 409 carrying the change to make in Git, manifests rendered beside
+every write — was built in 10a and removed on 2026-10-21: every way of saying
+what Git declares turned out to be one tool's model, Strimzi's, in disguise.
+See [11-built.md](11-built.md#gitops-built-and-removed).
 
-A write happens only when **all three** agree. Each lives in a different
-place, so no single mistake opens all of them.
+## Two gates, both required
+
+A write happens only when **both** agree. Each lives in a different place, so
+no single mistake opens both.
 
 | gate | where | decides | default |
 |---|---|---|---|
 | **ceiling** | per cluster / registry / Connect cluster, in config | which *kinds* of write this target can ever see | none — a read-only connection, as today |
 | **grant** | roles, in config | which *callers* may do which actions to which *named* things | none |
-| **ownership** | per target, in config | which named things Git owns and which of their aspects it declares, and so refuse changing those | nothing owned |
 
 ```yaml
 environments:
@@ -51,15 +49,6 @@ environments:
           # today's behaviour. Present ⇒ a connection whose kaas-lib gate
           # admits exactly the api keys these actions need, and nothing else.
           allow: [topic.create, topic.edit, consumer.reset_offsets, messages.produce]
-          gitops:
-            # Ownership. Matching topics refuse what Git declares of them,
-            # with this link and the change to make there.
-            owns_topics: ["gtfs-*", "kaas-canary-*"]
-            owns_users: ["*"]
-            source: https://github.com/Woestebanaan/k3s-cluster/tree/master/apps/strimzi
-            # How Git holds them, which also says what it declares unless
-            # `declares:` narrows it. Default: the CLI invocation.
-            format: strimzi_resources
 
 roles:
   - name: platform-oncall
@@ -73,7 +62,7 @@ roles:
         actions: [view, operate]
 ```
 
-- **Ceiling ∩ grant ∩ ¬ownership.** A role granting `topic: [delete]` on a
+- **Ceiling ∩ grant.** A role granting `topic: [delete]` on a
   cluster whose ceiling omits `topic.delete` grants nothing there, and
   `/api/me` says so rather than showing a button that 403s.
 - **`Policy::open()` never writes.** Today a deployment without an identity
@@ -92,8 +81,7 @@ A closed set. Each action names its tier, the RBAC resource it is granted on,
 and — for Kafka — the **api keys it may emit**, which come from kaas-lib (see
 ask B) because which key an operation sends is kaas-lib's business, not ours.
 
-Tiers drive confirmation UX only — not authorization, and not the GitOps
-rule, which is per aspect (see [the GitOps half](#the-gitops-half)):
+Tiers drive confirmation UX only, never authorization:
 
 - **operate** — reversible; no data lost. One click and a confirm.
 - **edit** — changes what the thing is configured to do. Shows what will
@@ -147,7 +135,7 @@ pub struct Grant<'a> { action: Action, target: TargetRef<'a>, who: &'a Principal
 
 impl Access {
     pub fn authorize<'a>(&'a self, action: Action, target: TargetRef<'a>,
-                         ceiling: &Ceiling, owner: &Ownership) -> Result<Grant<'a>, Denied>;
+                         ceiling: &Ceiling) -> Result<Grant<'a>, Denied>;
 }
 
 // kaas-ui-core: the only path from a Grant to something that can write.
@@ -197,19 +185,15 @@ own ceiling forbade, which is a bug in `writer()`, not a user mistake.
 3. **Authorization.** `Access::authorize` ⇒ `Grant` or `Denied`. Visible but
    not permitted ⇒ **403**: the id is already known to the caller, so 403 leaks
    nothing and is more honest than a 404 for something they can see.
-4. **Ownership.** Owned, and the action changes an aspect Git declares ⇒
-   **409** with the change to make in Git and the `source` link. Not a 403 —
-   the caller may well be allowed; Git is.
-5. **Preview.** `?dry_run=true` where Kafka supports `validate_only`
+4. **Preview.** `?dry_run=true` where Kafka supports `validate_only`
    (CreateTopics, CreatePartitions, AlterConfigs) runs it on the broker and
-   returns what would happen. Everything else returns the rendered request
-   and manifest without sending.
-6. **Audit, before.** An `intent` record — who, roles, target, action,
+   returns what would happen.
+5. **Audit, before.** An `intent` record — who, roles, target, action,
    parameters with secrets redacted — is written, and a failed write fails
    the request, the rule `audit.rs` already applies to reads.
-7. **Execute** through the scoped handle. Destroy tier requires
+6. **Execute** through the scoped handle. Destroy tier requires
    `confirm: "<resource name>"` in the body.
-8. **Audit, after.** An `outcome` record — success, or the broker's error
+7. **Audit, after.** An `outcome` record — success, or the broker's error
    verbatim. Partial outcomes (an ACL batch where two of five failed) are a
    `PerItem`, rule 5, in both the response and the log.
 
@@ -218,59 +202,6 @@ perform there — ceiling ∩ grant — so the frontend never renders a button
 that will 403, and greying a button is reserved for "the cluster cannot"
 (an api key the broker does not offer — rule 2's absence, already projected
 by Phase 1).
-
-## The GitOps half
-
-- **An equivalent for every form**, rendered server-side from the same
-  request DTO that would be sent, in the format the target's Git holds
-  things in — chosen per target, never guessed. The default is the plain
-  invocation: `kafka-topics.sh` / `kafka-configs.sh` / `kafka-acls.sh`, and
-  for Connect the REST call. A tool's own files where configured: Strimzi
-  `KafkaTopic` and `KafkaUser` (ACLs, quotas, SCRAM); for Connect, connector
-  JSON or `KafkaConnector`. Shown beside the Apply button, or instead of it.
-- **Ownership is declared, not discovered — and kaas-ui never asks
-  Kubernetes.** No broker says over the Kafka protocol who manages a topic or
-  an ACL, and kaas-ui does not depend on the platform it runs on, so there is
-  nothing to discover from. Two declarations, merged:
-  - **a generated ownership file** — the recommended source. The GitOps
-    repository already holds every `KafkaTopic`, `KafkaUser` and
-    `KafkaConnector` it owns; a generator there (kustomize or CI) emits exact
-    names, mounted beside the config and picked up by `reload.rs` like any
-    ConfigMap change. Cannot drift from Git, because it is made from it.
-
-    ```yaml
-    # ownership.yaml — generated, never hand-edited
-    dev/strimzi:
-      topics: [audit-log, dlq-mqtt-home, events, gtfs-rt-trip-updates]
-      principals: ["User:alice", "User:CN=bob-mtls"]
-    dev/connect:
-      connectors: [gtfs-schedule-nl-connector, mqtt-home-connector]
-    ```
-  - **patterns per target** (`owns_topics`, `owns_principals`,
-    `owns_connectors`) — the hand-written fallback, and the only option for a
-    cluster no generator describes.
-
-  `owns_principals` because ACLs are owned by principal, not one by one:
-  Strimzi's User Operator owns *every* ACL of a `KafkaUser` with simple
-  authorization and deletes ones it did not declare, and kaas-broker keeps
-  them inline on the user's resource. Name the principal as the broker sees
-  it — `status.username`, so `User:CN=bob-mtls`, not `bob-mtls`.
-
-  The cost, accepted: a resource the operator manages but nobody committed
-  (`kubectl apply` without a commit) looks unowned. Strimzi will revert a UI
-  edit to it; kaas-broker will write it through to the resource. The fix is
-  to commit it, which is the GitOps answer anyway.
-- **Ownership is per aspect, not per tier.** Every action names the aspect
-  of its target it changes, or none, and an owned target refuses exactly the
-  actions that change an aspect its Git declares — by default what its format
-  can hold, narrowed by `declares:`. Tools disagree on what they keep: a
-  `KafkaConnector` declares a connector's running state, a directory of
-  connector files does not, and kaas-ui assuming either is how a pause gets
-  refused for no reason. A restart or a leader election changes nothing Git
-  can declare and is allowed on anything. Built for Connect — see
-  [11-built.md](11-built.md#connect-writes-tool-neutral); for topics the
-  aspects will be config, partitions, existence and records; for a
-  principal, its ACLs, quotas and credentials.
 
 ## kaas-lib changes
 
@@ -329,11 +260,9 @@ caller by default.
 
 - `useCan(target, action)` from `/api/me`; no button for an action the caller
   cannot perform.
-- One `WriteDialog` primitive: form → **preview** (dry run, manifest) →
+- One `WriteDialog` primitive: form → **preview** (dry run) →
   confirm (typed name for destroy) → result with the audit id. Every write
   goes through it, which keeps the tier semantics in one place.
-- Owned resources show a "Managed in Git" chip and the manifest view instead
-  of edit controls; operate actions stay.
 - A **Changes** page per environment: the outcome records this instance wrote,
   newest first. Read from the audit sink if it is queryable; otherwise
   in-memory since start, and labelled as such.
@@ -346,9 +275,8 @@ caller by default.
 - with no `writes:` block, the restart route answers 403 and nothing but `GET`
   reaches the worker;
 - in open mode (no IdP) a `writes:` block is a startup error;
-- a granted restart of a connector listed in the ownership file succeeds —
-  operate is allowed on owned things — and writes an intent line before and
-  an outcome line after;
+- a granted restart succeeds and writes an intent line before and an
+  outcome line after;
 - a role without `connector: operate` gets 403; a caller who cannot see the
   Connect cluster gets 404; a request without `X-Kaas-Ui` or with a foreign
   `Origin` is refused before authorization;
@@ -364,7 +292,7 @@ test cleans up:
 - create → describe → add partitions → edit config → delete a topic, each
   with its intent and outcome audit lines;
 - a role without `topic: delete` gets 403; a caller who cannot see the
-  cluster gets 404; a topic matching `owns_topics` gets 409 with a manifest;
+  cluster gets 404;
 - reset offsets on a group with a live member is refused by kaas-lib's
   empty-group check and the refusal reaches the UI verbatim;
 - a `ScopedAdmin` for `consumer.reset_offsets` refuses `delete_topics`
@@ -378,13 +306,12 @@ test cleans up:
 Agreed 2026-10-20: interleaved with Phase 9, **9a → 10a → 9b/9c/9d and the
 rest**. The whole sequence is in [README.md](README.md#order).
 
-1. **10a — the gate**, after Phase 9a. `Grant`, `Ceiling`, `Ownership`
-   (patterns and the generated file); the write router, Origin check, audit
+1. **10a — the gate**, after Phase 9a. `Grant` and the ceiling; the write
+   router, Origin check, audit
    intent/outcome, `/api/me` actions, `WriteDialog`; the rule rewrite and the
    new invariants. **Proven end to end on `connector.restart`**, not on a
    Kafka write: it exercises every gate, needs no kaas-lib release (Connect is
-   REST, in `kaas-ui-connect` from 9a), is operate-tier so it is allowed on
-   GitOps-owned connectors, and loses nothing if it goes wrong. kaas-lib asks
+   REST, in `kaas-ui-connect` from 9a), and loses nothing if it goes wrong. kaas-lib asks
    A and B are filed and built in parallel.
 2. **10a, Kafka half** — once kaas-lib publishes A and B:
    `connect_with_mutations`, `ClusterHandle::writer`, and
@@ -392,8 +319,8 @@ rest**. The whole sequence is in [README.md](README.md#order).
    people most often need during an incident and kaas-lib's empty-group check
    makes it safe to demonstrate.
 3. **10b — topics and messages.** Create, edit, partitions, delete, truncate,
-   produce (ask C). Strimzi `KafkaTopic` manifests.
-4. **10c — security.** ACLs, quotas, SCRAM users. `KafkaUser` manifests.
+   produce (ask C).
+4. **10c — security.** ACLs, quotas, SCRAM users.
 5. **10d — cluster and transactions.** Broker configs, reassignments, leader
    election, transaction abort (ask D).
 6. **10e — schema registry.** Register, delete, compatibility, behind the
@@ -403,9 +330,6 @@ Phase 9's remaining Connect writes (9d) depend on 10a and nothing after it.
 
 ## Later, not now
 
-- **Open a pull request** instead of rendering a manifest — needs a Git
-  credential, a repository layout convention and a review story. The
-  manifest is the 80% that needs none of those.
 - **Step-up authentication** for destroy (re-prompt via Dex `max_age`).
 
 ## Decisions — settled 2026-10-20
@@ -417,8 +341,9 @@ Phase 9's remaining Connect writes (9d) depend on 10a and nothing after it.
 3. **Open mode** — views everything, writes nothing; a `writes:` block with no
    identity provider is a startup error. The dev config gets an IdP when
    writes need exercising live.
-4. **Ownership default** — not owned unless the generated file or a pattern
-   says so.
+4. **Git ownership** — not modelled. Built in 10a as a third gate and
+   removed 2026-10-21; a target whose state Git owns says so with its
+   ceiling.
 
 ## Rule 1, rewritten
 
@@ -430,6 +355,6 @@ Phase 9's remaining Connect writes (9d) depend on 10a and nothing after it.
 > appear once, in `registry.rs`; `Admin::connect(` appears nowhere. A
 > mutating handle is reachable only through `ClusterHandle::writer(&Grant)`,
 > and a `Grant` is minted only in `kaas-ui-auth`'s gate, which requires the
-> ceiling, a role and the absence of Git ownership to agree. An anonymous
+> ceiling and a role to agree. An anonymous
 > caller never holds a grant. If `Error::ReadOnly` reaches a user, kaas-ui
 > built a request its own ceiling forbade: a 500, not a 403.

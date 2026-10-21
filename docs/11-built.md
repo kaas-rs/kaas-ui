@@ -20,11 +20,11 @@ is surprising.
 | 5 — groups | four group kinds, members, committed offsets, lag as states rather than a subtraction |
 | 6 — schema registry | one registry per environment, Avro/Protobuf/JSON Schema, the codec chip, the schema browser, the payload filter over decoded values |
 | 7 — read-only admin | ACLs, client quotas, SCRAM users, reassignments, the transaction inspector, and `CapabilityTab` at last |
-| 10a — the write gate (Connect half) | `Grant`, the three gates, `X-Kaas-Ui` + Origin guard, intent/outcome audit, `ConnectWriter`; connector restart, pause, resume, stop; GitOps ownership by pattern and generated file, with each write's Git equivalent |
+| 10a — the write gate (Connect half) | `Grant`, two gates (ceiling and role), `X-Kaas-Ui` + Origin guard, intent/outcome audit, `ConnectWriter`; connector restart, pause, resume, stop |
 | 9b · 9c — MirrorMaker 2 | flows from every Connect cluster and from the clusters' internal topics; mirrored topics; heartbeats, checkpoints and offset syncs decoded in kaas-ui-serde |
 | 9d — Connect writes | the rest of the catalogue: task restart, reset topics, edit (with validate), create (with validate), delete, reset and alter offsets; destroy tier wants the name typed |
 | 9a — Connect, read-only | `kaas-ui-connect`: Connect clusters dialled over REST, GET-only by construction; connectors, tasks, redacted configs, topics, offsets, plugins; the `kafka_cluster:` reference checked against the workers |
-| Connect writes, tool-neutral | ownership by declared aspect rather than by tier; equivalents as `rest`, `connector_json` or `strimzi_kafka_connector`, chosen per Connect cluster |
+| GitOps, built and removed | Git ownership as a third gate and rendered equivalents, in 10a and 9d; taken out on 2026-10-21 as one tool's model |
 
 Still open: [Phase 8](09-phase-8-cross-cluster.md), the rest of
 [Phase 9](12-phase-9-connect-and-mm2.md) (9b–9d) and
@@ -779,24 +779,18 @@ Phase 7's transaction fixture, which has no open transaction on Strimzi today.
 kaas-lib.** The Kafka half — `connect_with_mutations`, `ClusterHandle::writer`,
 `consumer.reset_offsets` — waits on upstream asks 17 and 18, now filed.
 
-**Four operations, not one.** The plan piloted `connector.restart` alone.
-Restart is operate-tier, which Git ownership allows by design, so a
-restart-only pilot would have shipped the ownership refusal — the 409 and the
-manifest — unreachable. Pause, resume and stop change what a
-`KafkaConnector` declares, and with them every branch of the gate has a real
-operation behind it. (They were edit-tier then, for that reason; see
-[tool-neutral](#connect-writes-tool-neutral) for why ownership no longer
-rides on the tier.)
+**Four operations, not one.** The plan piloted `connector.restart` alone;
+pause, resume and stop came with it so the gate had more than one operation
+to tell apart from the start.
 
 **What the page may offer rides on the page, not on `/api/me`.** The plan put
 per-target actions on `/api/me`; that is a fan-out across every Connect
 cluster and connector for a list only one page reads. `ConnectorPage.writes`
 lists each operation on the Connect cluster's ceiling with whether this caller
-may perform it, which gate refuses if not, and its Git equivalent. Empty
-without a ceiling, so the read-only default draws no write UI at all.
+may perform it, and which gate refuses if not. Empty without a ceiling, so the read-only default draws no write UI at all.
 
 **`Access::check` and `Access::authorize` are one decision.** `check` answers
-for a button and mints nothing; `authorize` is the same three gates plus "is
+for a button and mints nothing; `authorize` is the same two gates plus "is
 anyone signed in", and is the only constructor of `Grant` — invariant 7, a
 grep for a `Grant {` literal outside `gate.rs`, run against a planted one
 before it was trusted. The open deployment's anonymous administrator holds no
@@ -815,16 +809,9 @@ one because the deployed shape and code-server both sit behind a proxy.
 nothing reaches the worker (asserted against a sink that fails); a failure to
 record the outcome is a 500 that says the change *was* made.
 
-**Ownership is declared, and kaas-ui never asks Kubernetes.** Patterns
-(`writes.gitops.owns_connectors`) plus a generated `ownership_file` keyed
-`<environment>/<id>`, watched beside the config by `reload.rs`. A refusal is
-409 with the change to make in Git — a `KafkaConnector` patch setting
-`spec.state`, or for a restart the `strimzi.io/restart` annotation — and the
-same equivalent is shown in every write dialog, applied or not.
-
 **Measured, and not:** the stub-worker tests send real grants through the real
-writer and the real handler — what reaches the worker, the audit ordering, all
-four refusals, a grant reused for another operation or another Connect
+writer and the real handler — what reaches the worker, the audit ordering,
+every refusal, a grant reused for another operation or another Connect
 cluster. Live, the open deployment's refusal is asserted against the Strimzi
 worker (96 of 97, the failure again Phase 7's transaction fixture). **An
 authenticated write has not run against a live worker**: it needs a signed-in
@@ -834,9 +821,9 @@ and the dev config is open — where a `writes:` block is refused by design.
 **Since 2026-10-21 there is a signed-in dev config,** `config.dev-auth.yaml`,
 against **production's Dex** rather than a test one: the same GitHub (kaas-rs)
 and Microsoft logins as the deployment, the deployment's two subjects as
-roles, and every Connect write enabled on a Connect cluster Git owns entirely
-(`strimzi.io/use-connector-resources: "true"`) — so a session can restart and
-gets 409 with a KafkaConnector change for everything else. Dex holds its
+roles, and the operate tier enabled on both live Connect clusters — restart,
+pause, resume, stop, reset active topics; nothing that edits, creates,
+deletes or moves offsets on someone else's connector. Dex holds its
 callback, `https://remote.smeding.cloud/proxy/8099/auth/callback`, from
 k3s-cluster `f144624`. Booted and checked as far as a terminal can: discovery
 over the internal Service, the login redirect carrying that callback with
@@ -845,13 +832,11 @@ redirect_uri` at its connector step.
 
 **And on 2026-10-21 an authenticated write ran against the live worker.** A
 sign-in through GitHub as the `admin` subject, then
-`connector.restart_task` on task 0 of `gtfs-rt-service-alerts-connector` —
-a connector Git owns entirely, so it also exercised ownership allowing what
-Git cannot declare. Audit `w-1792593368684-0`: intent at 14:36:08.684Z, then
-the outcome `ok` at 14:36:13.756Z, roles `["admin"]`, parameters
-`{"task": 0}`. Those two lines are the whole of the live evidence: the 409
-path and the other ten operations are still proven only against the stub
-worker.
+`connector.restart_task` on task 0 of `gtfs-rt-service-alerts-connector`.
+Audit `w-1792593368684-0`: intent at 14:36:08.684Z, then the outcome `ok` at
+14:36:13.756Z, roles `["admin"]`, parameters `{"task": 0}`. Those two lines
+are the whole of the live evidence: the other ten operations are proven only
+against the stub worker.
 
 ## Phase 9d — the decisions
 
@@ -890,14 +875,6 @@ STOPPED state…"). It passes through verbatim and the outcome is audited as
 failed. Offsets are not stopped for you: the form says the connector must be
 stopped, and stopping is its own, separately-authorized write.
 
-**Equivalents for everything.** (Now one format of three — see
-[tool-neutral](#connect-writes-tool-neutral).) Strimzi's for each: the `strimzi.io/restart`
-and `strimzi.io/restart-task` annotations, `spec.state`, a full
-`KafkaConnector` for create and edit (secrets written as `******` with a
-comment pointing at a config provider), the `connector-offsets` annotation and
-an `alterOffsets` ConfigMap for offsets. Reset-topics has no Strimzi model and
-renders the REST call.
-
 **Live, one of eleven:** `connector.restart_task` has run signed in against
 the Strimzi worker (see 10a above). The other ten operations' requests are
 asserted against a stub worker, through the real handler and writer.
@@ -931,9 +908,7 @@ a disclosure: replication metadata, not payloads.
 `KafkaMirrorMaker2` has no heartbeat connector, so fixture A's flow reports
 `missing: [heartbeat]` honestly, and its liveness is the heartbeat fixture B
 emits on Strimzi, carried to kaas as `strimzi.heartbeats` — one heartbeat
-crossing both flows. And this KafkaConnect has
-`strimzi.io/use-connector-resources: "true"`, so every connector on it is
-Git's.
+crossing both flows.
 
 **Live since the fixtures were synced, 2026-10-21: twelve of thirteen.**
 Both Connect clusters read; both flows found on the Connect cluster that runs
@@ -951,56 +926,34 @@ assertion assumed the canary consumes `kaas-canary-v1` on `kaas` with a
 group; it does not. A consumer group on `kaas` reading that topic is what is
 missing, in k3s-cluster, not here.
 
-## Connect writes, tool-neutral
+## GitOps, built and removed
 
-**9d and 10a had Strimzi's model in their semantics, not only in their
-output.** Ownership refused every write above operate tier, and the tiers
-were drawn so that would be right for a `KafkaConnector`: pause, resume and
-stop were edit *because* `spec.state` is declared there. Under a pipeline
-applying connector JSON files, running state is in no file, so a pause was
-refused for no reason — and the 409 offered a `KafkaConnector` patch for a
-resource that did not exist. The same held for the MirrorMaker 2 fixture: its
-connectors are generated from a `KafkaMirrorMaker2`, and were rendered as
-`KafkaConnector`s anyway.
+**10a shipped a third gate, ownership, and 9d rendered an equivalent beside
+every write; both were taken out on 2026-10-21.** Git ownership was declared
+per Connect cluster (`writes.gitops.owns_connectors`, plus a generated
+`ownership_file` watched by `reload.rs`); an owned connector refused writes
+with a 409 carrying the change to make in Git, rendered as a `KafkaConnector`
+patch or the `strimzi.io/…` annotation; the page drew "managed in Git" and a
+"change in Git" sheet.
 
-**Ownership is per aspect now.** An `Operation` names the one `Aspect` it
-changes — `config` (edit), `existence` (create, delete), `state` (pause,
-resume, stop), `offsets` (reset, alter) — or none: Git cannot declare a
-restart, nor the history `reset_topics` clears. `Owned` carries what Git
-declares, from `writes.gitops.declares` or the format's own answer, and the
-gate refuses exactly the writes that change a declared aspect. The 409 names
-the aspect; the badge on the page lists them.
+**It was Strimzi's model, wearing a general name.** Which writes ownership
+refused was decided by tier, and the tiers had been drawn so that would be
+right for a `KafkaConnector`: pause, resume and stop were "edit" *because*
+`spec.state` is declared there. Under a pipeline applying connector JSON a
+pause was refused for nothing, and connectors a `KafkaMirrorMaker2`
+generates got a `KafkaConnector` patch for a resource that does not exist. A
+redesign the same day made ownership per aspect (config, existence, state,
+offsets) and the rendering one format of three; it was coherent, and it was
+still a model of what each tool keeps in Git that kaas-ui would have to track
+tool by tool. So it went, rather than growing.
 
-**The tier is cost and nothing else.** Pause, resume and stop moved to
-operate — each is undone by another and nothing is lost — which is also what
-their RBAC verb always said.
-
-**Formats name the tool, and are never guessed.** `writes.gitops.format` is
-`rest` (the default: the call kaas-ui sends, true of every Connect cluster),
-`connector_json` (the `{name, config}` document `POST /connectors` takes —
-what most config-as-code pipelines keep one file of per connector) or
-`strimzi_kafka_connector`. One module each under
-`kaas-ui-connect/src/manifest/`; what a format cannot hold renders as the REST
-call with a note saying so. A format also answers what Git declares when the
-config does not: a connector file holds config and existence; `rest` and
-`KafkaConnector` are taken to hold everything, because refusing a write Git
-did not mind is the cheaper mistake. `format: strimzi` and `format: plain`
-are refused at startup naming what they became, and `declares: []` is refused
-as ownership that refuses nothing.
-
-**No `KafkaMirrorMaker2` renderer.** The MirrorMaker Connect cluster in
-`config.dev-auth.yaml` is `rest`: a refusal links to the declaration and shows
-the call that would have been sent. A renderer for it would be one more
-module, but it would also mean following Strimzi's MirrorMaker API changes
-for a refusal message, and the point of this change was less of that.
-
-**Measured:** unit tests for each format, the defaults and refusals, and a
-stub-worker test through the real handler in which `connector_json` lets a
-pause through to the worker and refuses an edit with the file as the 409's
-body. Live, only this far: the signed-in dev instance boots on the converted
-`config.dev-auth.yaml` — and the binary before this change refused it on
-reload, naming the new variant, which is the rename doing its job. No write
-has run through the per-aspect gate against a live worker yet.
+**What is left is the ceiling.** A Connect cluster whose connectors
+something else reconciles leaves the operations that would fight it out of
+`writes.allow`; that is the deployment's knowledge, written once in the one
+place that already decides what may be written. The tiers stayed, as cost
+only — pause, resume and stop are operate, undone by another click. A config
+still carrying `gitops:` or `ownership_file:` is refused at startup by the
+unknown field, not ignored, and a test holds that.
 
 ## What is still unproven
 

@@ -187,7 +187,6 @@ fn grant(operation: Operation, host: &str, connector: &str) -> kaas_ui_auth::Gra
                 name: Some(connector.into()),
             },
             &Operation::ALL,
-            None,
         )
         .unwrap()
 }

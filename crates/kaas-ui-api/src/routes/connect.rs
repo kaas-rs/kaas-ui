@@ -346,12 +346,10 @@ pub struct ConnectorPage {
     pub offsets_absent: Option<String>,
     /// What could not be read for any other reason, by name.
     pub errors: Vec<kaas_ui_core::ResourceError>,
-    /// Every write this connector could take, whether this caller may, and
-    /// what each would be in Git. Empty where the Connect cluster has no
-    /// `writes:` ceiling — the read-only default renders no write UI at all.
+    /// Every write this connector could take, and whether this caller may.
+    /// Empty where the Connect cluster has no `writes:` ceiling — the
+    /// read-only default renders no write UI at all.
     pub writes: Vec<WriteOption>,
-    /// Set when Git owns this connector.
-    pub managed_in_git: Option<kaas_ui_auth::Owned>,
 }
 
 /// `GET /api/environments/{env}/connect-clusters/{connect}/connectors/{name}`
@@ -383,7 +381,7 @@ pub async fn connector(
     let mut errors = Vec::new();
     let (topics, topics_absent) = split(client.topics(&name).await, "topics", &mut errors);
     let (offsets, offsets_absent) = split(client.offsets(&name).await, "offsets", &mut errors);
-    let (writes, managed_in_git) = connect_write::write_options(&state, &handle, &name, &caller);
+    let writes = connect_write::write_options(&state, &handle, &name, &caller);
 
     Ok(Json(ConnectorPage {
         card: ConnectClusterCard::of(&handle),
@@ -394,7 +392,6 @@ pub async fn connector(
         offsets_absent,
         errors,
         writes,
-        managed_in_git,
     }))
 }
 

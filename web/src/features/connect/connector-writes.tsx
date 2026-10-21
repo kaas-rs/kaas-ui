@@ -1,14 +1,9 @@
 // The writes a connector can take, and the one sheet they all go through.
 //
-// Phase 10, GitOps first. Three things decide what appears here, all on the
-// server: the Connect cluster's `writes.allow` ceiling, the caller's roles,
-// and whether Git owns this connector — and which of its aspects (config,
-// existence, state, offsets) Git declares. A button is drawn only for a write
-// every gate agrees to — a button that 403s is worse than none — and for a
-// write refused because Git declares what it changes the page draws the
-// change to make in Git instead, in whatever format this Connect cluster's
-// Git holds connectors. Every sheet shows that equivalent too, applied or
-// not.
+// Phase 10. Two things decide what appears here, both on the server: the
+// Connect cluster's `writes.allow` ceiling and the caller's roles. A button
+// is drawn only for a write both agree to — a button that 403s is worse than
+// none.
 //
 // The tiers decide the friction, never the permission: operate is one click
 // and a confirm, edit shows what will change, destroy wants the connector's
@@ -18,7 +13,6 @@ import { useState } from "react"
 import { useNavigate } from "@tanstack/react-router"
 import {
   ChevronDown,
-  GitBranch,
   Pause,
   Pencil,
   Play,
@@ -37,9 +31,7 @@ import {
 } from "@/api/client"
 import type {
   ConnectorStatus,
-  Equivalent,
   Operation,
-  Owned,
   RedactedConfig,
   StoredOffset,
   Validation,
@@ -160,38 +152,24 @@ interface Subject {
   offsets: StoredOffset[] | null
 }
 
-type Open =
-  { kind: "write"; write: WriteOption; task?: number } | { kind: "git" } | null
+type Open = { write: WriteOption; task?: number } | null
 
 export function ConnectorWrites({
   writes,
-  managedInGit,
   ...subject
 }: Subject & {
   writes: WriteOption[]
-  managedInGit: Owned | null
 }) {
   const [open, setOpen] = useState<Open>(null)
-  const usable = writes.filter((write) => fits(write.operation, subject.status))
-  const allowed = usable.filter((write) => write.allowed)
+  const allowed = writes.filter(
+    (write) => write.allowed && fits(write.operation, subject.status)
+  )
   const primary = allowed.filter((write) => PRIMARY.includes(write.operation))
   const more = allowed.filter((write) => !PRIMARY.includes(write.operation))
-  const owned = usable.filter((write) => write.refusedBy === "owned")
-  if (allowed.length === 0 && owned.length === 0 && !managedInGit) return null
+  if (allowed.length === 0) return null
 
   return (
     <div className="flex flex-wrap items-center gap-2">
-      {managedInGit ? (
-        <span
-          className="inline-flex items-center gap-1 rounded-sm border px-2 py-0.5 text-[12px] text-ink-muted"
-          title={`Git declares its ${managedInGit.declares.join(", ")}${
-            managedInGit.source ? ` — ${managedInGit.source}` : ""
-          }`}
-        >
-          <GitBranch aria-hidden className="size-3.5" />
-          managed in Git
-        </span>
-      ) : null}
       {primary.map((write) => {
         const Icon = ICON[write.operation]
         return (
@@ -199,7 +177,7 @@ export function ConnectorWrites({
             key={write.operation}
             variant="outline"
             size="sm"
-            onClick={() => setOpen({ kind: "write", write })}
+            onClick={() => setOpen({ write })}
           >
             <Icon aria-hidden />
             {LABEL[write.operation]}
@@ -220,7 +198,7 @@ export function ConnectorWrites({
               .map((write) => (
                 <DropdownMenuItem
                   key={write.operation}
-                  onSelect={() => setOpen({ kind: "write", write })}
+                  onSelect={() => setOpen({ write })}
                 >
                   {LABEL[write.operation]}
                 </DropdownMenuItem>
@@ -234,23 +212,13 @@ export function ConnectorWrites({
                 <DropdownMenuItem
                   key={write.operation}
                   className="text-danger"
-                  onSelect={() => setOpen({ kind: "write", write })}
+                  onSelect={() => setOpen({ write })}
                 >
                   {LABEL[write.operation]}…
                 </DropdownMenuItem>
               ))}
           </DropdownMenuContent>
         </DropdownMenu>
-      ) : null}
-      {owned.length > 0 ? (
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => setOpen({ kind: "git" })}
-        >
-          <GitBranch aria-hidden />
-          change in Git
-        </Button>
       ) : null}
 
       <Sheet
@@ -260,13 +228,7 @@ export function ConnectorWrites({
         }}
       >
         <SheetContent className="w-full overflow-y-auto sm:max-w-xl">
-          {open?.kind === "git" ? (
-            <GitChanges
-              connector={subject.connector}
-              owned={owned}
-              managedInGit={managedInGit}
-            />
-          ) : open?.kind === "write" ? (
+          {open ? (
             <WriteForm
               key={open.write.operation}
               subject={subject}
@@ -444,12 +406,6 @@ function WriteForm({
   }
 
   const applied = mutation.isSuccess && mutation.data.applied
-  const equivalent =
-    (mutation.isSuccess && mutation.data.applied
-      ? mutation.data.equivalent
-      : null) ??
-    verdict?.equivalent ??
-    write.equivalent
 
   return (
     <>
@@ -518,8 +474,6 @@ function WriteForm({
           <ValidationList validation={verdict.validation} />
         ) : null}
 
-        <EquivalentBlock equivalent={equivalent} />
-
         {destroy ? (
           <ConfirmName name={connector} value={confirm} onChange={setConfirm} />
         ) : null}
@@ -535,12 +489,7 @@ function WriteForm({
           </p>
         ) : null}
         {failure ? (
-          <div className="space-y-2">
-            <p className="text-[13px] text-danger">{failure.message}</p>
-            {failure.equivalent ? (
-              <EquivalentBlock equivalent={failure.equivalent} />
-            ) : null}
-          </div>
+          <p className="text-[13px] text-danger">{failure.message}</p>
         ) : null}
       </div>
 
@@ -604,7 +553,6 @@ export function CreateConnector({
             <CreateForm
               envId={envId}
               connectId={connectId}
-              write={write}
               onDone={() => setOpen(false)}
             />
           ) : null}
@@ -617,12 +565,10 @@ export function CreateConnector({
 function CreateForm({
   envId,
   connectId,
-  write,
   onDone,
 }: {
   envId: string
   connectId: string
-  write: WriteOption
   onDone: () => void
 }) {
   const plugins = useConnectPlugins(envId, connectId)
@@ -711,14 +657,8 @@ function CreateForm({
         {verdict?.validation ? (
           <ValidationList validation={verdict.validation} />
         ) : null}
-        <EquivalentBlock equivalent={verdict?.equivalent ?? write.equivalent} />
         {failure ? (
-          <div className="space-y-2">
-            <p className="text-[13px] text-danger">{failure.message}</p>
-            {failure.equivalent ? (
-              <EquivalentBlock equivalent={failure.equivalent} />
-            ) : null}
-          </div>
+          <p className="text-[13px] text-danger">{failure.message}</p>
         ) : null}
       </div>
       <SheetFooter>
@@ -738,47 +678,6 @@ function CreateForm({
           </Button>
         </div>
       </SheetFooter>
-    </>
-  )
-}
-
-function GitChanges({
-  connector,
-  owned,
-  managedInGit,
-}: {
-  connector: string
-  owned: WriteOption[]
-  managedInGit: Owned | null
-}) {
-  return (
-    <>
-      <SheetHeader>
-        <SheetTitle>
-          change <span className="font-mono">{connector}</span> in Git
-        </SheetTitle>
-        <SheetDescription>
-          Git declares this connector&rsquo;s{" "}
-          {managedInGit?.declares.join(", ") ?? "state"}, so those are changed
-          there — whatever applies Git would put back a change made here.
-          {managedInGit?.source ? (
-            <>
-              {" "}
-              It lives in <Mono>{managedInGit.source}</Mono>.
-            </>
-          ) : null}
-        </SheetDescription>
-      </SheetHeader>
-      <div className="space-y-5 px-4">
-        {owned.map((write) => (
-          <div key={write.operation} className="space-y-1.5">
-            <h3 className="text-[13px] font-semibold">
-              {LABEL[write.operation]}
-            </h3>
-            <EquivalentBlock equivalent={write.equivalent} />
-          </div>
-        ))}
-      </div>
     </>
   )
 }
@@ -852,17 +751,6 @@ function ValidationList({ validation }: { validation: Validation }) {
           </li>
         ))}
       </ul>
-    </div>
-  )
-}
-
-function EquivalentBlock({ equivalent }: { equivalent: Equivalent }) {
-  return (
-    <div className="space-y-1">
-      <pre className="overflow-auto rounded-sm border bg-muted/40 p-3 font-mono text-[12px] leading-relaxed">
-        {equivalent.text}
-      </pre>
-      <p className="text-[12px] text-ink-faint">{equivalent.note}</p>
     </div>
   )
 }

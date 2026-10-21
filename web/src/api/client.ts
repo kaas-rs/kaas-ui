@@ -26,7 +26,6 @@ import type {
   PluginList,
   Producer,
   TopicConnectors,
-  Equivalent,
   CreateRequest,
   Operation,
   WriteRequest,
@@ -48,9 +47,7 @@ export class ApiError extends Error {
   constructor(
     readonly status: number,
     message: string,
-    readonly kind?: string,
-    /** On a refusal because Git owns the target: the change to make there. */
-    readonly equivalent?: Equivalent
+    readonly kind?: string
   ) {
     super(message)
     this.name = "ApiError"
@@ -77,16 +74,14 @@ async function post<T>(path: string, body?: unknown): Promise<T> {
   if (!response.ok) {
     let message = `${response.status} ${response.statusText}`
     let kind: string | undefined
-    let equivalent: Equivalent | undefined
     try {
       const parsed = await response.json()
       if (typeof parsed?.message === "string") message = parsed.message
       if (typeof parsed?.kind === "string") kind = parsed.kind
-      if (parsed?.equivalent) equivalent = parsed.equivalent as Equivalent
     } catch {
       // A non-JSON error body is still an error; the status line stands.
     }
-    throw new ApiError(response.status, message, kind, equivalent)
+    throw new ApiError(response.status, message, kind)
   }
   return (await response.json()) as T
 }

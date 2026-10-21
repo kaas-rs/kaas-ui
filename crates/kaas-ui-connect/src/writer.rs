@@ -2,8 +2,8 @@
 //!
 //! [`ConnectWriter`]'s only constructor, [`ConnectClient::writer`], takes a
 //! [`Grant`], and a `Grant` is minted only by the gate in `kaas-ui-auth` —
-//! after the Connect cluster's `writes.allow`, a role, and Git ownership have
-//! all agreed. Every method then checks that the grant is for *this*
+//! after the Connect cluster's `writes.allow` and a role have both agreed.
+//! Every method then checks that the grant is for *this*
 //! operation on *this* connector, so a grant to restart `a` cannot stop `b`
 //! or restart `c`. A mismatch is a kaas-ui bug and fails as one.
 //!

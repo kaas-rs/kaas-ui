@@ -123,7 +123,6 @@ export function ConnectorPage({
           config={data.connector.config}
           offsets={data.offsets}
           writes={data.writes}
-          managedInGit={data.managedInGit}
         />
       </div>
       <ErrorChips errors={data.errors} />

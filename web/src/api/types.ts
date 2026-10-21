@@ -1305,8 +1305,6 @@ export interface ConnectorPage {
   /** Every write on the Connect cluster's ceiling, checked for this caller.
       Empty without a ceiling: the read-only default draws no write UI. */
   writes: WriteOption[]
-  /** Set when Git owns this connector. */
-  managedInGit: Owned | null
 }
 
 export interface Plugin {
@@ -1357,24 +1355,7 @@ export type Operation =
     do. Destroy: loses data or position. */
 export type Tier = "operate" | "edit" | "destroy"
 
-export type Refusal = "anonymous" | "notEnabled" | "forbidden" | "owned"
-
-/** What a write would be in Git, or as the REST call it performs. */
-export interface Equivalent {
-  language: "yaml" | "json" | "shell" | string
-  text: string
-  note: string
-}
-
-/** One part of a connector Git can declare. */
-export type Aspect = "config" | "existence" | "state" | "offsets"
-
-export interface Owned {
-  /** Where the owned connectors live, as configured. */
-  source: string | null
-  /** What Git declares of this one; a write changing any of it is refused. */
-  declares: Aspect[]
-}
+export type Refusal = "anonymous" | "notEnabled" | "forbidden"
 
 export interface WriteOption {
   operation: Operation
@@ -1383,7 +1364,6 @@ export interface WriteOption {
   allowed: boolean
   refusedBy: Refusal | null
   reason: string | null
-  equivalent: Equivalent
 }
 
 export interface WriteRequest {
@@ -1421,7 +1401,6 @@ export interface WriteResult {
   applied: boolean
   operation: Operation
   connector: string
-  equivalent: Equivalent
   validation: Validation | null
   /** For an edit or a create: the config as sent, redacted. */
   config: RedactedConfig | null
