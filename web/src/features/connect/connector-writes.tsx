@@ -39,7 +39,7 @@ import type {
   WriteResult,
 } from "@/api/types"
 import { Mono } from "@/components/domain"
-import { WriteDialog } from "@/components/write-dialog"
+import { toastApplied, WriteDialog } from "@/components/write-dialog"
 import { Button } from "@/components/ui/button"
 import { ButtonGroup } from "@/components/ui/button-group"
 import {
@@ -357,8 +357,16 @@ function WriteForm({
       },
       {
         onSuccess: (result) => {
-          if (!result.applied) setVerdict(result)
-          if (result.applied && operation === "connector.delete") {
+          if (!result.applied) {
+            setVerdict(result)
+            return
+          }
+          toastApplied(
+            `${LABEL[operation]}${task !== undefined ? ` ${task}` : ""} · ${connector}`,
+            result.auditId
+          )
+          onClose()
+          if (operation === "connector.delete") {
             void navigate({
               to: "/environments/$envId/connect-clusters/$connectId",
               params: { envId, connectId },
@@ -390,7 +398,6 @@ function WriteForm({
       canSubmit={!inputError}
       pending={mutation.isPending}
       error={failure?.message}
-      auditId={mutation.data?.applied ? mutation.data.auditId : null}
     >
       {operation === "connector.restart" ? (
         <fieldset className="space-y-2 text-[13px]">
@@ -517,6 +524,7 @@ function CreateForm({
             setVerdict(result)
             return
           }
+          toastApplied(`create · ${result.connector}`, result.auditId)
           onClose()
           void navigate({
             to: "/environments/$envId/connect-clusters/$connectId/connectors/$connector",

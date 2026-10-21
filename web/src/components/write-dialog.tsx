@@ -2,22 +2,26 @@
 //
 // Phase 10's `WriteDialog`: a form's own fields, framed the same way for
 // every write kaas-ui can make — title and what it does, the fields, the
-// audit note, a typed name for anything that cannot be undone, then the
-// outcome in the same place: the audit id, or the server's refusal in its
-// own words. A form supplies its fields and what submitting sends; the
-// look, the buttons and the order they come in are this file's.
+// audit note, a typed name for anything that cannot be undone. A form
+// supplies its fields and what submitting sends; the look, the buttons and
+// the order they come in are this file's.
+//
+// What happens next is this file's too. Applied, the dialog closes and
+// `toastApplied` says so — one toast for every write. Refused, the dialog
+// stays open with the server's words in it, beside the fields that may need
+// changing for a second try.
 //
 // An alert dialog, not a sheet: a write is a decision, and it does not close
 // on a click outside it. Submit and validate are plain buttons rather than
-// `AlertDialogAction`, which would close the dialog before the result could
+// `AlertDialogAction`, which would close the dialog before a refusal could
 // be shown in it.
 
 import { useState, type ReactNode } from "react"
+import { toast } from "sonner"
 
 import { Mono } from "@/components/domain"
 import {
   AlertDialog,
-  AlertDialogAction,
   AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
@@ -29,7 +33,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 
 export interface WriteDialogProps {
-  /** Dismissed: cancel, close, or Escape. */
+  /** Dismissed — cancel or Escape — or applied. */
   onClose: () => void
   title: ReactNode
   /** What the write does, in a sentence. */
@@ -54,8 +58,19 @@ export interface WriteDialogProps {
   pending: boolean
   /** What the last attempt ended in, verbatim. */
   error?: string | null
-  /** Set once the write was applied: the dialog says so and offers close. */
-  auditId?: string | null
+}
+
+/**
+ * A write the server applied, after its dialog has closed.
+ *
+ * "Accepted", not "done": a Connect worker answers most writes before it has
+ * acted on them, and the page's own refresh shows the effect. The audit id
+ * joins this toast to the intent and outcome lines in the audit log.
+ */
+export function toastApplied(what: string, auditId: string | null) {
+  toast.success(what, {
+    description: auditId ? `Accepted. Audit ${auditId}.` : "Accepted.",
+  })
 }
 
 /** Always open: mount it to open the dialog and unmount it to close, so the
@@ -74,11 +89,9 @@ export function WriteDialog({
   canSubmit = true,
   pending,
   error,
-  auditId,
 }: WriteDialogProps) {
   const [typed, setTyped] = useState("")
   const confirmed = confirmName === undefined || typed === confirmName
-  const done = !!auditId
 
   return (
     <AlertDialog
@@ -96,7 +109,7 @@ export function WriteDialog({
         <div className="min-w-0 space-y-4">
           {children}
 
-          {confirmName !== undefined && !done ? (
+          {confirmName !== undefined ? (
             <label className="block space-y-1 text-[13px]">
               <span className="text-danger">
                 This cannot be undone. Type <Mono>{confirmName}</Mono> to
@@ -116,40 +129,29 @@ export function WriteDialog({
             if it cannot be recorded, it is not sent.
           </p>
 
-          {done ? (
-            <p className="text-[13px] text-ok">
-              Done. Audit <Mono>{auditId}</Mono>.
-            </p>
-          ) : null}
           {error ? <p className="text-[13px] text-danger">{error}</p> : null}
         </div>
 
         <AlertDialogFooter>
-          {done ? (
-            <AlertDialogAction>close</AlertDialogAction>
-          ) : (
-            <>
-              <AlertDialogCancel disabled={pending}>cancel</AlertDialogCancel>
-              {onValidate ? (
-                <Button
-                  variant="outline"
-                  disabled={pending || !canValidate}
-                  onClick={onValidate}
-                >
-                  validate
-                </Button>
-              ) : null}
-              <Button
-                variant={destructive ? "destructive" : "default"}
-                disabled={pending || !canSubmit || !confirmed}
-                onClick={() =>
-                  onSubmit(confirmName === undefined ? undefined : typed)
-                }
-              >
-                {pending ? "sending…" : action}
-              </Button>
-            </>
-          )}
+          <AlertDialogCancel disabled={pending}>cancel</AlertDialogCancel>
+          {onValidate ? (
+            <Button
+              variant="outline"
+              disabled={pending || !canValidate}
+              onClick={onValidate}
+            >
+              validate
+            </Button>
+          ) : null}
+          <Button
+            variant={destructive ? "destructive" : "default"}
+            disabled={pending || !canSubmit || !confirmed}
+            onClick={() =>
+              onSubmit(confirmName === undefined ? undefined : typed)
+            }
+          >
+            {pending ? "sending…" : action}
+          </Button>
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>

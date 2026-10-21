@@ -14,6 +14,7 @@ import { AppSidebar } from "@/components/app-sidebar"
 import { Breadcrumbs } from "@/components/breadcrumbs"
 import { VersionBadge } from "@/components/version-badge"
 import { Separator } from "@/components/ui/separator"
+import { Toaster } from "@/components/ui/sonner"
 import {
   SidebarInset,
   SidebarProvider,
@@ -62,6 +63,8 @@ export function AppLayout() {
           read-only by construction — kaas-ui has no mutating endpoint
         </footer>
       </SidebarInset>
+      {/* What a write says once its dialog has closed. */}
+      <Toaster position="bottom-right" />
     </SidebarProvider>
   )
 }
