@@ -128,14 +128,14 @@ environments:
         url: http://kafka-connect-connect-api.strimzi.svc.cluster.local:8083
         kafka_cluster: strimzi
         # Every write in the catalogue is enabled here — and Git owns every
-        # connector, because this KafkaConnect has
-        # `strimzi.io/use-connector-resources: "true"`: the operator reconciles
-        # each connector from its KafkaConnector resource and puts back what
-        # the REST API changed. So what a session can actually do is the
-        # operate tier — restart, restart a task, reset active topics — and
-        # every edit, create, delete or offset change answers 409 with the
-        # KafkaConnector change to commit instead. That is the honest shape of
-        # this cluster, and a safe one to try writes against.
+        # connector, held as Strimzi KafkaConnector resources (this
+        # KafkaConnect has `strimzi.io/use-connector-resources: "true"`), which
+        # declare all of a connector: config, existence, `spec.state` and
+        # offsets. So what a session can actually do is what Git cannot
+        # declare — restart, restart a task, reset active topics — and
+        # everything else answers 409 with the KafkaConnector change to commit
+        # instead. That is the honest shape of this cluster, and a safe one to
+        # try writes against.
         writes:
           allow:
             - connector.restart
@@ -152,13 +152,15 @@ environments:
           gitops:
             owns_connectors: ["*"]
             source: https://github.com/Woestebanaan/k3s-cluster/tree/master/apps/strimzi/kafka-connectors
-            format: strimzi
+            format: strimzi_kafka_connector
 
       # The dedicated MirrorMaker 2 (k3s-cluster fixture A, Strimzi → kaas):
-      # a Connect cluster too, whose workers run against kaas. Strimzi
-      # generates its connectors from the KafkaMirrorMaker2 resource, so Git
-      # owns all of them; a session can restart, and gets the
-      # KafkaMirrorMaker2 change to make for anything else.
+      # a Connect cluster too, whose workers run against kaas. Its connectors
+      # are generated from one declaration in Git, so Git owns all of them —
+      # but not as KafkaConnector resources, which is why the format is
+      # `rest`: a refusal links to the declaration and shows the call kaas-ui
+      # would have sent, rather than a manifest for a resource that does not
+      # exist. A session can restart; anything else is made in Git.
       - id: mm2
         name: MirrorMaker 2
         url: http://mm2-mirrormaker2-api.strimzi.svc.cluster.local:8083
@@ -173,4 +175,4 @@ environments:
           gitops:
             owns_connectors: ["*"]
             source: https://github.com/Woestebanaan/k3s-cluster/blob/master/apps/strimzi/kafka-mirrormaker2.yaml
-            format: strimzi
+            format: rest

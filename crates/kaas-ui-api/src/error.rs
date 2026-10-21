@@ -315,6 +315,11 @@ impl ApiError {
     pub fn status(&self) -> StatusCode {
         self.status
     }
+
+    /// The body, for tests.
+    pub fn body(&self) -> &ApiErrorBody {
+        &self.body
+    }
 }
 
 impl From<Error> for ApiError {

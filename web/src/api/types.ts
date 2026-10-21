@@ -1352,22 +1352,28 @@ export type Operation =
   | "connector.reset_offsets"
   | "connector.alter_offsets"
 
-/** Operate: not state, allowed on what Git owns. Edit: declared state.
-    Destroy: loses data or position. */
+/** How much confirmation a write asks for — never whether it is allowed.
+    Operate: reversible, nothing lost. Edit: changes what it is configured to
+    do. Destroy: loses data or position. */
 export type Tier = "operate" | "edit" | "destroy"
 
 export type Refusal = "anonymous" | "notEnabled" | "forbidden" | "owned"
 
 /** What a write would be in Git, or as the REST call it performs. */
 export interface Equivalent {
-  language: "yaml" | "shell" | string
+  language: "yaml" | "json" | "shell" | string
   text: string
   note: string
 }
 
+/** One part of a connector Git can declare. */
+export type Aspect = "config" | "existence" | "state" | "offsets"
+
 export interface Owned {
-  /** Where the owned manifests live, as configured. */
+  /** Where the owned connectors live, as configured. */
   source: string | null
+  /** What Git declares of this one; a write changing any of it is refused. */
+  declares: Aspect[]
 }
 
 export interface WriteOption {

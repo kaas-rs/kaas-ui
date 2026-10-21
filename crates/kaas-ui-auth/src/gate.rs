@@ -8,9 +8,11 @@
 //! * **a role** — which callers may perform the operation on which named
 //!   things, asked with [`Access::role_permits`] so the open deployment's
 //!   anonymous administrator holds nothing here;
-//! * **ownership** — whether Git owns the named thing. Declared state that Git
-//!   owns refuses edits through the UI; operating on it (a restart) does not
-//!   change what Git declares and is allowed.
+//! * **ownership** — whether Git owns the named thing, and which of its
+//!   [`Aspect`]s Git declares. A write that changes a declared aspect is
+//!   refused, whatever applies Git — an operator, a pipeline, a person with
+//!   `curl` — would put it back; one that changes none of them (a restart) is
+//!   allowed.
 //!
 //! [`Grant`] has a private field, so this module is the only place one can be
 //! constructed, and every mutating client method in the workspace takes one.
@@ -71,17 +73,58 @@ pub enum Operation {
     ConnectorAlterOffsets,
 }
 
-/// How much a write can cost, which decides confirmation and the GitOps rule —
-/// never authorization.
+/// How much a write can cost, which decides how much confirmation it asks
+/// for — never authorization, and never ownership: that is [`Aspect`]'s.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum Tier {
-    /// Not state; reversible; nothing lost. Allowed on things Git owns.
+    /// Reversible, and nothing is lost. One click and a confirm.
     Operate,
-    /// Changes declared state. Refused on things Git owns.
+    /// Changes what the thing is configured to do. Shows what will change.
     Edit,
-    /// Loses data or position. Refused on things Git owns; typed confirmation.
+    /// Loses data or position. The thing's name, typed.
     Destroy,
+}
+
+/// One part of a connector that Git can declare.
+///
+/// The GitOps rule is per aspect because the tools that keep connectors in
+/// Git do not agree on what they keep. A `KafkaConnector` resource declares
+/// all four; a directory of connector JSON files applied by a pipeline
+/// declares the config and which connectors exist, and has no opinion on
+/// whether one is paused. A write is refused on an owned connector when it
+/// changes an aspect that connector's Git declares, so each deployment says
+/// which — `writes.gitops.declares` — instead of kaas-ui assuming one tool's
+/// model.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize, ToSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum Aspect {
+    /// The connector's config.
+    Config,
+    /// Whether the connector exists at all.
+    Existence,
+    /// Whether it is running, paused or stopped.
+    State,
+    /// Its stored source offsets or consumer position.
+    Offsets,
+}
+
+impl Aspect {
+    /// Every aspect: what Git declares when nothing narrower is said.
+    pub const ALL: [Self; 4] = [Self::Config, Self::Existence, Self::State, Self::Offsets];
+
+    /// The name, as config spells it.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Config => "config",
+            Self::Existence => "existence",
+            Self::State => "state",
+            Self::Offsets => "offsets",
+        }
+    }
 }
 
 impl Operation {
@@ -100,27 +143,45 @@ impl Operation {
         Self::ConnectorAlterOffsets,
     ];
 
-    /// The tier.
+    /// The tier: what the write costs if it was a mistake.
     ///
-    /// Pause, resume and stop are **edit**, not operate: under Strimzi they are
-    /// `spec.state` on the `KafkaConnector` — declared state the operator puts
-    /// back. A restart is not state; Strimzi models it as an annotation. A
-    /// connector's offsets are its position, so changing them is **destroy**:
-    /// what it would have read or skipped is not coming back.
+    /// Pause, resume and stop are **operate**: each is undone by another, and
+    /// nothing is lost in between. A connector's offsets are its position, so
+    /// changing them is **destroy** — what it would have read or skipped is
+    /// not coming back — and so is deleting it.
     #[must_use]
     pub fn tier(self) -> Tier {
         match self {
-            Self::ConnectorRestart | Self::ConnectorRestartTask | Self::ConnectorResetTopics => {
-                Tier::Operate
-            }
-            Self::ConnectorPause
+            Self::ConnectorRestart
+            | Self::ConnectorRestartTask
+            | Self::ConnectorResetTopics
+            | Self::ConnectorPause
             | Self::ConnectorResume
-            | Self::ConnectorStop
-            | Self::ConnectorEdit
-            | Self::ConnectorCreate => Tier::Edit,
+            | Self::ConnectorStop => Tier::Operate,
+            Self::ConnectorEdit | Self::ConnectorCreate => Tier::Edit,
             Self::ConnectorDelete | Self::ConnectorResetOffsets | Self::ConnectorAlterOffsets => {
                 Tier::Destroy
             }
+        }
+    }
+
+    /// The aspect of a connector this changes, if any.
+    ///
+    /// A restart changes none: Git cannot declare that a task was restarted,
+    /// so no ownership refuses one. Nor can it declare which topics a
+    /// connector has been *seen* using — the history `reset_topics` clears.
+    #[must_use]
+    pub fn changes(self) -> Option<Aspect> {
+        match self {
+            Self::ConnectorRestart | Self::ConnectorRestartTask | Self::ConnectorResetTopics => {
+                None
+            }
+            Self::ConnectorPause | Self::ConnectorResume | Self::ConnectorStop => {
+                Some(Aspect::State)
+            }
+            Self::ConnectorEdit => Some(Aspect::Config),
+            Self::ConnectorCreate | Self::ConnectorDelete => Some(Aspect::Existence),
+            Self::ConnectorResetOffsets | Self::ConnectorAlterOffsets => Some(Aspect::Offsets),
         }
     }
 
@@ -182,12 +243,33 @@ pub struct Target {
     pub name: Option<String>,
 }
 
-/// Who owns a named thing in Git, when somebody does.
+/// Who owns a named thing in Git, when somebody does, and how much of it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Owned {
     /// Where it lives, as configured — a repository path, for a link.
     pub source: Option<String>,
+    /// What Git declares of it. A write changing any of these is refused.
+    pub declares: Vec<Aspect>,
+}
+
+impl Owned {
+    /// Owned entirely: every aspect declared.
+    #[must_use]
+    pub fn entirely(source: Option<String>) -> Self {
+        Self {
+            source,
+            declares: Aspect::ALL.to_vec(),
+        }
+    }
+
+    /// The declared aspect `operation` would change, if it changes one.
+    #[must_use]
+    pub fn refuses(&self, operation: Operation) -> Option<Aspect> {
+        operation
+            .changes()
+            .filter(|aspect| self.declares.contains(aspect))
+    }
 }
 
 /// Why a write was refused.
@@ -200,8 +282,8 @@ pub enum Denied {
     NotEnabled(Operation),
     /// No role of the caller's permits it on this target.
     Forbidden(Operation),
-    /// Git owns the named thing and the operation changes declared state.
-    Owned(Operation, Owned),
+    /// Git owns the named thing and declares the aspect this changes.
+    Owned(Operation, Aspect, Owned),
 }
 
 impl Denied {
@@ -225,14 +307,15 @@ impl Denied {
                 op.permission().0,
                 target.cluster
             ),
-            Self::Owned(op, owned) => format!(
-                "{what:?} is managed in Git{}: {} changes declared state, so change it there — the \
-                 operator would put back an edit made here",
+            Self::Owned(op, aspect, owned) => format!(
+                "{what:?} is managed in Git{}, which declares its {}: make {} there — whatever \
+                 applies Git would put back a change made here",
                 owned
                     .source
                     .as_deref()
                     .map(|source| format!(" ({source})"))
                     .unwrap_or_default(),
+                aspect.name(),
                 op.name()
             ),
         }
@@ -326,9 +409,9 @@ impl Access {
             return Err(Denied::Forbidden(operation));
         }
         if let Some(owned) = owned
-            && operation.tier() != Tier::Operate
+            && let Some(aspect) = owned.refuses(operation)
         {
-            return Err(Denied::Owned(operation, owned.clone()));
+            return Err(Denied::Owned(operation, aspect, owned.clone()));
         }
         Ok(())
     }
@@ -465,12 +548,10 @@ mod tests {
     }
 
     #[test]
-    fn git_ownership_refuses_edits_and_permits_operating() {
+    fn git_ownership_refuses_what_git_declares_and_permits_the_rest() {
         let alice = Principal::new("alice");
         let access = operator("*").access(&alice);
-        let owned = Owned {
-            source: Some("k3s-cluster/apps/strimzi".into()),
-        };
+        let entirely = Owned::entirely(Some("k3s-cluster/apps/strimzi".into()));
         assert!(
             access
                 .authorize(
@@ -478,10 +559,10 @@ mod tests {
                     Operation::ConnectorRestart,
                     target("a"),
                     ALL,
-                    Some(&owned)
+                    Some(&entirely)
                 )
                 .is_ok(),
-            "a restart is not declared state"
+            "Git cannot declare a restart"
         );
         assert!(matches!(
             access
@@ -490,11 +571,45 @@ mod tests {
                     Operation::ConnectorPause,
                     target("a"),
                     ALL,
-                    Some(&owned)
+                    Some(&entirely)
                 )
                 .unwrap_err(),
-            Denied::Owned(Operation::ConnectorPause, _)
+            Denied::Owned(Operation::ConnectorPause, Aspect::State, _)
         ));
+
+        // Connector files applied by a pipeline: config and existence are in
+        // Git, running state is not — so a pause is the UI's to make.
+        let files = Owned {
+            source: None,
+            declares: vec![Aspect::Config, Aspect::Existence],
+        };
+        assert!(
+            access
+                .check(Operation::ConnectorPause, &target("a"), ALL, Some(&files))
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn every_operation_changes_at_most_one_aspect_and_restarts_change_none() {
+        for operation in Operation::ALL {
+            let restart = matches!(
+                operation,
+                Operation::ConnectorRestart
+                    | Operation::ConnectorRestartTask
+                    | Operation::ConnectorResetTopics
+            );
+            assert_eq!(operation.changes().is_none(), restart, "{operation:?}");
+        }
+        // And no aspect is declared by nothing: each one some operation changes.
+        for aspect in Aspect::ALL {
+            assert!(
+                Operation::ALL
+                    .iter()
+                    .any(|operation| operation.changes() == Some(aspect)),
+                "{aspect:?}"
+            );
+        }
     }
 
     #[test]
@@ -590,11 +705,11 @@ mod tests {
     }
 
     #[test]
-    fn destroying_what_git_owns_is_refused_like_editing_it() {
+    fn owned_entirely_refuses_edit_delete_and_offsets_and_allows_restarts() {
         let alice = Principal::new("alice");
         let access =
             Policy::enforcing(vec![Role::admin("admin", vec!["alice".into()])]).access(&alice);
-        let owned = Owned { source: None };
+        let owned = Owned::entirely(None);
         for operation in [
             Operation::ConnectorDelete,
             Operation::ConnectorResetOffsets,

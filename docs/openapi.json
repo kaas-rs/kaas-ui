@@ -1827,7 +1827,7 @@
           "connect"
         ],
         "summary": "`POST /api/environments/{env}/connect-clusters/{connect}/connectors`",
-        "description": "Creates a connector — or, with `dryRun`, asks the plugin what it makes of\nthe config. Ownership is decided against the chosen name: a Connect\ncluster whose connectors Git owns (`owns_connectors: [\"*\"]`) refuses every\ncreate with the `KafkaConnector` to commit instead.",
+        "description": "Creates a connector — or, with `dryRun`, asks the plugin what it makes of\nthe config. Ownership is decided against the chosen name: where Git owns\nit and declares which connectors exist, the create is refused with what\nto commit instead.",
         "operationId": "create",
         "parameters": [
           {
@@ -2166,7 +2166,7 @@
             "description": "No such Connect cluster, connector or operation"
           },
           "409": {
-            "description": "Git owns the connector; the body carries the change to make there",
+            "description": "Git owns the connector and declares what this changes; the body carries the change to make there",
             "content": {
               "application/json": {
                 "schema": {
@@ -2899,6 +2899,16 @@
             "description": "This build's range."
           }
         }
+      },
+      "Aspect": {
+        "type": "string",
+        "description": "One part of a connector that Git can declare.\n\nThe GitOps rule is per aspect because the tools that keep connectors in\nGit do not agree on what they keep. A `KafkaConnector` resource declares\nall four; a directory of connector JSON files applied by a pipeline\ndeclares the config and which connectors exist, and has no opinion on\nwhether one is paused. A write is refused on an owned connector when it\nchanges an aspect that connector's Git declares, so each deployment says\nwhich — `writes.gitops.declares` — instead of kaas-ui assuming one tool's\nmodel.",
+        "enum": [
+          "config",
+          "existence",
+          "state",
+          "offsets"
+        ]
       },
       "Assumptions": {
         "type": "object",
@@ -6294,7 +6304,7 @@
         "properties": {
           "language": {
             "type": "string",
-            "description": "What kind of text this is: `yaml` for a manifest, `shell` for a\ncommand."
+            "description": "What kind of text this is: `yaml` or `json` for a file, `shell` for a\ncommand."
           },
           "note": {
             "type": "string",
@@ -7935,8 +7945,18 @@
       },
       "Owned": {
         "type": "object",
-        "description": "Who owns a named thing in Git, when somebody does.",
+        "description": "Who owns a named thing in Git, when somebody does, and how much of it.",
+        "required": [
+          "declares"
+        ],
         "properties": {
+          "declares": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Aspect"
+            },
+            "description": "What Git declares of it. A write changing any of these is refused."
+          },
           "source": {
             "type": [
               "string",
@@ -9691,7 +9711,7 @@
       },
       "Tier": {
         "type": "string",
-        "description": "How much a write can cost, which decides confirmation and the GitOps rule —\nnever authorization.",
+        "description": "How much a write can cost, which decides how much confirmation it asks\nfor — never authorization, and never ownership: that is [`Aspect`]'s.",
         "enum": [
           "operate",
           "edit",

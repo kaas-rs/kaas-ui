@@ -46,11 +46,11 @@ is proven on Connect, which needs no kaas-lib release:
 | step | needs | delivers | state |
 |---|---|---|---|
 | **9a** | — | read-only Connect: `kaas-ui-connect`, connectors, tasks, redacted configs, links into topics and lag | **done** — see [11-built.md](11-built.md#phase-9a--the-decisions) |
-| **10a** | 9a | the write gate — ceiling, grant, ownership, Origin check, audit intent/outcome — proven on connector restart, pause, resume, stop | **done** — authenticated live write unproven until a sign-in through `config.dev-auth.yaml` (production's Dex); see [11-built.md](11-built.md#phase-10a--the-decisions-the-connect-half) |
+| **10a** | 9a | the write gate — ceiling, grant, ownership, Origin check, audit intent/outcome — proven on connector restart, pause, resume, stop | **done** — one authenticated live write (a task restart, signed in through production's Dex via `config.dev-auth.yaml`); see [11-built.md](11-built.md#phase-10a--the-decisions-the-connect-half) |
 | kaas-lib asks 17–18 | parallel with 10a | mutation ceiling, `Admin::scoped` | **implemented** in kaas-lib `6b062c3`, verified live by `livetest gate`; awaiting a release |
 | **10a, Kafka half** | kaas-lib release | `consumer.reset_offsets` through the same gate | |
-| **9d** | 9a, 10a | the remaining Connect writes: task restart, reset topics, edit, create, delete, offsets | **done** — authenticated live write unproven, as for 10a |
-| **9b · 9c** | 9a, MM2 fixtures | MM2 flows, MM2 record decoding | **built** — live acceptance waits on syncing k3s-cluster `6ee84b9` (`kaas`, then `strimzi`) |
+| **9d** | 9a, 10a | the remaining Connect writes: task restart, reset topics, edit, create, delete, offsets | **done** — task restart verified live, signed in; the rest against a stub worker. Ownership by declared aspect and the formats: [tool-neutral](11-built.md#connect-writes-tool-neutral) |
+| **9b · 9c** | 9a, MM2 fixtures | MM2 flows, MM2 record decoding | **built, live 12 of 13** — fixtures synced; the checkpoint assertion needs a consumer group on `kaas`, which no fixture runs yet |
 | **10b–10e** | 10a | topics and messages, security, cluster and transactions, schema registry | |
 
 Phase 8 is independent of both.

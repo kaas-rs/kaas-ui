@@ -75,9 +75,12 @@ anywhere. For Connect it is `kaas-ui-connect`: every read goes through one
 private `get_json`, and the only non-GET is in `writer.rs`, whose constructor
 takes a `Grant`. A `Grant` is minted only by `Access::authorize` in
 `kaas-ui-auth/src/gate.rs`, and only when three gates agree — the target's
-`writes.allow` ceiling, a role, and Git ownership (declared state Git owns is
-refused with a 409 carrying the change to make in Git; operating on it, like a
-restart, is not). An anonymous caller never holds a grant, so the open
+`writes.allow` ceiling, a role, and Git ownership (a write changing an aspect
+Git declares — a connector's config, existence, state or offsets — is refused
+with a 409 carrying the change to make in Git; one changing none, like a
+restart, is not). Which aspects Git declares, and in what format, is
+configured per target, so no one tool's model is assumed — Strimzi's is one
+format of several. An anonymous caller never holds a grant, so the open
 deployment views everything and writes nothing. Every non-GET under `/api`
 needs `X-Kaas-Ui: 1`, and the intent is audited *before* anything is sent —
 a write that cannot be recorded does not happen. If `Error::ReadOnly` ever

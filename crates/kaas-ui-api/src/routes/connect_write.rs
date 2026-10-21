@@ -5,7 +5,8 @@
 //! 1. **the lookup** — the Connect cluster as this caller may see it, or 404;
 //! 2. **the gate** — `Access::authorize` mints a `Grant` or names the gate
 //!    that refused: 403 for the ceiling, a role, or nobody signed in; 409 when
-//!    Git owns the connector, with the change to make in Git in the body;
+//!    Git owns the connector and declares what this changes, with the change
+//!    to make in Git in the body;
 //! 3. **confirmation** — a destroy-tier write must carry the connector's name
 //!    in `confirm`, typed;
 //! 4. **the intent**, audited — a write that cannot be recorded is not sent;
@@ -25,10 +26,7 @@ use std::collections::BTreeMap;
 use axum::Json;
 use axum::extract::{Path, State};
 use kaas_ui_auth::{Change, Denied, Operation, Owned, Tier};
-use kaas_ui_connect::{
-    ConnectFault, Detail, Equivalent, Format, RedactedConfig, StoredOffset, Validation,
-};
-use kaas_ui_core::config::ManifestFormat;
+use kaas_ui_connect::{ConnectFault, Detail, Equivalent, RedactedConfig, StoredOffset, Validation};
 use kaas_ui_core::registry::ConnectHandle;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -63,7 +61,7 @@ pub enum Refusal {
     NotEnabled,
     /// No role of the caller's permits it.
     Forbidden,
-    /// Git owns the connector and this changes declared state.
+    /// Git owns the connector and declares what this changes.
     Owned,
 }
 
@@ -99,7 +97,7 @@ fn option(
             operation,
             name,
             handle.client().url(),
-            format_of(handle),
+            handle.format(),
         ),
     }
 }
@@ -157,13 +155,6 @@ pub(crate) fn create_option(
         None,
         "<name>",
     ))
-}
-
-fn format_of(handle: &ConnectHandle) -> Format {
-    match handle.manifest_format() {
-        ManifestFormat::Strimzi => Format::Strimzi,
-        ManifestFormat::Plain => Format::Plain,
-    }
 }
 
 /// What a write to an existing connector carries. Every field is optional;
@@ -263,7 +254,7 @@ fn operation_of(segment: &str) -> Option<Operation> {
         (status = 400, description = "Missing input, an unconfirmed destroy, or the worker refused the request as given", body = crate::error::ApiErrorBody),
         (status = 403, description = "Not enabled here, not permitted, or not signed in", body = crate::error::ApiErrorBody),
         (status = 404, description = "No such Connect cluster, connector or operation"),
-        (status = 409, description = "Git owns the connector; the body carries the change to make there", body = crate::error::ApiErrorBody),
+        (status = 409, description = "Git owns the connector and declares what this changes; the body carries the change to make there", body = crate::error::ApiErrorBody),
         (status = 502, description = "The workers refused or could not be reached"),
     ),
     tag = "connect",
@@ -324,9 +315,9 @@ pub async fn write_task(
 /// `POST /api/environments/{env}/connect-clusters/{connect}/connectors`
 ///
 /// Creates a connector — or, with `dryRun`, asks the plugin what it makes of
-/// the config. Ownership is decided against the chosen name: a Connect
-/// cluster whose connectors Git owns (`owns_connectors: ["*"]`) refuses every
-/// create with the `KafkaConnector` to commit instead.
+/// the config. Ownership is decided against the chosen name: where Git owns
+/// it and declares which connectors exist, the create is refused with what
+/// to commit instead.
 #[utoipa::path(
     post,
     path = "/api/environments/{env}/connect-clusters/{connect}/connectors",
@@ -389,7 +380,7 @@ async fn perform(
     let client = handle.client();
     let target = state.registry().connect_target(&handle, Some(name));
     let owned = handle.owned(name);
-    let format = format_of(&handle);
+    let format = handle.format();
 
     // What a refusal shows as the change to make in Git: the submitted
     // config, redacted like a read, never as typed.
@@ -708,7 +699,13 @@ mod tests {
         (format!("http://{addr}"), worker)
     }
 
+    /// A Connect cluster whose `owned-*` connectors Git holds as
+    /// `KafkaConnector` resources — every aspect declared.
     fn state(url: &str, audit: Lines, allow: &str) -> AppState {
+        state_as(url, audit, allow, "strimzi_kafka_connector")
+    }
+
+    fn state_as(url: &str, audit: Lines, allow: &str, format: &str) -> AppState {
         let config = Config::from_yaml(&format!(
             r#"
 auth:
@@ -729,7 +726,7 @@ environments:
           gitops:
             owns_connectors: ["owned-*"]
             source: k3s-cluster/apps/strimzi/kafka-connectors
-            format: strimzi
+            format: {format}
 "#
         ))
         .unwrap();
@@ -1163,5 +1160,67 @@ environments:
         assert!(create.allowed);
         let bob = create_option(&state, &handle, &caller(&state, "bob")).unwrap();
         assert_eq!(bob.refused_by, Some(Refusal::Forbidden));
+    }
+
+    #[tokio::test]
+    async fn connector_files_in_git_refuse_an_edit_and_leave_running_state_to_the_ui() {
+        let (url, worker) = worker().await;
+        let state = state_as(&url, Lines::default(), EVERYTHING, "connector_json");
+
+        // Git holds the file, not whether it is paused: the pause goes through.
+        assert!(
+            post(&state, "alice", "owned-a", "pause", WriteRequest::default())
+                .await
+                .is_ok()
+        );
+        assert_eq!(
+            worker.writes().last().unwrap().line,
+            "PUT /connectors/owned-a/pause"
+        );
+
+        // An edit is the file's to make: 409, and the file is the change.
+        let refused = post(
+            &state,
+            "alice",
+            "owned-a",
+            "edit",
+            WriteRequest {
+                config: Some(
+                    [("connector.class", "io.x.Mqtt"), ("tasks.max", "4")]
+                        .into_iter()
+                        .map(|(k, v)| (k.to_owned(), v.to_owned()))
+                        .collect(),
+                ),
+                ..WriteRequest::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(refused.status(), StatusCode::CONFLICT);
+        let body = serde_json::to_value(refused.body()).unwrap();
+        assert!(
+            body["message"]
+                .as_str()
+                .unwrap()
+                .contains("declares its config"),
+            "{body}"
+        );
+        let file: serde_json::Value =
+            serde_json::from_str(body["equivalent"]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(file["name"], "owned-a");
+        assert_eq!(file["config"]["tasks.max"], "4");
+        assert_eq!(worker.writes().len(), 1, "the edit reached nothing");
+
+        let handle = state
+            .connect_cluster("dev", "connect", &caller(&state, "alice"))
+            .unwrap();
+        let (_, owned) = write_options(&state, &handle, "owned-a", &caller(&state, "alice"));
+        assert_eq!(
+            owned.unwrap().declares,
+            [
+                kaas_ui_auth::Aspect::Config,
+                kaas_ui_auth::Aspect::Existence
+            ]
+        );
     }
 }

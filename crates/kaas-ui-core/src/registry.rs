@@ -23,7 +23,7 @@ use std::time::{Duration, SystemTime};
 
 use arc_swap::{ArcSwap, ArcSwapOption};
 use kaas_ui_auth::Access;
-use kaas_ui_connect::ConnectClient;
+use kaas_ui_connect::{ConnectClient, Format};
 use kaas_ui_serde::{Codec, RegistryHandle};
 use kafka_admin::{Admin, ClusterConfig};
 use kafka_conn::{
@@ -32,7 +32,7 @@ use kafka_conn::{
 use tokio::sync::Notify;
 
 use crate::config::{
-    ClusterEntry, Config, ConfigError, ConnectClusterEntry, EnvironmentEntry, ManifestFormat,
+    ClusterEntry, Config, ConfigError, ConnectClusterEntry, EnvironmentEntry, GitopsConfig,
     PasswordCredentials, ResourceEntry, SaslSettings, WritesConfig, secret_from_env, secret_var,
 };
 use crate::error::ErrorKind;
@@ -545,7 +545,8 @@ impl ConnectHandle {
             .unwrap_or_default()
     }
 
-    /// Whether Git owns a connector, by the ownership file or a pattern.
+    /// Whether Git owns a connector, by the ownership file or a pattern, and
+    /// what of it Git declares.
     pub fn owned(&self, connector: &str) -> Option<kaas_ui_auth::Owned> {
         let gitops = self.writes.as_ref().and_then(|w| w.gitops.as_ref());
         let by_pattern = gitops.is_some_and(|gitops| {
@@ -557,11 +558,16 @@ impl ConnectHandle {
         let by_file = self.owned_names.iter().any(|name| name == connector);
         (by_pattern || by_file).then(|| kaas_ui_auth::Owned {
             source: gitops.and_then(|gitops| gitops.source.clone()),
+            declares: gitops.map_or_else(
+                || Format::default().declares().to_vec(),
+                GitopsConfig::declared,
+            ),
         })
     }
 
-    /// How a write's Git equivalent is rendered here.
-    pub fn manifest_format(&self) -> ManifestFormat {
+    /// How Git holds this Connect cluster's connectors, which is how a
+    /// write's equivalent is rendered here.
+    pub fn format(&self) -> Format {
         self.writes
             .as_ref()
             .and_then(|w| w.gitops.as_ref())

@@ -11,9 +11,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use figment::Figment;
-use figment::providers::{Env, Format, Yaml};
-use kaas_ui_auth::{OidcConfig, Operation, Role};
-use kaas_ui_connect::{ConnectAuth, ConnectSettings, ConnectTls};
+use figment::providers::{Env, Format as _, Yaml};
+use kaas_ui_auth::{Aspect, OidcConfig, Operation, Role};
+use kaas_ui_connect::{ConnectAuth, ConnectSettings, ConnectTls, Format};
 use kaas_ui_serde::{Codec, RegistryAuth, RegistrySettings};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -100,31 +100,43 @@ pub struct WritesConfig {
     pub gitops: Option<GitopsConfig>,
 }
 
-/// The hand-written half of ownership.
+/// The hand-written half of ownership, and how Git holds what it owns.
+///
+/// Nothing here names a tool. Which connectors Git owns, which of their
+/// aspects it declares, and in what format, are three separate statements,
+/// so a pipeline applying connector files and an operator reconciling
+/// resources are both described without kaas-ui assuming either.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, default, rename_all = "snake_case")]
 pub struct GitopsConfig {
-    /// Connectors Git owns, with `*` as the only wildcard. `["*"]` is right
-    /// for a Strimzi `KafkaConnect` that reconciles connectors from
-    /// `KafkaConnector` resources.
+    /// Connectors Git owns, with `*` as the only wildcard. `["*"]` when
+    /// whatever applies Git owns every connector on this Connect cluster —
+    /// an operator reconciling all of them, or a MirrorMaker 2 whose
+    /// connectors are generated from one declaration.
     pub owns_connectors: Vec<String>,
-    /// Where the owned manifests live — rendered as a link on a refusal.
+    /// What Git declares of an owned connector: any of `config`, `existence`,
+    /// `state`, `offsets`. A write changing one of these is refused with the
+    /// change to make in Git; one changing none — a restart — is allowed.
+    ///
+    /// Absent, the format's own answer ([`Format::declares`]): a connector
+    /// file holds config and existence; anything else is assumed to hold
+    /// everything.
+    pub declares: Option<Vec<Aspect>>,
+    /// Where the owned connectors live — rendered as a link on a refusal.
     pub source: Option<String>,
-    /// Which equivalent to render beside a write: Strimzi resources, or the
-    /// plain REST call.
-    pub format: ManifestFormat,
+    /// How Git holds them, and so what a write's equivalent is rendered as:
+    /// `rest` (the default — the call itself), `connector_json`, or
+    /// `strimzi_kafka_connector`.
+    pub format: Format,
 }
 
-/// How a write's Git equivalent is rendered.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ManifestFormat {
-    /// The plain call: `curl` against the Connect REST API.
-    #[default]
-    Plain,
-    /// Strimzi's resources: a `KafkaConnector` patch, or the annotation a
-    /// restart is.
-    Strimzi,
+impl GitopsConfig {
+    /// What Git declares of an owned connector, said or defaulted.
+    pub fn declared(&self) -> Vec<Aspect> {
+        self.declares
+            .clone()
+            .unwrap_or_else(|| self.format.declares().to_vec())
+    }
 }
 
 /// The Dex this deployment logs in through.
@@ -399,9 +411,12 @@ impl SchemaRegistryEntry {
 /// and that is a property of the client it gets (`kaas-ui-connect`), not of
 /// the credentials here — which can usually delete connectors.
 ///
-/// A MirrorMaker 2 deployment is one of these too. Strimzi runs a
-/// `KafkaMirrorMaker2` as a Connect cluster with the same REST API, so there
-/// is one kind of dialled thing and "is MM2" is a property of its connectors.
+/// A MirrorMaker 2 deployment in Connect mode is one of these too — Mirror
+/// connectors on a Connect cluster of their own or beside others, however it
+/// was deployed — so there is one kind of dialled thing and "is MM2" is a
+/// property of its connectors. A dedicated-mode MirrorMaker
+/// (`connect-mirror-maker.sh`) serves no such API and is found from the
+/// clusters' topics instead.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "snake_case")]
 pub struct ConnectClusterEntry {
@@ -1623,6 +1638,16 @@ impl Config {
                     return Err(ConfigError::Invalid(format!(
                         "Connect cluster {id:?} in environment {env:?} has a `writes:` block that \
                          allows nothing: list operations under `allow`, or remove it"
+                    )));
+                }
+                // Owning a connector and declaring none of it would make the
+                // ownership a badge that refuses nothing — the opposite of
+                // what writing it down meant.
+                if let Some(gitops) = connect.writes.as_ref().and_then(|w| w.gitops.as_ref())
+                    && gitops.declares.as_ref().is_some_and(Vec::is_empty)
+                {
+                    return Err(ConfigError::Invalid(format!(
+                        "Connect cluster {id:?} in environment {env:?} declares nothing in Git                          (`gitops.declares: []`): list what Git holds of its connectors —                          config, existence, state, offsets — or omit `declares` for the                          format's own answer"
                     )));
                 }
             }
@@ -3002,7 +3027,7 @@ environments:
           allow: [connector.restart, connector.pause]
           gitops:
             owns_connectors: ["gtfs-*"]
-            format: strimzi
+            format: strimzi_kafka_connector
 "#;
 
     #[test]
@@ -3020,7 +3045,53 @@ environments:
             writes.allow,
             [Operation::ConnectorRestart, Operation::ConnectorPause]
         );
-        assert_eq!(writes.gitops.unwrap().format, ManifestFormat::Strimzi);
+        let gitops = writes.gitops.unwrap();
+        assert_eq!(gitops.format, Format::StrimziKafkaConnector);
+        assert_eq!(
+            gitops.declared(),
+            Aspect::ALL,
+            "a KafkaConnector holds all of it"
+        );
+    }
+
+    #[test]
+    fn what_git_declares_defaults_to_the_format_and_may_be_narrowed_but_not_emptied() {
+        let declared = |yaml: &str| {
+            Config::from_yaml(yaml).map(|config| {
+                let (_, connect) = config.connect_clusters().next().unwrap();
+                connect
+                    .writes
+                    .as_ref()
+                    .unwrap()
+                    .gitops
+                    .as_ref()
+                    .unwrap()
+                    .declared()
+            })
+        };
+        assert_eq!(
+            declared(&WITH_WRITES.replace("strimzi_kafka_connector", "connector_json")).unwrap(),
+            [Aspect::Config, Aspect::Existence]
+        );
+        assert_eq!(
+            declared(&WITH_WRITES.replace(
+                "format: strimzi_kafka_connector",
+                "format: strimzi_kafka_connector\n            declares: [config, existence, state]"
+            ))
+            .unwrap(),
+            [Aspect::Config, Aspect::Existence, Aspect::State]
+        );
+        let err = declared(&WITH_WRITES.replace(
+            "format: strimzi_kafka_connector",
+            "format: rest\n            declares: []",
+        ))
+        .unwrap_err();
+        assert!(format!("{err}").contains("declares nothing"), "{err}");
+        let err = declared(&WITH_WRITES.replace("strimzi_kafka_connector", "strimzi")).unwrap_err();
+        assert!(
+            format!("{err}").contains("strimzi_kafka_connector"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -3119,10 +3190,21 @@ environments:
         let (_, connect) = signed_in.connect_clusters().next().unwrap();
         let writes = connect.writes.as_ref().unwrap();
         assert_eq!(writes.allow.len(), Operation::ALL.len());
+        let gitops = writes.gitops.as_ref().unwrap();
         assert_eq!(
-            writes.gitops.as_ref().unwrap().owns_connectors,
+            gitops.owns_connectors,
             ["*"],
-            "Strimzi reconciles every connector on this KafkaConnect"
+            "every connector on this Connect cluster is reconciled from Git"
+        );
+        assert_eq!(gitops.format, Format::StrimziKafkaConnector);
+        // The MirrorMaker's connectors are generated, not KafkaConnectors.
+        let (_, mm2) = signed_in
+            .connect_clusters()
+            .find(|(_, connect)| connect.id == "mm2")
+            .unwrap();
+        assert_eq!(
+            mm2.writes.as_ref().unwrap().gitops.as_ref().unwrap().format,
+            Format::Rest
         );
     }
 

@@ -24,7 +24,7 @@ const INTERVAL: Duration = Duration::from_secs(5);
 /// Watch the configuration file and swap the registry when it changes.
 ///
 /// The ownership file a config names is watched with it: a generated file
-/// that changes because somebody merged a `KafkaConnector` is a change to
+/// that changes because somebody merged a connector into Git is a change to
 /// what the UI may edit, and has to land without anyone touching the config.
 pub fn watch(path: PathBuf, registry: Arc<ArcSwap<Registry>>) {
     tokio::spawn(async move {

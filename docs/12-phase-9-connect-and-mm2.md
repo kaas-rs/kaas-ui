@@ -167,23 +167,23 @@ Same catalogue shape as Phase 10. Ceiling is per Connect cluster
 (`writes.allow`); grants are on resource `connect` (the Connect cluster) and
 `connector` (named, `value:` patterns), with kafbat-ui's action names.
 
-| action | tier | RBAC | REST call |
-|---|---|---|---|
-| `connector.restart` | operate | `connector: operate` | `POST /connectors/{c}/restart?includeTasks=&onlyFailed=` |
-| `connector.restart_task` | operate | `connector: operate` | `POST /connectors/{c}/tasks/{t}/restart` |
-| `connector.pause` / `.resume` / `.stop` | edit | `connector: operate` | `PUT /connectors/{c}/pause` · `/resume` · `/stop` |
-| `connector.edit` | edit | `connector: edit` | `PUT /connectors/{c}/config` (`PATCH` where the worker has it; a path-404 is absence) |
-| `connector.create` | edit | `connect: create` | `POST /connectors`, preceded by `PUT …/config/validate` as the dry run |
-| `connector.delete` | destroy | `connector: delete` | `DELETE /connectors/{c}` |
-| `connector.reset_offsets` | destroy | `connector: reset_offsets` | `DELETE /connectors/{c}/offsets` — connector must be STOPPED |
-| `connector.alter_offsets` | destroy | `connector: reset_offsets` | `PATCH /connectors/{c}/offsets` — connector must be STOPPED |
-| `connector.reset_topics` | operate | `connector: operate` | `PUT /connectors/{c}/topics/reset` |
+| action | tier | changes | RBAC | REST call |
+|---|---|---|---|---|
+| `connector.restart` | operate | — | `connector: operate` | `POST /connectors/{c}/restart?includeTasks=&onlyFailed=` |
+| `connector.restart_task` | operate | — | `connector: operate` | `POST /connectors/{c}/tasks/{t}/restart` |
+| `connector.pause` / `.resume` / `.stop` | operate | state | `connector: operate` | `PUT /connectors/{c}/pause` · `/resume` · `/stop` |
+| `connector.edit` | edit | config | `connector: edit` | `PUT /connectors/{c}/config` |
+| `connector.create` | edit | existence | `connect: create` | `POST /connectors`, preceded by `PUT …/config/validate` as the dry run |
+| `connector.delete` | destroy | existence | `connector: delete` | `DELETE /connectors/{c}` |
+| `connector.reset_offsets` | destroy | offsets | `connector: reset_offsets` | `DELETE /connectors/{c}/offsets` — connector must be STOPPED |
+| `connector.alter_offsets` | destroy | offsets | `connector: reset_offsets` | `PATCH /connectors/{c}/offsets` — connector must be STOPPED |
+| `connector.reset_topics` | operate | — | `connector: operate` | `PUT /connectors/{c}/topics/reset` |
 
-Pause, resume and stop are **edit**, not operate, on purpose: under Strimzi
-they are `spec.state` on the `KafkaConnector` — declared state that lives in
-Git and that the operator will put back. Restart is not state; Strimzi models
-it as the `strimzi.io/restart` annotation, and so it is operate and allowed on
-owned connectors.
+The **tier** is what a mistake costs, and decides confirmation only. What a
+write **changes** decides ownership: a connector Git owns refuses a write
+that changes an aspect its Git declares, and a restart changes none. Which
+aspects are declared depends on the tool keeping connectors in Git, so it is
+configured, not assumed — see below.
 
 `PUT /admin/loggers` stays out (Phase 10's out-of-scope list). The offset
 actions do not stop the connector for you: the form says the connector must
@@ -192,16 +192,28 @@ step, and passes Connect's 400 through verbatim if it is not.
 
 ### GitOps ownership for Connect
 
-- `writes.gitops.owns_connectors: ["*"]` is the right setting for a Strimzi
-  `KafkaConnect` with `strimzi.io/use-connector-resources: "true"` — which is
-  this cluster's — because the operator reconciles every connector's config
-  and state from its CR. Owned connectors: restart allowed, everything else
-  409 with the `KafkaConnector` YAML change rendered.
-- A **`KafkaMirrorMaker2`** owns all of its connectors by construction: the
-  Mirror connectors are generated from the MM2 CR, not from `KafkaConnector`
-  CRs. Rendered manifests for an MM2-hosted connector target the
-  `KafkaMirrorMaker2` resource (`spec.mirrors[].sourceConnector.config`,
-  `state`), not a `KafkaConnector`.
+Three statements per Connect cluster, none naming a tool:
+
+```yaml
+writes:
+  gitops:
+    owns_connectors: ["*"]          # which — or a generated ownership_file
+    declares: [config, existence]   # what of them; absent ⇒ the format's answer
+    format: connector_json          # how Git holds them: rest | connector_json | strimzi_kafka_connector
+    source: https://…               # where, for the link
+```
+
+| Git holds connectors as | `format` | declares by default |
+|---|---|---|
+| one `{name, config}` JSON file each, applied by a pipeline (CI `curl`, kcctl, Terraform) | `connector_json` | config, existence |
+| Strimzi `KafkaConnector` resources (`strimzi.io/use-connector-resources: "true"`) | `strimzi_kafka_connector` | everything |
+| anything else — a MirrorMaker 2 declaration, a tool with no renderer | `rest` | everything |
+
+- What a format cannot hold — no connector file says "restart task 3" —
+  renders as the REST call, with a note saying so.
+- MirrorMaker 2's connectors are generated from one declaration, so Git owns
+  all of them (`owns_connectors: ["*"]`). They are not `KafkaConnector`s even
+  under Strimzi, and the fixture's Connect cluster is `rest`.
 - Connect's 409 during a rebalance is a **503 with `Retry-After`**, not the
   ownership 409 — different status codes for "Git owns this" and "try again
   in a second".

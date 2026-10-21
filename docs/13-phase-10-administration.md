@@ -39,7 +39,7 @@ place, so no single mistake opens all of them.
 |---|---|---|---|
 | **ceiling** | per cluster / registry / Connect cluster, in config | which *kinds* of write this target can ever see | none — a read-only connection, as today |
 | **grant** | roles, in config | which *callers* may do which actions to which *named* things | none |
-| **ownership** | per target, in config | which named things Git owns, and so refuse edits | nothing owned |
+| **ownership** | per target, in config | which named things Git owns and which of their aspects it declares, and so refuse changing those | nothing owned |
 
 ```yaml
 environments:
@@ -52,11 +52,14 @@ environments:
           # admits exactly the api keys these actions need, and nothing else.
           allow: [topic.create, topic.edit, consumer.reset_offsets, messages.produce]
           gitops:
-            # Ownership. Matching topics refuse edit/delete with this link.
+            # Ownership. Matching topics refuse what Git declares of them,
+            # with this link and the change to make there.
             owns_topics: ["gtfs-*", "kaas-canary-*"]
             owns_users: ["*"]
             source: https://github.com/Woestebanaan/k3s-cluster/tree/master/apps/strimzi
-            format: strimzi          # which manifests to render: strimzi | plain
+            # How Git holds them, which also says what it declares unless
+            # `declares:` narrows it. Default: the CLI invocation.
+            format: strimzi_resources
 
 roles:
   - name: platform-oncall
@@ -89,14 +92,15 @@ A closed set. Each action names its tier, the RBAC resource it is granted on,
 and — for Kafka — the **api keys it may emit**, which come from kaas-lib (see
 ask B) because which key an operation sends is kaas-lib's business, not ours.
 
-Tiers drive confirmation UX and the GitOps rule, not authorization:
+Tiers drive confirmation UX only — not authorization, and not the GitOps
+rule, which is per aspect (see [the GitOps half](#the-gitops-half)):
 
-- **operate** — not state; reversible; no data lost. Allowed on GitOps-owned
-  things, because Git has no opinion about "restart".
-- **edit** — changes declared state. Refused on owned things.
-- **destroy** — loses data or position. Refused on owned things; the form
-  requires typing the resource's name; the audit entry is written first and
-  the write fails if it cannot be.
+- **operate** — reversible; no data lost. One click and a confirm.
+- **edit** — changes what the thing is configured to do. Shows what will
+  change.
+- **destroy** — loses data or position. The form requires typing the
+  resource's name; the audit entry is written first and the write fails if it
+  cannot be.
 
 | action | tier | RBAC (`resource: action`) | Kafka api keys | kaas-lib |
 |---|---|---|---|---|
@@ -193,8 +197,9 @@ own ceiling forbade, which is a bug in `writer()`, not a user mistake.
 3. **Authorization.** `Access::authorize` ⇒ `Grant` or `Denied`. Visible but
    not permitted ⇒ **403**: the id is already known to the caller, so 403 leaks
    nothing and is more honest than a 404 for something they can see.
-4. **Ownership.** Owned and tier ≠ operate ⇒ **409** with the manifest and
-   the `source` link. Not a 403 — the caller may well be allowed; Git is.
+4. **Ownership.** Owned, and the action changes an aspect Git declares ⇒
+   **409** with the change to make in Git and the `source` link. Not a 403 —
+   the caller may well be allowed; Git is.
 5. **Preview.** `?dry_run=true` where Kafka supports `validate_only`
    (CreateTopics, CreatePartitions, AlterConfigs) runs it on the broker and
    returns what would happen. Everything else returns the rendered request
@@ -216,11 +221,13 @@ by Phase 1).
 
 ## The GitOps half
 
-- **Manifests for every edit and destroy form**, rendered server-side from
-  the same request DTO that would be sent: Strimzi `KafkaTopic`, `KafkaUser`
-  (ACLs, quotas, SCRAM), `KafkaConnector`; `format: plain` renders the
-  `kafka-topics.sh` / `kafka-configs.sh` / `kafka-acls.sh` invocation instead.
-  Shown beside the Apply button, or instead of it.
+- **An equivalent for every form**, rendered server-side from the same
+  request DTO that would be sent, in the format the target's Git holds
+  things in — chosen per target, never guessed. The default is the plain
+  invocation: `kafka-topics.sh` / `kafka-configs.sh` / `kafka-acls.sh`, and
+  for Connect the REST call. A tool's own files where configured: Strimzi
+  `KafkaTopic` and `KafkaUser` (ACLs, quotas, SCRAM); for Connect, connector
+  JSON or `KafkaConnector`. Shown beside the Apply button, or instead of it.
 - **Ownership is declared, not discovered — and kaas-ui never asks
   Kubernetes.** No broker says over the Kafka protocol who manages a topic or
   an ACL, and kaas-ui does not depend on the platform it runs on, so there is
@@ -253,10 +260,17 @@ by Phase 1).
   (`kubectl apply` without a commit) looks unowned. Strimzi will revert a UI
   edit to it; kaas-broker will write it through to the resource. The fix is
   to commit it, which is the GitOps answer anyway.
-- **Operate is allowed on owned things** because it is not state. For Connect
-  under Strimzi this is exactly the operator's own model: `spec.state` (pause,
-  stop) is declarative and lives in Git; restart is the `strimzi.io/restart`
-  annotation, which is imperative. Phase 9 uses this split as is.
+- **Ownership is per aspect, not per tier.** Every action names the aspect
+  of its target it changes, or none, and an owned target refuses exactly the
+  actions that change an aspect its Git declares — by default what its format
+  can hold, narrowed by `declares:`. Tools disagree on what they keep: a
+  `KafkaConnector` declares a connector's running state, a directory of
+  connector files does not, and kaas-ui assuming either is how a pause gets
+  refused for no reason. A restart or a leader election changes nothing Git
+  can declare and is allowed on anything. Built for Connect — see
+  [11-built.md](11-built.md#connect-writes-tool-neutral); for topics the
+  aspects will be config, partitions, existence and records; for a
+  principal, its ACLs, quotas and credentials.
 
 ## kaas-lib changes
 

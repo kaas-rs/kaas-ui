@@ -2,10 +2,13 @@
 //
 // Phase 10, GitOps first. Three things decide what appears here, all on the
 // server: the Connect cluster's `writes.allow` ceiling, the caller's roles,
-// and whether Git owns this connector. A button is drawn only for a write
+// and whether Git owns this connector — and which of its aspects (config,
+// existence, state, offsets) Git declares. A button is drawn only for a write
 // every gate agrees to — a button that 403s is worse than none — and for a
-// write refused because Git owns the connector the page draws the change to
-// make in Git instead. Every sheet shows that equivalent too, applied or not.
+// write refused because Git declares what it changes the page draws the
+// change to make in Git instead, in whatever format this Connect cluster's
+// Git holds connectors. Every sheet shows that equivalent too, applied or
+// not.
 //
 // The tiers decide the friction, never the permission: operate is one click
 // and a confirm, edit shows what will change, destroy wants the connector's
@@ -181,7 +184,9 @@ export function ConnectorWrites({
       {managedInGit ? (
         <span
           className="inline-flex items-center gap-1 rounded-sm border px-2 py-0.5 text-[12px] text-ink-muted"
-          title={managedInGit.source ?? "Git owns this connector"}
+          title={`Git declares its ${managedInGit.declares.join(", ")}${
+            managedInGit.source ? ` — ${managedInGit.source}` : ""
+          }`}
         >
           <GitBranch aria-hidden className="size-3.5" />
           managed in Git
@@ -753,8 +758,9 @@ function GitChanges({
           change <span className="font-mono">{connector}</span> in Git
         </SheetTitle>
         <SheetDescription>
-          Git owns this connector, so its declared state is changed there — the
-          operator would put back an edit made here.
+          Git declares this connector&rsquo;s{" "}
+          {managedInGit?.declares.join(", ") ?? "state"}, so those are changed
+          there — whatever applies Git would put back a change made here.
           {managedInGit?.source ? (
             <>
               {" "}
