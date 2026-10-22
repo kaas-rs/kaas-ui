@@ -51,8 +51,9 @@ fn is_comment(line: &str) -> bool {
 
 /// **1. One construction site.**
 ///
-/// Read-only is the architecture, not a setting. Exactly one
-/// `Admin::connect_read_only(`, no `Admin::connect(` at all.
+/// Kafka writes are not built yet: exactly one `Admin::connect_read_only(`,
+/// no `Admin::connect(` at all. The first Kafka write changes this check in
+/// the same commit as the granted connection it builds.
 fn one_construction_site() -> Task {
     let needle = "Admin::connect";
     let mut read_only = Vec::new();

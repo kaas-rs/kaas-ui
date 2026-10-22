@@ -145,8 +145,8 @@ the whole UI look washed out.
 ```
 
 The dark nav band is the strongest visual anchor and it is dark in both modes —
-same as the book's sidebar. It is also where the **cluster chip** lives, which
-PLAN.md §7 requires to be answerable without reading the URL.
+same as the book's sidebar. It is also where the **cluster chip** lives, so
+"which cluster am I looking at" is answerable without reading the URL.
 
 Content is capped at 1400px and left-aligned, not centred: tables of partitions
 want the horizontal room, and a centred column on a 4K monitor wastes it.

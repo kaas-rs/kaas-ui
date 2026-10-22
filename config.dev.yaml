@@ -102,8 +102,8 @@ environments:
         connect_timeout: 3s
 
     # Strimzi's general-purpose Connect cluster: the GTFS and MQTT source
-    # connectors. Dialled over REST, read-only
-    # — the client has no method that sends anything but GET. No credentials:
+    # connectors. Dialled over REST with no `writes:` block, so nothing but GET
+    # is sent. No credentials:
     # Strimzi's REST listener is plain HTTP inside the cluster, and the
     # NetworkPolicy `kafka-connect-allow-kaas-ui` (k3s-cluster) is what lets
     # this pod and the deployed kaas-ui reach it at all.

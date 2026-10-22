@@ -8,8 +8,8 @@
 //!   because someone else's broker refused us is a bug.
 //! * [`Error::ReadOnly`] reaching a client is **500**, not 405. The gate in
 //!   kaas-lib is the second line of defence; if it fires, kaas-ui built a
-//!   request it should have been incapable of building, because no mutating
-//!   route exists in the router at all.
+//!   request its own ceiling forbids, which the write gate should have
+//!   refused before anything was sent.
 
 use kafka_conn::Error;
 use serde::Serialize;

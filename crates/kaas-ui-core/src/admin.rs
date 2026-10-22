@@ -1,4 +1,4 @@
-//! The read-only admin surface: ACLs, quotas, SCRAM users, reassignments and
+//! The admin surface: ACLs, quotas, SCRAM users, reassignments and
 //! transactions.
 //!
 //! Six upstream types cross the boundary here — more than any other module —

@@ -22,10 +22,9 @@
 //! **This forwards whatever method it is given.** Dex's token endpoint is a
 //! `POST`, its login form for a password connector is a `POST`, and a proxy
 //! that quietly answered `405` to those would be a proxy that works right up
-//! until someone adds a connector. kaas-ui's read-only guarantee does not come
-//! from the verbs on its routes — it comes from the single
-//! `Admin::connect_read_only` construction site, and nothing reachable through
-//! here has an admin client at all.
+//! until someone adds a connector. What stops a write in kaas-ui is not the
+//! verbs on its routes — it is the `Grant` every mutating client method
+//! takes, and nothing reachable through here has a client at all.
 
 use std::sync::Arc;
 use std::time::Duration;

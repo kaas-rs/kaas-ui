@@ -105,7 +105,7 @@ jobs:
           # Its README has a "Major version zero" section saying the tag
           # *should not* be generated and giving exactly this expression to
           # stop it — a recommendation, not a behaviour, which is the reading
-          # docs/10-release-and-deployment.md originally got wrong. `:0` would
+          # this project's release docs originally got wrong. `:0` would
           # mean "any 0.x", a compatibility promise 0.x does not make. The
           # guard lapses on its own at v1.0.0, so this is a condition rather
           # than a deleted line.
@@ -141,7 +141,7 @@ jobs:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: cosign sign --yes "${IMAGE}@${DIGEST}"
 
-      # PLAN.md §10 predicts ~25 MB and ~15 MB RSS against the JVM original's
+      # The design predicted ~25 MB and ~15 MB RSS against the JVM original's
       # several hundred. That is the project's headline claim, so it gets
       # measured on every release rather than asserted in a README.
       - name: Measure the image

@@ -662,7 +662,7 @@ export function useOldestTimestamp(env: string, id: string, topic: string) {
   return first && first.kind === "record" ? first.timestamp : undefined
 }
 
-// --- The read-only admin surface -----------------------------------------
+// --- The admin surface --------------------------------------------------
 //
 // Five screens, one hook each, and one shared decision: none of them refetch
 // on an interval. An ACL binding changes when somebody runs a script, not

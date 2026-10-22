@@ -3,8 +3,8 @@
 //
 // The store is *not* in the TanStack Query cache and must never be. Query is
 // for request/response; a stream pushed into it grows without bound and
-// invalidates in ways nobody can reason about. This is PLAN.md §7's first
-// "thing to get right", and it is much harder to undo than to do.
+// invalidates in ways nobody can reason about. It is the first thing to get
+// right here, and much harder to undo than to do.
 
 import {
   useCallback,

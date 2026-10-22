@@ -4,10 +4,6 @@
 // They share a route prefix and nothing else — this page is text, versions and
 // a diff, and keeping both in one file meant eight hundred lines in which the
 // diff machinery sat below a paging control it has no relationship to.
-//
-// Read-only: no editing a schema, no deleting a version, no changing
-// compatibility. That is most of what kafbat's equivalent page spends its
-// buttons on, and it is the half kaas-ui does not have.
 
 import { Link } from "@tanstack/react-router"
 import { AlertTriangle, ArrowLeft } from "lucide-react"

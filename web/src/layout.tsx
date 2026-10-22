@@ -58,10 +58,6 @@ export function AppLayout() {
             <Outlet />
           </div>
         </main>
-
-        <footer className="border-t px-6 py-3 text-[12px] text-ink-faint">
-          read-only by construction — kaas-ui has no mutating endpoint
-        </footer>
       </SidebarInset>
       {/* What a write says once its dialog has closed. */}
       <Toaster />

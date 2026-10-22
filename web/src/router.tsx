@@ -194,7 +194,7 @@ const configsRoute = createRoute({
 })
 
 /**
- * The read-only admin surface: five screens behind one URL.
+ * The admin surface: five screens behind one URL.
  *
  * The tab is a search parameter rather than a path segment, for the reason the
  * topic page's is: it is this page's state, and a link somebody sends should

@@ -1,9 +1,9 @@
-//! Who read which payloads — and, since Phase 10, who changed what.
+//! Who read which payloads, and who changed what.
 //!
-//! In a tool that cannot write, the audit question is **reads**: who opened
-//! which topic's messages, on which cluster, when, and how much of it they
-//! saw. Nothing is being changed, which is exactly why this is the log that
-//! matters and exactly why it is the one most likely to be skipped.
+//! **Reads** are who opened which topic's messages, on which cluster, when,
+//! and how much of it they saw. Nothing is being changed, which is exactly why
+//! this is the log most likely to be skipped. **Writes** are an intent line
+//! before the change and an outcome line after it — see [`Change`].
 //!
 //! # Two rules that make it an audit log rather than a log
 //!
@@ -171,8 +171,7 @@ pub enum Phase {
 
 /// One write, in two lines: its intent, then its outcome.
 ///
-/// Phase 10. A read-only tool audited disclosures; one that can change a
-/// cluster audits that too, and the two share a sink so one query finds both.
+/// Reads and writes share a sink, so one query finds both.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Change {

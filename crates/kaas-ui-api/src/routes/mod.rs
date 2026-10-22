@@ -1,11 +1,10 @@
 //! The handlers.
 //!
-//! Every data route is a `GET`. The writes are few and listed — the openapi
-//! test holds the exact set of non-GET paths, so a new one is a reviewed
-//! change to that list — and each mints a `Grant` through the gate before its
-//! client will send anything. Read-only by default is the architecture: a
-//! target with no `writes:` ceiling has nothing a grant could be minted
-//! against.
+//! Every read is a `GET`. The writes are listed — the openapi test holds the
+//! exact set of non-GET paths, so a new one is a reviewed change to that list
+//! — and each mints a `Grant` through the gate before its client will send
+//! anything. A target with no `writes:` ceiling has nothing a grant could be
+//! minted against.
 
 pub mod admin;
 pub mod analysis;

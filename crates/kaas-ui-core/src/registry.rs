@@ -250,11 +250,13 @@ impl ClusterHandle {
 
     /// **The only `Admin::connect_read_only` call site in the workspace.**
     ///
-    /// Read-only is the architecture, not a setting: the gate is enforced in
-    /// `Connection::send` on `ApiKey::is_mutating`, so an admin method added
-    /// upstream tomorrow is covered without anyone remembering to cover it.
-    /// kaas-ui's only job is not to undermine it, and the way to not undermine
-    /// it is to have one place where a connection can possibly be made.
+    /// Kafka writes are not built yet, and this connection cannot make one:
+    /// kaas-lib refuses mutating api keys in `Connection::send` on
+    /// `ApiKey::is_mutating`, so an admin method added upstream tomorrow is
+    /// covered without anyone remembering to cover it. The first Kafka write
+    /// replaces this with a connection built from the cluster's `writes.allow`
+    /// — kaas-lib's mutation ceiling — and it stays the one place a
+    /// connection can possibly be made.
     async fn connect(&self) -> Result<Admin, Error> {
         let config = self.cluster_config()?;
         Admin::connect_read_only(self.entry.bootstrap.clone(), config).await

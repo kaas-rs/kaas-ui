@@ -24,8 +24,8 @@ use utoipa::ToSchema;
 use crate::identity::Principal;
 use crate::policy::{Access, Action, Resource};
 
-/// One write kaas-ui can perform. A closed set: the catalogue in
-/// `docs/13-phase-10-administration.md`, landing one action at a time.
+/// One write kaas-ui can perform. A closed set, and every operation in it is
+/// one some code path performs — `docs/RBAC.md` lists the catalogue.
 ///
 /// The serialised names are what `writes.allow` lists and what `/api` reports
 /// as available, so a config file and a page speak the same words.

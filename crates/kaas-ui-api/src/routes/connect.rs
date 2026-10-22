@@ -347,8 +347,8 @@ pub struct ConnectorPage {
     /// What could not be read for any other reason, by name.
     pub errors: Vec<kaas_ui_core::ResourceError>,
     /// Every write this connector could take, and whether this caller may.
-    /// Empty where the Connect cluster has no `writes:` ceiling — the
-    /// read-only default renders no write UI at all.
+    /// Empty where the Connect cluster has no `writes:` ceiling, which
+    /// renders no write UI at all.
     pub writes: Vec<WriteOption>,
 }
 

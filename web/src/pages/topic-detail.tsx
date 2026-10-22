@@ -5,9 +5,6 @@
 // over the whole cluster, this one is a single describe fanned out across
 // three tabs, and keeping both in one file meant the partition grid and the
 // placement legend sat below a paging control they have no relationship to.
-//
-// Read-only: no creating a partition, no editing a config, no producing a
-// record. That is most of what kafbat's equivalent page spends its buttons on.
 
 import { Link, useNavigate, useSearch } from "@tanstack/react-router"
 import { useCallback } from "react"

@@ -1046,10 +1046,9 @@ export type MessageDetail =
       raw: Payload
     }
 
-// --- The read-only admin surface -----------------------------------------
+// --- The admin surface --------------------------------------------------
 //
-// Phase 7. Every one of these is a describe; nothing in this section has a
-// mutating counterpart in the client, because there is no route to reach one.
+// Phase 7. Every one of these is a describe.
 
 /** One ACL binding, as the authorizer stores it. */
 export interface Acl {
@@ -1148,8 +1147,8 @@ export interface Producer {
 // --- Kafka Connect -----------------------------------------------------------
 //
 // A Connect cluster is a peer of a Kafka cluster inside an environment, dialled
-// over its REST API — read-only: the server's client has no method that sends
-// anything but GET, and connector configs are redacted before they leave it.
+// over its REST API. Connector configs are redacted before they leave the
+// server's client, and every write is gated.
 
 /** Whether a Connect cluster has been reached. `unprobed` is a real state:
     nothing is asked until a page needs it. */
@@ -1301,7 +1300,7 @@ export interface ConnectorPage {
   offsetsAbsent: string | null
   errors: ResourceError[]
   /** Every write on the Connect cluster's ceiling, checked for this caller.
-      Empty without a ceiling: the read-only default draws no write UI. */
+      Empty without a ceiling, which draws no write UI. */
   writes: WriteOption[]
 }
 

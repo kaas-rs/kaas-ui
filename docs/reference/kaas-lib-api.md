@@ -125,9 +125,9 @@ matters.
 
 **Consequence for kaas-ui: there is no `cluster.capabilities()` to project
 from, and kaas-ui must not invent one by picking a broker.** Doing so produces a
-UI whose tabs flicker depending on which connection answered. See
-[what is built](../11-built.md) for the interim rule and
-[upstream-asks.md](upstream-asks.md) item 1 for the fix.
+UI whose tabs flicker depending on which connection answered. Until
+[upstream-asks.md](upstream-asks.md) item 1 lands, kaas-ui reads from an
+explicitly named broker and says so in the UI.
 
 ### 4. `Error` is a taxonomy, and `ErrorCode` carries `Unknown(i16)`
 
@@ -211,7 +211,5 @@ decode a batch itself. It should not.
 
 ## What kaas-lib does not have, and will not for now
 
-No producer, no consumer-group membership, no incremental fetch sessions. A
-read-only kaas-ui wants none of them — PLAN.md §1's observation that "the
-produce question disappears" is the single biggest simplification in the
-project.
+No producer, no consumer-group membership, no incremental fetch sessions.
+Nothing kaas-ui has built so far uses them.

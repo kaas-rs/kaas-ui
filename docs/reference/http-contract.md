@@ -1,15 +1,15 @@
 # The HTTP contract
 
-Shared by every phase. PLAN.md §4 sets the shape; this fills in the parts a
-router needs.
+Shared by every phase: the parts a router needs.
 
-## Every data endpoint is a GET
+## Every read is a GET
 
-Because reading is what they do — not because a check forbids the alternative.
-The auth flow adds `POST /auth/logout`, and the Dex proxy at `/dex/*` forwards
-whatever method the browser sends. What guarantees read-only is the single
-`Admin::connect_read_only` construction site: a handler reached by any verb has
-no client that can write.
+A write is any other verb under `/api`, and before it is routed it must carry
+`X-Kaas-Ui: 1` and, where the browser sends an `Origin`, name this host. The
+handler then needs a `Grant` from the write gate — the target's `writes.allow`
+ceiling and the caller's role — and the intent is audited before anything is
+sent. The auth flow adds `POST /auth/logout`, and the Dex proxy at `/dex/*`
+forwards whatever method the browser sends.
 
 `/auth/login` is a `GET` and has to stay one: `SameSite=Lax` sends the pending
 cookie on a top-level navigation and not on a `fetch`. Logout is the mirror
@@ -82,7 +82,7 @@ envelope by hand.
 | `Authorization` | 403 | "this cluster's principal lacks the ACL" |
 | `Broker { code }` | 400 | render code *and* number |
 | `Decode` | 500 | "this is a kaas-lib bug" + report link |
-| `ReadOnly` | 500 | **our** bug — see PLAN.md §1 |
+| `ReadOnly` | 500 | **our** bug — see below |
 | `UnsupportedApi` | 501 | render *both* version ranges |
 | `Unsupported`, `InvalidRequest` | 400 | query validation |
 
@@ -93,8 +93,8 @@ not logged in. A cluster whose SASL credentials were rejected is a server-side
 configuration fault and must never log the user out.
 
 **`ReadOnly` reaching a client is a bug, not a 405.** The gate is the second
-line of defence. If it fires, kaas-ui built a request it should have been
-incapable of building — there is no mutating endpoint in the router. Log it at
+line of defence. If it fires, kaas-ui built a request its own ceiling forbade —
+the write gate should have refused it before anything was sent. Log it at
 `error!` with a stack of context and return 500.
 
 `UnsupportedApi` carries `broker: Option<(i16,i16)>` and `ours:

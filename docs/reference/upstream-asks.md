@@ -1,6 +1,6 @@
 # Proposed kaas-lib work
 
-PLAN.md §9 ordered these by value-to-effort against the library as it stood.
+These were first ordered by value-to-effort against the library as it stood.
 This version sequences them against the **phases that need them** and adds one
 item that only appeared once the library was pointed at a real `kaas` broker.
 
@@ -44,15 +44,14 @@ kaas → describe_cluster: no usable version of DescribeCluster:
 and `Metadata` supplies **every field except `is_fenced`**.
 
 kaas-lib already does exactly this shape of fallback for `describe_topics`
-(`DescribeTopicPartitions` → `Metadata`) and PLAN.md §2 is explicit that
-absorbing implementation differences is the library's job, not the UI's. So the
+(`DescribeTopicPartitions` → `Metadata`), and absorbing implementation
+differences is the library's job, not the UI's — CLAUDE.md's rule 2. So the
 fallback belongs there, with `is_fenced` becoming `Option<bool>` — `None`
 meaning "not reported by this path", which is honest, rather than `false`, which
 is a guess.
 
 **Worked around** in kaas-ui by rendering the fleet from
-`Cluster::snapshot()` alone (see [what is built](../11-built.md)), so this
-is not blocking. It is filed because the workaround is a UI making a
+`Cluster::snapshot()` alone, so this is not blocking. It is filed because the workaround is a UI making a
 compatibility decision, which is the thing the ownership boundary exists to
 prevent.
 
@@ -508,12 +507,8 @@ Phase 7 inspector most obviously wants — and `remove_group_members`
 
 ## Not needed
 
-Producer, group membership, incremental fetch sessions. A read-only kaas-ui
-never wants any of them.
-
-This is worth stating positively rather than as an omission: **kaas-lib having
-no producer stops being a gap to work around and becomes alignment with the
-product.**
+Producer, group membership, incremental fetch sessions: nothing kaas-ui has
+built so far uses them.
 
 Also not asked for, so it is not proposed again: **a payload-free "stats only"
 scan** for the analysis. `RecordBatchDecoder` decodes a whole batch into a

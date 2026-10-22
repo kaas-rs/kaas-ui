@@ -36,7 +36,7 @@ use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
-/// A read-only, multi-cluster Kafka UI.
+/// A multi-cluster Kafka UI.
 #[derive(Debug, Parser)]
 #[command(name = "kaas-ui", version, about)]
 struct Args {

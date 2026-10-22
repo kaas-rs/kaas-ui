@@ -757,8 +757,8 @@ fn replication_row(profile: Profile, topology: Topology, a: &Assumptions) -> Rec
         why: format!("{rationale}{note}"),
         caution: Some(
             "Not a topic configuration: changing it is a partition reassignment, which moves \
-             data between brokers while the topic is live. kaas-ui cannot make one — it is \
-             read-only — so this is a line for your GitOps repo, not a button."
+             data between brokers while the topic is live. kaas-ui does not make one, so \
+             this is a line for your GitOps repo, not a button."
                 .to_owned(),
         ),
     }

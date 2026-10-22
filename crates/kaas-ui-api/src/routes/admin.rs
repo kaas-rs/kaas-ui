@@ -1,4 +1,4 @@
-//! The read-only admin surface: ACLs, quotas, SCRAM users, reassignments and
+//! The admin surface: ACLs, quotas, SCRAM users, reassignments and
 //! transactions.
 //!
 //! Five screens over calls that already existed, and the phase where kaas-ui

@@ -1,21 +1,23 @@
-//! Who is asking, and what they are allowed to see.
+//! Who is asking, what they may see, and what they may change.
 //!
-//! Two halves, and this crate is currently the second one only:
+//! Three parts:
 //!
-//! * **identity** — [`Principal`], the answer to "who is this". Today it is
-//!   only ever [`Principal::anonymous`]; the OIDC exchange that produces a real
-//!   one is the next slice of Phase 4.
+//! * **identity** — [`Principal`], the answer to "who is this": the anonymous
+//!   caller, or one the OIDC exchange in [`oidc`] vouched for.
 //! * **authorization** — [`Policy`], a list of [`Role`]s, resolved against a
 //!   principal into an [`Access`]: which clusters exist as far as this caller
 //!   is concerned, and what they may do with them.
+//! * **the write gate** — [`Access::authorize`], the only place a [`Grant`] is
+//!   minted, and [`Audit`], which records a disclosure or a write before it
+//!   happens.
 //!
-//! # Read-only makes this small
+//! # Hand-rolled on purpose
 //!
-//! With no writes, permissions collapse to two axes: *which clusters* and
-//! *metadata versus payloads*. That is a matrix with two columns, and it is
-//! hand-rolled here on purpose — a policy engine is the part of an auth system
-//! that most looks like it wants a framework and least needs one. See
-//! `docs/11-built.md`, under Phase 4.
+//! Permissions are a short list of resources, each with only the actions some
+//! code path performs, selected by cluster id and labels. That is small enough
+//! to write out, and a policy engine is the part of an auth system that most
+//! looks like it wants a framework and least needs one. `docs/RBAC.md` is the
+//! whole model.
 //!
 //! # Nothing here knows about a provider
 //!

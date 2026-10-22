@@ -11,7 +11,7 @@
 //! jar for that reason.
 //!
 //! The key is generated at startup, so **restarting the process ends every
-//! session**. For a single-replica read-only browser tool that is a fair
+//! session**. For a single-replica browser tool that is a fair
 //! trade against another secret to store, mount and rotate — and it is said
 //! out loud in the startup log rather than left to be discovered as "it logs
 //! me out sometimes".

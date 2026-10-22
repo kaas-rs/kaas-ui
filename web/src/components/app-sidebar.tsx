@@ -50,9 +50,6 @@ export function AppSidebar({ ...props }: ComponentProps<typeof Sidebar>) {
               <KaasLogo className="size-8" />
               <div className="grid flex-1 text-left leading-none">
                 <span className="truncate text-[1.5em] font-bold">kaas-ui</span>
-                <span className="truncate text-[11px] opacity-70">
-                  read-only
-                </span>
               </div>
             </SidebarMenuButton>
           </SidebarMenuItem>

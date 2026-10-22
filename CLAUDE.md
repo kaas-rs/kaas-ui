@@ -2,16 +2,16 @@
 
 ## What this is
 
-A Kafka cluster UI, **read-only by default**, in the shape of kafbat-ui: an Axum backend on
+A Kafka cluster UI in the shape of kafbat-ui: an Axum backend on
 [`kaas-lib`](https://github.com/kaas-rs/kaas-lib), a React/TanStack frontend,
 multi-cluster from day one, OIDC via Dex.
 
-- `PLAN.md` — the design. Why read-only, why multi-cluster, why Dex. Stable.
-- `docs/` — the implementation plan. Phases 0–8 (= PLAN.md's M0–M8), plus
-  release/deployment and four reference documents. Changes as phases land.
-- `docs/11-built.md` — what the finished phases decided differently from their
-  plan, and what was measured. **A phase that lands loses its plan file**; what
-  outlived it is here.
+- `docs/README.md` — status: which phases are done, and what is left in what
+  order.
+- `docs/ARCHITECTURE.md` and `docs/RBAC.md` — how it is built, and who may
+  see and change what.
+- `docs/reference/` — the live clusters, the kaas-lib surface, the HTTP
+  contract, the design system, and the kaas-lib asks.
 
 Read `docs/README.md` first. Phases 0–7 are done, and 9 — Kafka Connect, read
 (9a) and written (9d) — and the Connect half of 10a (the write gate); 8 and the
@@ -67,28 +67,30 @@ was committed.
 
 ## Hard rules
 
-**1. Read-only by default is the architecture; writing is constructed, not
-permitted.** A target with no `writes:` block cannot be written to by any code
-path. For Kafka that is still exactly one `Admin::connect_read_only(` in the
-workspace, in `kaas-ui-core/src/registry.rs`, and no `Admin::connect(`
-anywhere. For Connect it is `kaas-ui-connect`: every read goes through one
-private `get_json`, and the only non-GET is in `writer.rs`, whose constructor
-takes a `Grant`. A `Grant` is minted only by `Access::authorize` in
+**1. A write is constructed, not permitted.** Every mutating client method
+takes a `&Grant`. A `Grant` is minted only by `Access::authorize` in
 `kaas-ui-auth/src/gate.rs`, and only when two gates agree — the target's
-`writes.allow` ceiling and a role. kaas-ui does not model Git ownership: a
-target whose state an operator or pipeline reconciles leaves the operations
-that would fight it out of its ceiling (a GitOps layer was built and removed
-as Strimzi's model in disguise — `docs/11-built.md`). An anonymous caller
-never holds a grant, so the open deployment views everything and writes
-nothing. Every non-GET under `/api`
-needs `X-Kaas-Ui: 1`, and the intent is audited *before* anything is sent —
-a write that cannot be recorded does not happen. If `Error::ReadOnly` ever
-reaches a user, kaas-ui built a request its own ceiling forbade: a 500, not a
-403. Phase 10 (`docs/13-phase-10-administration.md`) is the design; the Kafka
-half lands with kaas-lib's mutation ceiling.
+`writes.allow` ceiling and a role — so a target with no `writes:` block allows
+no operation and an anonymous caller never holds a grant. For Connect, every
+read in `kaas-ui-connect` goes through one private `get_json`, and the only
+non-GET is in `writer.rs`, whose constructor takes a `Grant`. kaas-ui does not
+model Git ownership: a target whose state an operator or pipeline reconciles
+leaves the operations that would fight it out of its ceiling (a GitOps layer
+was built and removed as Strimzi's model in disguise). Every non-GET under
+`/api` needs `X-Kaas-Ui: 1`, and the intent is audited *before* anything is
+sent — a write that cannot be recorded does not happen. If `Error::ReadOnly`
+ever reaches a user, kaas-ui built a request its own ceiling forbade: a 500,
+not a 403.
 
-Rule 1's invariants are greps in `cargo xtask ci`: one construction site, the
-Connect client reads outside `writer.rs`, and one `Grant` constructor. The
+Kafka writes are not built yet. The workspace's one Kafka admin connection is
+the `Admin::connect_read_only(` in `kaas-ui-core/src/registry.rs`, and
+`cargo xtask ci` checks that it is the only construction site. The first Kafka
+write needs kaas-lib's mutation ceiling (upstream asks 17–18) to build a
+connection from the target's `writes.allow`, and changes that check in
+`xtask/src/checks.rs` in the same commit.
+
+Rule 1's invariants are greps in `cargo xtask ci`: the Kafka construction site,
+the Connect client reads outside `writer.rs`, and one `Grant` constructor. The
 openapi test holds the exact set of non-GET paths.
 
 **2. No Kafka version number appears anywhere.** No `if version >= 3.5`, no
@@ -175,8 +177,8 @@ cargo xtask docs    # openapi spec + regenerate the TS client
 Unit tests stay cluster-free so `cargo xtask ci` runs anywhere. Anything needing
 a broker goes in `live`.
 
-Every phase in `docs/` has an acceptance command. Run it. Do not report a phase
-complete on the basis of `cargo build` succeeding.
+Every phase has an acceptance command — `live`, or `login` for auth. Run it. Do
+not report a phase complete on the basis of `cargo build` succeeding.
 
 ## CI and deployment
 
@@ -193,8 +195,6 @@ that discovers `apps/*`.
 **ArgoCD auto-sync is off in this cluster.** A merged commit registers a change;
 applying it is a manual `argocd app sync`. A green pipeline is not evidence that
 the cluster changed.
-
-See `docs/10-release-and-deployment.md`.
 
 ## Design
 

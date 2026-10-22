@@ -284,13 +284,14 @@ impl ApiError {
 
 impl From<Error> for ApiError {
     fn from(error: Error) -> Self {
-        // `ReadOnly` reaching here is a kaas-ui bug, not a 405: there is no
-        // mutating route in the router at all, so the gate firing means we
-        // built a request we should have been incapable of building.
+        // `ReadOnly` reaching here is a kaas-ui bug, not a 405: kaas-lib
+        // refused a mutating request on a connection that does not admit it,
+        // so kaas-ui built a request its own ceiling forbids — one the write
+        // gate should have refused before anything was sent.
         if let Error::ReadOnly { api_key } = &error {
             tracing::error!(
                 api_key = %api_key,
-                "the read-only gate fired: kaas-ui built a mutating request, which is a bug"
+                "kaas-lib's mutation gate fired: kaas-ui built a request its ceiling forbids, which is a bug"
             );
         }
 

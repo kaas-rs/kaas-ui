@@ -1,4 +1,4 @@
-// The read-only admin surface: five screens over five describes.
+// The admin surface: five screens over five describes.
 //
 // One page with five tabs rather than five sidebar items, because they share a
 // shape — a cluster-wide administrative fact, in a table, that most clusters
@@ -96,7 +96,7 @@ export function ClusterAdminPage({
     <>
       <PageTitle
         title="Admin"
-        subtitle="Read only, all of it: describes with no altering counterpart in this application."
+        subtitle="ACLs, quotas, SCRAM users, reassignments and transactions."
       />
 
       {capabilities.isLoading ? (

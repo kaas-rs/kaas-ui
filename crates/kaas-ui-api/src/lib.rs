@@ -69,8 +69,9 @@ pub struct AppState {
     /// Encrypts the session and pending-login cookies. Generated at startup,
     /// so a restart signs everyone out — see [`session`].
     cookie_key: Key,
-    /// Who read which payloads. Always present: a read-only tool's audit is
-    /// its whole security story, and making it optional would make it absent.
+    /// Who read which payloads, and who changed what. Always present: the
+    /// audit is the record of every disclosure and every write, and making it
+    /// optional would make it absent.
     audit: Arc<Audit>,
     streams: Arc<streaming::StreamGovernor>,
     stopping: Arc<streaming::ShutdownSignal>,
@@ -480,7 +481,7 @@ fn api_router() -> Router<AppState> {
             "/environments/{env}/clusters/{id}/groups/{group}/offsets",
             get(groups::offsets),
         )
-        // Phase 7: the read-only admin surface. Every one is
+        // Phase 7: the admin surface. Every one is
         // `ClusterConfig` + `View` — facts about a cluster rather than about a
         // named topic or group — and every one is hidden by the capability
         // projection on a cluster that does not implement it.

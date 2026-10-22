@@ -14,10 +14,9 @@ use utoipa::OpenApi;
 #[openapi(
     info(
         title = "kaas-ui",
-        description = "A multi-cluster Kafka UI, read-only by default. Every data route \
-                       is a GET; the few writes (tag `connect`) pass two gates — the \
-                       target's configured ceiling and a role — and are audited before \
-                       they are sent.",
+        description = "A multi-cluster Kafka UI. Every read is a GET; every write passes \
+                       two gates — the target's configured ceiling and a role — and is \
+                       audited before it is sent.",
         license(name = "Apache-2.0"),
     ),
     paths(
@@ -201,12 +200,12 @@ use utoipa::OpenApi;
         (name = "clusters", description = "The fleet, and one cluster's detail."),
         (name = "capabilities", description = "What a cluster can be asked."),
         (name = "topics", description = "Topics, partitions and offsets."),
-        (name = "configs", description = "Configuration viewing. There is no writing."),
+        (name = "configs", description = "Broker and topic configuration."),
         (name = "groups", description = "Consumer groups, committed offsets and lag."),
         (name = "messages", description = "The message browser."),
         (name = "schemas", description = "The schema registry an environment shares, reached through a cluster."),
-        (name = "connect", description = "Kafka Connect clusters, connectors, tasks and plugins, over the Connect REST API. Read-only: the client has no method that sends anything but GET, and connector configs are redacted before they leave it."),
-        (name = "admin", description = "The read-only admin surface: ACLs, quotas, SCRAM users, reassignments, transactions. Every one is a describe; the altering neighbours are not in the workspace."),
+        (name = "connect", description = "Kafka Connect clusters, connectors, tasks and plugins, over the Connect REST API. Connector configs are redacted before they leave the client, and every write is gated."),
+        (name = "admin", description = "ACLs, quotas, SCRAM users, reassignments, transactions."),
         (name = "meta", description = "The API describing itself."),
     ),
 )]

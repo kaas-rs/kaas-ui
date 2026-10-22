@@ -21,7 +21,7 @@ $ getent hosts kafka-cluster-kafka-bootstrap.strimzi.svc.cluster.local
 
 So kaas-ui trades a hermetic single-broker fixture for **two shared, long-lived,
 three-node clusters running software we did not choose** — which is the harder
-and more honest target, and the one PLAN.md §10 calls the dogfooding surface.
+and more honest target, and the surface kaas-ui is dogfooded on.
 Every phase's acceptance command below runs against them.
 
 ## The two clusters
@@ -219,8 +219,7 @@ the quorum panel and the reassignment view have nothing behind them, and on
 Strimzi they do. The SCRAM list is the exception this list gets wrong — `kaas`
 answers `DescribeUserScramCredentials` today, and Phase 7's admin page shows
 that tab on both clusters. **Put the two side by side and the tab sets are a
-conformance report** — PLAN.md §5's claim, and it is true today rather than
-aspirationally.
+conformance report**, and that is true today rather than aspirationally.
 
 ### `DescribeCluster` is missing on kaas — Phase 0 must not depend on it
 
@@ -305,7 +304,7 @@ Two things to carry forward:
   over 16 partitions is 2 each, so 32 come back. 0.9 spreads it over the
   partitions that hold something instead, and over-fetches by keeping a
   partition's last chunk whole. Either way the HTTP `?limit=` must say so or
-  truncate after merging — decided in [what is built](../11-built.md).
+  truncate after merging. The HTTP layer merges and truncates.
 - **~325 KB to reach the tail of a 40M-record topic** is the backward walk
   working. Phase 3's acceptance asserts on this via `ConnectionStats`, and the
   numbers above are the baseline.
@@ -452,13 +451,13 @@ not a failure".
 
 There is no Protobuf and no JSON Schema topic here, and no subject with a
 reference. Those three paths are asserted against a stub registry in
-`crates/kaas-ui-serde/tests/registry.rs` — see `docs/11-built.md`, "What is
-still unproven".
+`crates/kaas-ui-serde/tests/registry.rs`, and are unproven against a live
+registry.
 
 ## Also running here
 
 `kafbat-ui` is deployed in namespace `kafbat-ui`, pointed at both clusters, with
 GitHub OAuth2. It is the thing kaas-ui is shaped like, available for
-side-by-side comparison — and its auth config is a live demonstration of
-PLAN.md §6's argument, since GitHub OAuth is exactly the provider-specific code
-path Dex removes.
+side-by-side comparison — and its auth config is a live demonstration of why
+kaas-ui uses Dex, since GitHub OAuth is exactly the provider-specific code path
+Dex removes.

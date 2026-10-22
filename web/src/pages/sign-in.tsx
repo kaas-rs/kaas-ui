@@ -107,13 +107,6 @@ export function SignInPage({
             )}
           </CardContent>
         </Card>
-
-        {/* Where a template would put terms nobody reads, the one property
-            worth knowing before you sign in. */}
-        <p className="text-ink-faint px-6 text-center text-[12px]">
-          kaas-ui is <strong className="font-medium">read-only</strong>. It can
-          describe every cluster in this fleet and change none of them.
-        </p>
       </div>
     </div>
   )

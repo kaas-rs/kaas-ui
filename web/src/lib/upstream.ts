@@ -8,8 +8,8 @@
 //     an identity provider and nothing else, and a deployment behind a strict
 //     egress policy should not start failing because github.com is
 //     unreachable.
-//   * There is no new endpoint, so nothing is added to the read-only API
-//     surface for a cosmetic badge.
+//   * There is no new endpoint, so nothing is added to the API surface for a
+//     cosmetic badge.
 //   * It degrades to silence. Every failure path here — offline, rate limited,
 //     blocked by a proxy, a repo with no tags — resolves to `undefined`, and
 //     the badge renders as though the check had never been asked for.

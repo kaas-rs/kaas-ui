@@ -19,7 +19,7 @@ rust-version = "1.97"
 
 [workspace.dependencies]
 # kaas-ui's only Kafka dependency, from crates.io. The four release in
-# lockstep and must be pulled at the same version — see docs/00-foundations.md.
+# lockstep and must be pulled at the same version.
 # `cargo xtask link` writes a fenced [patch.crates-io] block for local
 # iteration against ../kaas-lib; `cargo xtask ci` fails if that fence was
 # committed.
@@ -73,7 +73,7 @@ base64     = "0.22"
 
 # payload decoding. One library resolves schema ids and decodes all three
 # registry-backed formats, because all three are the same Confluent wire
-# format — see docs/11-built.md, "Phase 6 — the decisions".
+# format.
 #
 # **No TLS feature here, deliberately.** Both of the converter's are wrong for
 # this build: `native_tls` wants OpenSSL, which the distroless image has none
@@ -138,9 +138,9 @@ unsafe_code                   = "forbid"
 missing_debug_implementations = "warn"
 
 [profile.release]
-# A read-only UI binary: size and a clean backtrace matter more than the last
-# few percent of throughput, and LTO is what gets the distroless image near
-# the number PLAN.md §10 claims.
+# A UI binary: size and a clean backtrace matter more than the last
+# few percent of throughput, and LTO is what keeps the distroless image
+# small — README.md's measurements.
 lto           = "thin"
 codegen-units = 1
 strip         = true

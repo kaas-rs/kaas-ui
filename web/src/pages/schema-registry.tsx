@@ -5,7 +5,6 @@
 // reads these same subjects, from the same handle, through the same cache. So
 // the page is named after the registry and never after a cluster.
 //
-// Read-only, like everything else: no registering, no compatibility changes.
 // The subject *itself* is `schema-detail.tsx`; this file is only the list, and
 // the two are separate because they share nothing but a route prefix — one is
 // a paged table over names, the other is text, versions and a diff.

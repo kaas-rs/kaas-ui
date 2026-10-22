@@ -1,16 +1,15 @@
 # kaas-ui
 
-A **read-only**, multi-cluster Kafka UI in the shape of kafbat-ui: an Axum
-backend on [kaas-lib](https://github.com/kaas-rs/kaas-lib), a React + TanStack
-frontend, one binary.
+A multi-cluster Kafka UI in the shape of kafbat-ui: an Axum backend on
+[kaas-lib](https://github.com/kaas-rs/kaas-lib), a React + TanStack frontend,
+one binary.
 
-Read-only is the architecture, not a setting. There is exactly one
-`Admin::connect_read_only` in the workspace and no mutating endpoint anywhere —
-not disabled, not `403`, **absent from the router**. CI greps for both, and for
-a Kafka version number, and for a `.post(`.
+A write passes two gates — the target's configured `writes:` ceiling and the
+caller's role — and is audited before it is sent.
 
-- [`PLAN.md`](PLAN.md) — the design. Why read-only, why multi-cluster, why Dex.
-- [`docs/`](docs/README.md) — the implementation plan and its reference material.
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — how it is built.
+- [`docs/RBAC.md`](docs/RBAC.md) — sign-in, roles, and who may change what.
+- [`docs/`](docs/README.md) — status, what is left, and reference material.
 
 ## Running it
 
@@ -142,9 +141,7 @@ clusters are a better target than one container anyway.
 | **auth** | OIDC through Dex, roles in kafbat-ui's shape, and a UI that hides what a role does not reach rather than erroring on click |
 | **schemas** | one registry per environment, Avro/Protobuf/JSON Schema decoded by schema id, the codec chip, the schema browser, and a filter over the *decoded* value |
 | **admin** | **the part kafbat-ui does not have**: ACLs, client quotas, SCRAM users, reassignments, and a transaction inspector that says how long each transaction has been open and which producer is holding it |
-
-All of it is read. `DescribeAcls` is here and `CreateAcls` is not in the
-workspace; the same goes for every altering neighbour of every call above.
+| **connect** | Kafka Connect clusters, connectors, tasks, redacted configs and plugins — and, where the cluster's `writes:` and a role allow it, restart, pause, resume, stop, edit, create, delete and offsets |
 
 Not built yet: the cross-cluster views — fleet-wide topic search, cluster
 comparison, capability diff. See [`docs/README.md`](docs/README.md) for what
@@ -153,15 +150,14 @@ each phase covers.
 The message viewer runs on **kaas-lib 0.4.0**. Three things it needed went in
 there rather than here, because version and implementation knowledge belongs in
 the library: the anchored backward walk, `ScanSpec::following`, and a fix for
-`scan` emitting records before its start offset. See
-[What is built](docs/11-built.md).
+`scan` emitting records before its start offset.
 
 ## Measurements
 
 The rewrite's headline claim is that this is a small process next to the JVM
 original. Numbers rather than adjectives:
 
-| | | predicted in PLAN.md §10 |
+| | | predicted |
 |---|---|---|
 | container image, distroless + static musl | **5 MB** | ~25 MB |
 | resident memory, idle, three clusters configured | **8.7 MiB** | ~15 MB |

@@ -19,11 +19,10 @@
 //! # What is not here
 //!
 //! **No refresh tokens.** A session lasts as long as it lasts and then asks
-//! for a login again; `offline_access` is never requested. This is a read-only
-//! browser tool people keep open for twenty minutes, and a refresh token is a
+//! for a login again; `offline_access` is never requested. This is a browser
+//! tool people keep open for twenty minutes, and a refresh token is a
 //! long-lived credential to store, protect and revoke in exchange for saving
-//! them one redirect a day. Decided rather than drifted into, which is what
-//! `docs/11-built.md` records under Phase 4.
+//! them one redirect a day. Decided rather than drifted into.
 
 use std::sync::Arc;
 use std::time::Duration;

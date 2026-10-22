@@ -1003,7 +1003,7 @@ async fn assertions() -> Result<Acceptance, String> {
         // compacted depends on how it was configured this week; that the
         // advice is internally consistent with the fold it was derived from
         // does not. The one live assertion this workspace has already lost
-        // was lost to a fixture that changed size — see docs/11-built.md.
+        // was lost to a fixture that changed size.
         let sizing = &result["sizing"];
         // The fold holds one accumulator per partition it *saw a record on*,
         // which on a topic a canary writes to unevenly is fewer than the
@@ -1913,7 +1913,7 @@ async fn assertions() -> Result<Acceptance, String> {
         },
     );
 
-    // --- the read-only admin surface ----------------------------------------
+    // --- the admin surface --------------------------------------------------
     //
     // The whole point of the phase in one block: five describes, one of which
     // every cluster answers and three of which only one does. Put the two
@@ -2197,7 +2197,7 @@ async fn assertions() -> Result<Acceptance, String> {
     Ok(acceptance)
 }
 
-/// Phase 9a's acceptance: read-only Connect against the live workers.
+/// Phase 9a's acceptance: reading Connect from the live workers.
 async fn connect_assertions(
     client: &reqwest::Client,
     acceptance: &mut Acceptance,

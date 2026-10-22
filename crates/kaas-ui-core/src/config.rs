@@ -46,18 +46,18 @@ pub struct Config {
     /// `roles` below, so configuring this alone changes nothing except that
     /// kaas-ui learns your name.
     pub auth: Option<OidcConfig>,
-    /// Who may see which clusters, and whether they may read payloads.
+    /// Who may see which clusters, read which payloads, and write what.
     ///
-    /// Empty is the open deployment: no authentication, one anonymous caller,
-    /// every cluster visible with both grants. That is what kaas-ui did before
-    /// this block existed and it stays the default, so adding the auth code
-    /// changed nothing for anyone who had not asked for it.
+    /// Empty is the open deployment: one anonymous caller, every cluster
+    /// visible with both read grants, and no writes. That is what kaas-ui did
+    /// before this block existed and it stays the default, so adding the auth
+    /// code changed nothing for anyone who had not asked for it.
     ///
-    /// A non-empty list is **enforced**, and until the OIDC exchange lands
-    /// there is nobody for a role to cover: every caller is anonymous, so
-    /// every cluster is invisible and the fleet is empty. That is the safe
-    /// direction for the gap to fail, and [`Config::role_warning`] says so at
-    /// startup rather than leaving it to be discovered.
+    /// A non-empty list is **enforced**. Without `auth` there is nobody for a
+    /// role to cover: every caller is anonymous, so every cluster is invisible
+    /// and the fleet is empty. That is the safe direction for the gap to fail,
+    /// and [`Config::role_warning`] says so at startup rather than leaving it
+    /// to be discovered.
     pub roles: Vec<Role>,
 }
 
@@ -341,9 +341,10 @@ impl SchemaRegistryEntry {
 
 /// One declared Kafka Connect cluster.
 ///
-/// Dialled over its REST API, read-only: kaas-ui sends it nothing but `GET`,
-/// and that is a property of the client it gets (`kaas-ui-connect`), not of
-/// the credentials here — which can usually delete connectors.
+/// Dialled over its REST API. Reads go through a client that sends nothing
+/// but `GET`, and a write needs a `Grant` against this entry's `writes:`
+/// ceiling. Both are properties of the client it gets (`kaas-ui-connect`),
+/// not of the credentials here — which can usually delete connectors.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "snake_case")]
 pub struct ConnectClusterEntry {
@@ -1164,9 +1165,9 @@ impl Config {
     /// What to say at startup about roles nobody can yet match.
     ///
     /// `None` once there is nothing to warn about. Roles are enforced the
-    /// moment they are configured — that is the safe direction — but nothing
-    /// can authenticate yet, so every caller is anonymous and every role
-    /// declines to cover them. The result is a deployment that shows an empty
+    /// moment they are configured — that is the safe direction — but without
+    /// `auth` nothing can authenticate, so every caller is anonymous and every
+    /// role declines to cover them. The result is a deployment that shows an empty
     /// fleet to everyone, which is correct, deliberate, and utterly baffling
     /// if it is not said out loud.
     #[must_use]

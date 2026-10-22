@@ -1,31 +1,29 @@
-//! What a caller is allowed to see.
+//! What a caller is allowed to see and do.
 //!
 //! A [`Policy`] is a list of [`Role`]s from the config file. Resolving one
 //! against a [`Principal`] gives an [`Access`], and every question the rest of
 //! the workspace asks is asked of that.
 //!
-//! # The shape is kafbat-ui's; the verbs cannot be
+//! # The shape is kafbat-ui's; the verbs are only the ones that exist
 //!
 //! Roles carry subjects, clusters and permissions of `resource` + `value` +
 //! `actions`, which is the model anyone arriving from kafbat-ui already knows.
-//! What does not carry over is most of its vocabulary: `create`, `edit`,
-//! `delete`, `messages_produce`, `reset_offsets` and the rest describe writes,
-//! and kaas-ui has no code path that could perform one. Offering them here
-//! would be a config surface that grants nothing — worse than absent, because
-//! it would read as protection.
+//! Its vocabulary carries over one verb at a time: a verb this file offers is
+//! a verb some code path performs. Offering one that nothing performs — a
+//! `messages_produce` before there is a producer — would be a config surface
+//! that grants nothing, which is worse than absent because it reads as
+//! protection.
 //!
-//! So the read actions are two. [`Action::View`] is the metadata surface, and
+//! The read actions are two. [`Action::View`] is the metadata surface, and
 //! [`Action::MessagesRead`] is the payloads — the boundary that matters,
 //! because browsing a topic's configuration is not the same act as reading
 //! customer data out of it.
 //!
-//! Writes arrived with Phase 10, and with them the verbs — but only the ones
-//! that exist, each mapped to the operations that perform it: `operate`,
-//! `edit`, `delete` and `reset_offsets` on [`Resource::Connector`], `create`
-//! on [`Resource::Connect`]. A verb this file offers is a verb some code
-//! path performs, and the write is still only reachable through a [`crate::Grant`],
-//! which also needs the target's configured ceiling to agree. A role alone
-//! writes nothing.
+//! The write actions are mapped to the operations that perform them:
+//! `operate`, `edit`, `delete` and `reset_offsets` on [`Resource::Connector`],
+//! `create` on [`Resource::Connect`]. A write is only reachable through a
+//! [`crate::Grant`], which also needs the target's configured ceiling to
+//! agree. A role alone writes nothing.
 //!
 //! # Absence is 404, not 403
 //!

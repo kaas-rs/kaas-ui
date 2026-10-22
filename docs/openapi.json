@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "kaas-ui",
-    "description": "A multi-cluster Kafka UI, read-only by default. Every data route is a GET; the few writes (tag `connect`) pass two gates — the target's configured ceiling and a role — and are audited before they are sent.",
+    "description": "A multi-cluster Kafka UI. Every read is a GET; every write passes two gates — the target's configured ceiling and a role — and is audited before it is sent.",
     "license": {
       "name": "Apache-2.0"
     },
@@ -3779,7 +3779,7 @@
             "items": {
               "$ref": "#/components/schemas/WriteOption"
             },
-            "description": "Every write this connector could take, and whether this caller may.\nEmpty where the Connect cluster has no `writes:` ceiling — the\nread-only default renders no write UI at all."
+            "description": "Every write this connector could take, and whether this caller may.\nEmpty where the Connect cluster has no `writes:` ceiling, which\nrenders no write UI at all."
           }
         }
       },
@@ -7269,7 +7269,7 @@
       },
       "Operation": {
         "type": "string",
-        "description": "One write kaas-ui can perform. A closed set: the catalogue in\n`docs/13-phase-10-administration.md`, landing one action at a time.\n\nThe serialised names are what `writes.allow` lists and what `/api` reports\nas available, so a config file and a page speak the same words.",
+        "description": "One write kaas-ui can perform. A closed set, and every operation in it is\none some code path performs — `docs/RBAC.md` lists the catalogue.\n\nThe serialised names are what `writes.allow` lists and what `/api` reports\nas available, so a config file and a page speak the same words.",
         "enum": [
           "connector.restart",
           "connector.restart_task",
@@ -9716,7 +9716,7 @@
     },
     {
       "name": "configs",
-      "description": "Configuration viewing. There is no writing."
+      "description": "Broker and topic configuration."
     },
     {
       "name": "groups",
@@ -9732,11 +9732,11 @@
     },
     {
       "name": "connect",
-      "description": "Kafka Connect clusters, connectors, tasks and plugins, over the Connect REST API. Read-only: the client has no method that sends anything but GET, and connector configs are redacted before they leave it."
+      "description": "Kafka Connect clusters, connectors, tasks and plugins, over the Connect REST API. Connector configs are redacted before they leave the client, and every write is gated."
     },
     {
       "name": "admin",
-      "description": "The read-only admin surface: ACLs, quotas, SCRAM users, reassignments, transactions. Every one is a describe; the altering neighbours are not in the workspace."
+      "description": "ACLs, quotas, SCRAM users, reassignments, transactions."
     },
     {
       "name": "meta",

@@ -1,7 +1,7 @@
 // The buffer, as a file.
 //
-// A read-only tool that can show you ten thousand records and give you none of
-// them is halfway to useless: the next thing anyone wants is to diff two of
+// A tool that can show you ten thousand records and give you none of them is
+// halfway to useless: the next thing anyone wants is to diff two of
 // them, or grep, or hand the lot to a colleague. This is the smallest honest
 // version of that — what the list is holding, exactly as it is holding it.
 //
