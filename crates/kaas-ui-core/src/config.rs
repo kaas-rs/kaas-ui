@@ -369,11 +369,12 @@ pub struct ConnectClusterEntry {
     /// A reference, like a cluster's `schema_registry:`, and **checked rather
     /// than trusted**: `GET /` names the Kafka cluster id the workers use, and
     /// a mismatch is shown on the page. It also decides visibility — a caller
-    /// sees this Connect cluster when they may view topics on that one.
+    /// sees this Connect cluster when they may view topics on that one *and*
+    /// hold `connect: view` for this id there.
     ///
     /// Absent is legal — the workers may use a cluster kaas-ui does not show
-    /// — and then anyone who may view topics somewhere in the environment
-    /// sees it, as for a registry nobody references.
+    /// — and then the `connect: view` grant is selected by this id, and
+    /// topic view anywhere in the environment is enough for the rest.
     #[serde(default)]
     pub kafka_cluster: Option<String>,
     /// Basic-auth principal.

@@ -110,7 +110,8 @@ environments:
     #
     # `kafka_cluster` is checked, not trusted: the page compares it with the
     # cluster id the workers report, and it decides who sees this — a caller
-    # who may read topics on `strimzi`.
+    # who may read topics on `strimzi` and holds `connect: view` there. This
+    # config is open, so that is everyone.
     connect_clusters:
       - id: connect
         name: Kafka Connect

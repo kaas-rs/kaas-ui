@@ -663,9 +663,25 @@ environments:
                     },
                 ],
             },
+            // Sees the Connect cluster, may change nothing on it.
             Role {
                 name: "viewer".into(),
                 subjects: vec!["bob".into()],
+                clusters: vec!["strimzi".into()],
+                cluster_labels: BTreeMap::new(),
+                permissions: vec![
+                    topic_view.clone(),
+                    Permission {
+                        resource: Resource::Connect,
+                        value: None,
+                        actions: vec![Action::View],
+                    },
+                ],
+            },
+            // Reads strimzi's topics and was never granted Connect.
+            Role {
+                name: "topics".into(),
+                subjects: vec!["carol".into()],
                 clusters: vec!["strimzi".into()],
                 cluster_labels: BTreeMap::new(),
                 permissions: vec![topic_view],
@@ -756,6 +772,13 @@ environments:
             .await
             .unwrap_err();
         assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+
+        // Without `connect: view` the Connect cluster does not exist for the
+        // caller: 404, before any gate is asked.
+        let unseen = post(&state, "carol", "gtfs", "restart", restart_request())
+            .await
+            .unwrap_err();
+        assert_eq!(unseen.status(), StatusCode::NOT_FOUND);
 
         let not_enabled = post(&state, "alice", "gtfs", "stop", WriteRequest::default())
             .await

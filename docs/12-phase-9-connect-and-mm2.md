@@ -161,7 +161,9 @@ created by this phase:
 
 Same catalogue shape as Phase 10. Ceiling is per Connect cluster
 (`writes.allow`); grants are on resource `connect` (the Connect cluster) and
-`connector` (named, `value:` patterns), with kafbat-ui's action names.
+`connector` (named, `value:` patterns), with kafbat-ui's action names. Every
+one of them also needs `connect: view` on the Connect cluster, without which
+it does not exist for the caller (a 404, before the gate).
 
 | action | tier | RBAC | REST call |
 |---|---|---|---|

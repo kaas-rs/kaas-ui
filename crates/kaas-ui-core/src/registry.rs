@@ -734,13 +734,19 @@ impl Registry {
 
     /// Look up a Connect cluster **as somebody**.
     ///
-    /// The registry rule, applied to Connect: a Connect cluster that names its
-    /// Kafka cluster is visible to a caller who may view topics on *that* one
-    /// — connectors are a statement about which topics flow where, and someone
-    /// who cannot see the topics must not learn them from the connectors. One
-    /// that names none is visible to anyone who may view topics somewhere in
-    /// the environment. Anything else is `None`, which the router turns into
-    /// a 404.
+    /// Two things, both required. A role's **`connect: view`** for this
+    /// Connect cluster's id, selected like any Connect permission — on the
+    /// Kafka cluster it keeps state in ([`Registry::connect_target`]). Seeing
+    /// connectors is its own grant, as in kafbat-ui, so a role scoped to one
+    /// topic does not see every connector beside it.
+    ///
+    /// And the registry rule, applied to Connect: a Connect cluster that names
+    /// its Kafka cluster is visible only to a caller who may view topics on
+    /// *that* one — connectors are a statement about which topics flow where,
+    /// and someone who cannot see the topics must not learn them from the
+    /// connectors. One that names none needs topic view somewhere in the
+    /// environment. Anything else is `None`, which the router turns into a
+    /// 404.
     pub fn connect_cluster(
         &self,
         environment: &str,
@@ -750,6 +756,16 @@ impl Registry {
         let handle = self
             .connects
             .get(&(environment.to_owned(), id.to_owned()))?;
+        let target = self.connect_target(handle, None);
+        if !who.may(
+            &target.cluster,
+            &target.labels,
+            kaas_ui_auth::Resource::Connect,
+            kaas_ui_auth::Action::View,
+            Some(id),
+        ) {
+            return None;
+        }
         let mut readers = self.readers_in(environment, who);
         match &handle.kafka_cluster {
             Some(kafka) => readers
@@ -1522,19 +1538,69 @@ environments:
                 .is_none()
         );
 
-        // Someone who may see `kaas` only: the Connect cluster attached to
-        // `strimzi` does not exist for them, and the unattached one does.
+        // Someone who may do anything on `kaas` only: the Connect cluster
+        // attached to `strimzi` does not exist for them. Nor does the
+        // unattached one, which a role selects by its own id, as a write
+        // would.
         let policy = Policy::enforcing(vec![Role {
             clusters: vec!["kaas".to_owned()],
             ..Role::admin("kaas-only", vec!["alice".to_owned()])
         }]);
         let alice = policy.access(&Principal::new("alice"));
         assert!(registry.connect_cluster("dev", "connect", &alice).is_none());
-        assert!(registry.connect_cluster("dev", "loose", &alice).is_some());
+        assert!(registry.connect_cluster("dev", "loose", &alice).is_none());
 
         // And nobody at all sees neither.
         let nobody = Access::none();
         assert!(registry.connect_cluster("dev", "loose", &nobody).is_none());
+    }
+
+    #[test]
+    fn seeing_a_connect_cluster_is_its_own_grant_on_top_of_its_topics() {
+        use kaas_ui_auth::{Action, Permission, Policy, Principal, Resource, Role};
+        let registry = Registry::from_config(&connect_config()).unwrap();
+        let role = |permissions: Vec<Permission>| {
+            Policy::enforcing(vec![Role {
+                name: "r".into(),
+                subjects: vec!["bob".into()],
+                clusters: vec!["*".into()],
+                cluster_labels: BTreeMap::new(),
+                permissions,
+            }])
+            .access(&Principal::new("bob"))
+        };
+        let one_topic = Permission {
+            resource: Resource::Topic,
+            value: Some("kaas-canary-v1".into()),
+            actions: vec![Action::View, Action::MessagesRead],
+        };
+        let connect_view = |value: &str| Permission {
+            resource: Resource::Connect,
+            value: Some(value.into()),
+            actions: vec![Action::View],
+        };
+
+        // One topic and nothing else: no connector, no config, no flow.
+        let canary = role(vec![one_topic.clone()]);
+        assert!(
+            registry
+                .connect_cluster("dev", "connect", &canary)
+                .is_none()
+        );
+        assert!(registry.connect_cluster("dev", "loose", &canary).is_none());
+
+        // Granted `connect: view` on `connect` by id: that one, not the other.
+        let viewer = role(vec![one_topic, connect_view("connect")]);
+        assert!(
+            registry
+                .connect_cluster("dev", "connect", &viewer)
+                .is_some()
+        );
+        assert!(registry.connect_cluster("dev", "loose", &viewer).is_none());
+
+        // `connect: view` alone is not enough: the topics stay guarded.
+        let blind = role(vec![connect_view("*")]);
+        assert!(registry.connect_cluster("dev", "connect", &blind).is_none());
     }
 
     #[tokio::test]

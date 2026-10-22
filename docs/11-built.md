@@ -733,6 +733,19 @@ view topics on `strimzi`, and to nobody else — connectors say which topics
 flow where, and someone who cannot see the topics must not learn them from
 the connectors. One that names no cluster follows the rule for a registry
 nobody references: anyone who may view topics somewhere in the environment.
+
+**And, since 0.15.2, on a grant of its own: `connect: view`.** Topic view
+alone turned out too wide. A permission scoped to one topic still answers
+yes to "may view topics on this cluster", so the deployment's
+`canary-reader` — one topic and nothing else — would have seen every
+connector, its redacted config and the MirrorMaker 2 flows the moment
+Connect was configured. Now a Connect cluster also needs `connect: view` for
+its id, selected like any Connect permission (on its Kafka cluster, or by
+its own id when it names none) — kafbat-ui's model. A write needs it too,
+since a caller who cannot see the Connect cluster gets the lookup's 404
+before the gate. MirrorMaker 2 flows found from the clusters' internal
+topics need topic view on those topics *by name*, and a mirrored topic is
+listed only where both of its names are visible.
 `kafka_cluster:` is also *checked*: the page compares the referenced cluster's
 id from its metadata snapshot with the one `GET /` reports. Live, both are
 `RPquI6Y0R3uuCqz8FMrSvg`.

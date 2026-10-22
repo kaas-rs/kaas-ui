@@ -195,6 +195,17 @@ async fn flows(
             continue;
         };
         for topic in admin.cluster().snapshot().topics() {
+            // An internal topic's name is a topic name like any other: a
+            // caller who may not view it does not learn the flow from it.
+            if !caller.access().may(
+                &cluster.id,
+                &cluster.labels,
+                Resource::Topic,
+                Action::View,
+                Some(&topic.name),
+            ) {
+                continue;
+            }
             let found = if let Some(source) = topic.name.strip_suffix(".checkpoints.internal") {
                 Some((source.to_owned(), alias.clone()))
             } else {
@@ -435,19 +446,37 @@ pub async fn detail(
         );
     }
     let internal = |name: &str| name.ends_with(".internal") || name.ends_with("heartbeats");
+    let may_view = |cluster: &Option<std::sync::Arc<kaas_ui_core::ClusterHandle>>, topic: &str| {
+        cluster.as_ref().is_some_and(|cluster| {
+            caller.access().may(
+                &cluster.id,
+                &cluster.labels,
+                Resource::Topic,
+                Action::View,
+                Some(topic),
+            )
+        })
+    };
+    // Listed only where the caller may view both names: a mirrored topic is
+    // two topics, and the row names each.
     let topics = remote_names
         .into_iter()
         .filter(|name| !internal(name))
-        .map(|target_topic| {
+        .filter_map(|target_topic| {
             let source_topic = policy.upstream(&source, &target_topic);
-            MirroredTopic {
-                source_partitions: source_topic
+            let visible = may_view(&target_cluster, &target_topic)
+                && source_topic
                     .as_deref()
-                    .and_then(|topic| partitions_on(&source_cluster, topic)),
-                target_partitions: partitions_on(&target_cluster, &target_topic),
-                source_topic,
-                target_topic,
-            }
+                    .is_none_or(|topic| may_view(&source_cluster, topic));
+            visible.then_some((target_topic, source_topic))
+        })
+        .map(|(target_topic, source_topic)| MirroredTopic {
+            source_partitions: source_topic
+                .as_deref()
+                .and_then(|topic| partitions_on(&source_cluster, topic)),
+            target_partitions: partitions_on(&target_cluster, &target_topic),
+            source_topic,
+            target_topic,
         })
         .collect();
 
@@ -571,12 +600,12 @@ async fn read(
     if admin.cluster().snapshot().topic(topic).is_none() {
         return Vec::new();
     }
-    let may = |resource| {
+    let may = |resource, name| {
         caller
             .access()
-            .may(&cluster.id, &cluster.labels, resource, Action::View, None)
+            .may(&cluster.id, &cluster.labels, resource, Action::View, name)
     };
-    if !may(Resource::Topic) || (names_groups && !may(Resource::Consumer)) {
+    if !may(Resource::Topic, Some(topic)) || (names_groups && !may(Resource::Consumer, None)) {
         return Vec::new();
     }
     match crate::call(
@@ -771,6 +800,33 @@ environments:
         let Json(list) = list(
             State(state.clone()),
             caller(&state, Principal::new("alice")),
+            Path("dev".into()),
+        )
+        .await
+        .unwrap();
+        assert!(list.flows.is_empty(), "{:?}", list.flows);
+    }
+
+    #[tokio::test]
+    async fn a_role_scoped_to_one_topic_sees_no_flow() {
+        // The deployed canary-reader: one topic on every cluster, nothing
+        // else. No `connect: view`, so no Connect-found flow; and no view of
+        // the internal topics by name, so nothing discovered from them either.
+        let policy = Policy::enforcing(vec![Role {
+            name: "canary-reader".into(),
+            subjects: vec!["bob".into()],
+            clusters: vec!["*".into()],
+            cluster_labels: BTreeMap::new(),
+            permissions: vec![Permission {
+                resource: Resource::Topic,
+                value: Some("kaas-canary-v1".into()),
+                actions: vec![Action::View, Action::MessagesRead],
+            }],
+        }]);
+        let state = state(policy).await;
+        let Json(list) = list(
+            State(state.clone()),
+            caller(&state, Principal::new("bob")),
             Path("dev".into()),
         )
         .await
