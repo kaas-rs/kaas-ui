@@ -888,6 +888,12 @@ asserted against a stub worker, through the real handler and writer.
 
 ## Phase 9b and 9c — the decisions
 
+**MirrorMaker 2, and only MirrorMaker 2.** Everything below is read from the
+three Mirror connectors and MirrorMaker 2's own internal topics. The legacy
+MirrorMaker had neither, so kaas-ui has no code for it, and since 0.15.1 the UI
+says "MirrorMaker 2" wherever it said "MirrorMaker" — the bare name read as the
+old tool beside a Connect cluster called "MirrorMaker 2".
+
 **A flow is found two ways, and they merge.** From every Connect cluster
 the caller may see in the environment — dedicated to MirrorMaker or not — by
 the three Mirror connector classes and the aliases in their config; and from

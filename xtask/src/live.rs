@@ -2542,7 +2542,7 @@ async fn mirror_assertions(
     };
 
     acceptance.check(
-        "mirrors: the dedicated MirrorMaker's flow, strimzi → kaas, runs on `mm2`",
+        "mirrors: the dedicated MirrorMaker 2's flow, strimzi → kaas, runs on `mm2`",
         match flow("strimzi", "kaas") {
             Some(found) if hosted_on(&found, "mm2") && found["target"]["id"] == "kaas" => Ok(format!(
                 "{} connectors, missing {}",

@@ -16,11 +16,11 @@ export function MirrorsPage({ envId }: { envId: string }) {
   const mirrors = useMirrors(envId)
 
   if (mirrors.isLoading)
-    return <Spinner label="looking for MirrorMaker flows" />
+    return <Spinner label="looking for MirrorMaker 2 flows" />
   if (mirrors.error) {
     return (
       <>
-        <PageTitle title="MirrorMaker" />
+        <PageTitle title="MirrorMaker 2" />
         <p className="flex items-start gap-2 text-xs text-danger">
           <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
           {(mirrors.error as Error).message}
@@ -33,7 +33,7 @@ export function MirrorsPage({ envId }: { envId: string }) {
   return (
     <>
       <PageTitle
-        title="MirrorMaker"
+        title="MirrorMaker 2"
         subtitle={`${flows.length} flow${flows.length === 1 ? "" : "s"}, from every Connect cluster here and from the clusters' internal topics`}
       />
       <ErrorChips errors={mirrors.data?.errors ?? []} />

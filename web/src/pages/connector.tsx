@@ -104,7 +104,7 @@ export function ConnectorPage({
                 }}
                 className="rounded-sm border px-1.5 py-0.5 text-[12px] hover:underline"
               >
-                MirrorMaker {summary.mirror.kind} ·{" "}
+                MirrorMaker 2 {summary.mirror.kind} ·{" "}
                 <span className="font-mono">
                   {summary.mirror.sourceAlias} → {summary.mirror.targetAlias}
                 </span>

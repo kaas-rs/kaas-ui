@@ -101,7 +101,7 @@ export function MirrorFlowCard({
       <CardContent className="space-y-2 px-4">
         {flow.connectors.length === 0 ? (
           <p className="text-[12px] text-ink-muted">
-            No Connect API reports this flow: a dedicated-mode MirrorMaker, or
+            No Connect API reports this flow: a dedicated-mode MirrorMaker 2, or
             one on a Connect cluster kaas-ui is not configured with. Task state
             is unknown.
           </p>

@@ -123,7 +123,7 @@ environments:
       # connectors, kaas → Strimzi, next to the GTFS and MQTT sources — it is
       # the "MirrorMaker beside a Connect cluster" case the Mirrors page shows.
       - id: mm2
-        name: MirrorMaker 2
+        name: mm2 Connect
         url: http://mm2-mirrormaker2-api.strimzi.svc.cluster.local:8083
         kafka_cluster: kaas
 

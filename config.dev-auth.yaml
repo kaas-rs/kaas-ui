@@ -148,7 +148,7 @@ environments:
       # operate tier, less resetting topics, which a MirrorMaker has no use
       # for.
       - id: mm2
-        name: MirrorMaker 2
+        name: mm2 Connect
         url: http://mm2-mirrormaker2-api.strimzi.svc.cluster.local:8083
         kafka_cluster: kaas
         writes:

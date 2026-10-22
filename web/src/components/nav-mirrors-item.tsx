@@ -21,11 +21,11 @@ export function NavMirrorsItem({ envId }: { envId: string }) {
     <SidebarMenuItem>
       <SidebarMenuButton
         isActive={pathname.startsWith(`/environments/${envId}/mirrors`)}
-        tooltip={`${flows} MirrorMaker flow${flows === 1 ? "" : "s"}`}
+        tooltip={`${flows} MirrorMaker 2 flow${flows === 1 ? "" : "s"}`}
         render={<Link to="/environments/$envId/mirrors" params={{ envId }} />}
       >
         <Repeat aria-hidden />
-        <span className="truncate">MirrorMaker</span>
+        <span className="truncate">MirrorMaker 2</span>
         <span className="ml-auto text-[11px] text-ink-faint">{flows}</span>
       </SidebarMenuButton>
     </SidebarMenuItem>

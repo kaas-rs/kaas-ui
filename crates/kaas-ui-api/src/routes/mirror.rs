@@ -12,6 +12,11 @@
 //!   dedicated-mode MirrorMaker, which has no public REST API at all, is seen
 //!   at all; such a flow is labelled `discovered` and has no connector state.
 //!
+//! **MirrorMaker 2 only.** The legacy MirrorMaker — a consumer and a producer
+//! in one process, since removed from Kafka — runs no connectors and writes
+//! none of these topics, so there is nothing of it to find and kaas-ui does
+//! not look. Every label says "MirrorMaker 2" for the same reason.
+//!
 //! Aliases resolve through the environment's `mirror_aliases`, or to the
 //! cluster with the same id. A flow whose resolved end the caller cannot see
 //! is not listed: a mirrored topic's name on a cluster you cannot see is a
@@ -370,7 +375,7 @@ pub async fn detail(
         .find(|flow| flow.source_alias == source && flow.target_alias == target)
         .ok_or_else(|| {
             ApiError::not_found(format!(
-                "no MirrorMaker flow {source} → {target} in {env:?}"
+                "no MirrorMaker 2 flow {source} → {target} in {env:?}"
             ))
         })?;
     let policy = flow.policy.clone().unwrap_or(ReplicationPolicy::Default {

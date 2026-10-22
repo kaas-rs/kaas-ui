@@ -302,7 +302,7 @@ function Syncs({ data }: { data: MirrorFlowDetail }) {
   if (data.offsetSyncs.length === 0) {
     return (
       <Empty>
-        No offset sync on the source yet. MirrorMaker writes one when a
+        No offset sync on the source yet. MirrorMaker 2 writes one when a
         partition has moved far enough since the last, so a quiet topic can have
         none.
       </Empty>
