@@ -101,8 +101,8 @@ environments:
           kind: none
         connect_timeout: 3s
 
-    # Strimzi's general-purpose Connect cluster: five source connectors and
-    # the three MirrorMaker 2 plugins installed. Dialled over REST, read-only
+    # Strimzi's general-purpose Connect cluster: the GTFS and MQTT source
+    # connectors. Dialled over REST, read-only
     # — the client has no method that sends anything but GET. No credentials:
     # Strimzi's REST listener is plain HTTP inside the cluster, and the
     # NetworkPolicy `kafka-connect-allow-kaas-ui` (k3s-cluster) is what lets
@@ -117,16 +117,6 @@ environments:
         name: Kafka Connect
         url: http://kafka-connect-connect-api.strimzi.svc.cluster.local:8083
         kafka_cluster: strimzi
-
-      # The dedicated MirrorMaker 2 (k3s-cluster fixture A, Strimzi → kaas):
-      # Strimzi runs a KafkaMirrorMaker2 as a Connect cluster of its own, with
-      # its workers on kaas. Beside `connect` — which runs fixture B's Mirror
-      # connectors, kaas → Strimzi, next to the GTFS and MQTT sources — it is
-      # the "MirrorMaker beside a Connect cluster" case the Mirrors page shows.
-      - id: mm2
-        name: mm2 Connect
-        url: http://mm2-mirrormaker2-api.strimzi.svc.cluster.local:8083
-        kafka_cluster: kaas
 
       # The dead-cluster fixture's Connect twin: a `.invalid` name fails DNS at
       # once, so its card says unreachable without costing the live one a

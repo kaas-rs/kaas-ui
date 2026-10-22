@@ -344,13 +344,6 @@ impl SchemaRegistryEntry {
 /// Dialled over its REST API, read-only: kaas-ui sends it nothing but `GET`,
 /// and that is a property of the client it gets (`kaas-ui-connect`), not of
 /// the credentials here — which can usually delete connectors.
-///
-/// A MirrorMaker 2 deployment in Connect mode is one of these too — Mirror
-/// connectors on a Connect cluster of their own or beside others, however it
-/// was deployed — so there is one kind of dialled thing and "is MM2" is a
-/// property of its connectors. A dedicated-mode MirrorMaker
-/// (`connect-mirror-maker.sh`) serves no such API and is found from the
-/// clusters' topics instead.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "snake_case")]
 pub struct ConnectClusterEntry {
@@ -536,21 +529,9 @@ pub struct EnvironmentEntry {
     /// that should render hex must be able to say so.
     #[serde(default)]
     pub schema_registries: Vec<SchemaRegistryEntry>,
-    /// The Kafka Connect clusters in this environment — MirrorMaker 2
-    /// deployments included, which are Connect clusters too.
+    /// The Kafka Connect clusters in this environment.
     #[serde(default)]
     pub connect_clusters: Vec<ConnectClusterEntry>,
-    /// MirrorMaker 2 cluster aliases, mapped to the clusters they name.
-    ///
-    /// A MirrorMaker flow names its ends by alias (`source.cluster.alias`),
-    /// and an alias is that deployment's word, not kaas-ui's. An alias not
-    /// listed here resolves to the Kafka cluster with the same id in this
-    /// environment — which is what both fixtures and most deployments use. A
-    /// value is a cluster id here, or `<environment>/<id>`: a flow may cross
-    /// environments, and disaster recovery from `dev` into `prod` is exactly
-    /// what one is for.
-    #[serde(default)]
-    pub mirror_aliases: BTreeMap<String, String>,
     /// Everything else here that kaas-ui does not dial: Connect, an MQTT
     /// broker, a REST proxy. Inventory, so that "what is in staging" has one
     /// answer and it is not only the brokers.
@@ -1551,32 +1532,6 @@ impl Config {
                     return Err(ConfigError::Invalid(format!(
                         "Connect cluster {id:?} in environment {env:?} has a `writes:` block that \
                          allows nothing: list operations under `allow`, or remove it"
-                    )));
-                }
-            }
-        }
-
-        // Every alias has to name a cluster that exists — in this environment,
-        // or in the one it names. A mapping to nothing would leave a flow
-        // unresolved with no error to say why.
-        for environment in &self.environments {
-            for (alias, target) in &environment.mirror_aliases {
-                let (env, id) = target
-                    .split_once('/')
-                    .unwrap_or((environment.id.as_str(), target.as_str()));
-                let exists = self.environments.iter().any(|candidate| {
-                    candidate.id == env
-                        && candidate
-                            .kafka_clusters
-                            .iter()
-                            .any(|cluster| cluster.id == id)
-                });
-                if !exists {
-                    return Err(ConfigError::Invalid(format!(
-                        "environment {:?} maps MirrorMaker alias {alias:?} to {target:?}, which \
-                         names no Kafka cluster (write `<id>` for this environment or \
-                         `<environment>/<id>`)",
-                        environment.id
                     )));
                 }
             }
@@ -3040,27 +2995,5 @@ environments:
                 writes.allow
             );
         }
-    }
-
-    #[test]
-    fn a_mirror_alias_must_name_a_cluster_here_or_in_the_environment_it_names() {
-        let base = r#"
-environments:
-  - id: dev
-    kafka_clusters:
-      - id: strimzi
-        bootstrap: ["a:9093"]
-    mirror_aliases:
-      upstream: strimzi
-      dr: prod/prod-eu
-  - id: prod
-    kafka_clusters:
-      - id: prod-eu
-        bootstrap: ["b:9093"]
-"#;
-        let config = Config::from_yaml(base).unwrap();
-        assert_eq!(config.environments[0].mirror_aliases["dr"], "prod/prod-eu");
-        let err = Config::from_yaml(&base.replace("prod/prod-eu", "prod/nowhere")).unwrap_err();
-        assert!(format!("{err}").contains("names no Kafka cluster"), "{err}");
     }
 }

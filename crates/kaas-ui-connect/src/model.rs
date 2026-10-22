@@ -140,148 +140,6 @@ impl From<wire::TaskState> for TaskStatus {
     }
 }
 
-/// Which of MirrorMaker 2's three connectors this is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub enum MirrorKind {
-    /// `MirrorSourceConnector`: replicates topics.
-    Source,
-    /// `MirrorCheckpointConnector`: translates consumer-group offsets.
-    Checkpoint,
-    /// `MirrorHeartbeatConnector`: emits heartbeats.
-    Heartbeat,
-}
-
-impl MirrorKind {
-    /// Read off `connector.class`. A class name, not a version: no Kafka
-    /// release decides anything here.
-    #[must_use]
-    pub fn of(class: &str) -> Option<Self> {
-        match class.rsplit('.').next()? {
-            "MirrorSourceConnector" => Some(Self::Source),
-            "MirrorCheckpointConnector" => Some(Self::Checkpoint),
-            "MirrorHeartbeatConnector" => Some(Self::Heartbeat),
-            _ => None,
-        }
-    }
-}
-
-/// How a flow names topics on its target.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase", tag = "kind")]
-pub enum ReplicationPolicy {
-    /// `DefaultReplicationPolicy`: `t` becomes `<source alias><separator>t`.
-    Default {
-        /// `replication.policy.separator`, `.` unless configured.
-        separator: String,
-    },
-    /// `IdentityReplicationPolicy`: `t` stays `t`.
-    Identity,
-    /// Anything else: kaas-ui cannot know the mapping, and says so.
-    Custom {
-        /// The class.
-        class: String,
-    },
-}
-
-impl ReplicationPolicy {
-    fn of(config: &BTreeMap<String, String>) -> Self {
-        let separator = config
-            .get("replication.policy.separator")
-            .cloned()
-            .unwrap_or_else(|| ".".to_owned());
-        match config
-            .get("replication.policy.class")
-            .map(|class| class.rsplit('.').next().unwrap_or(class).to_owned())
-            .as_deref()
-        {
-            None | Some("DefaultReplicationPolicy") => Self::Default { separator },
-            Some("IdentityReplicationPolicy") => Self::Identity,
-            Some(_) => Self::Custom {
-                class: config
-                    .get("replication.policy.class")
-                    .cloned()
-                    .unwrap_or_default(),
-            },
-        }
-    }
-
-    /// The name `topic` from `source` has on the target, where knowable.
-    #[must_use]
-    pub fn remote(&self, source: &str, topic: &str) -> Option<String> {
-        match self {
-            Self::Default { separator } => Some(format!("{source}{separator}{topic}")),
-            Self::Identity => Some(topic.to_owned()),
-            Self::Custom { .. } => None,
-        }
-    }
-
-    /// The source name of a topic on the target, where knowable.
-    #[must_use]
-    pub fn upstream(&self, source: &str, remote: &str) -> Option<String> {
-        match self {
-            Self::Default { separator } => remote
-                .strip_prefix(&format!("{source}{separator}"))
-                .map(str::to_owned),
-            Self::Identity => Some(remote.to_owned()),
-            Self::Custom { .. } => None,
-        }
-    }
-
-    /// The separator internal topic names use, under either built-in policy.
-    #[must_use]
-    pub fn separator(&self) -> &str {
-        match self {
-            Self::Default { separator } => separator,
-            Self::Identity | Self::Custom { .. } => ".",
-        }
-    }
-}
-
-/// A connector's part in a MirrorMaker 2 flow, read from its config.
-///
-/// None of this is a secret — aliases, regexes, a class name — so it is
-/// carried beside the summary rather than reconstructed from a redacted
-/// config.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct MirrorRole {
-    /// Which connector of the three.
-    pub kind: MirrorKind,
-    /// `source.cluster.alias`.
-    pub source_alias: Option<String>,
-    /// `target.cluster.alias`.
-    pub target_alias: Option<String>,
-    /// How the flow names topics on the target.
-    pub policy: ReplicationPolicy,
-    /// `topics`, verbatim: a regex list MirrorMaker evaluates and kaas-ui
-    /// does not.
-    pub topics: Option<String>,
-    /// `topics.exclude`, verbatim.
-    pub topics_exclude: Option<String>,
-    /// `groups`, verbatim.
-    pub groups: Option<String>,
-    /// `groups.exclude`, verbatim.
-    pub groups_exclude: Option<String>,
-}
-
-impl MirrorRole {
-    fn of(config: &BTreeMap<String, String>) -> Option<Self> {
-        let kind = MirrorKind::of(config.get("connector.class")?)?;
-        let get = |key: &str| config.get(key).cloned();
-        Some(Self {
-            kind,
-            source_alias: get("source.cluster.alias"),
-            target_alias: get("target.cluster.alias"),
-            policy: ReplicationPolicy::of(config),
-            topics: get("topics"),
-            topics_exclude: get("topics.exclude"),
-            groups: get("groups"),
-            groups_exclude: get("groups.exclude"),
-        })
-    }
-}
-
 /// One row of the connector table.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -314,9 +172,6 @@ pub struct ConnectorSummary {
     /// `connect-<name>` unless the config overrides it with
     /// `consumer.override.group.id`. `None` for a source, which has none.
     pub consumer_group: Option<String>,
-    /// The connector's part in a MirrorMaker 2 flow, if it is one of the
-    /// three Mirror connectors.
-    pub mirror: Option<MirrorRole>,
 }
 
 impl ConnectorSummary {
@@ -360,7 +215,6 @@ impl ConnectorSummary {
             version: connector.and_then(|c| c.version),
             tasks,
             consumer_group,
-            mirror: config.and_then(MirrorRole::of),
         }
     }
 }
@@ -512,48 +366,5 @@ mod tests {
         assert_eq!(S::derive(Some("RUNNING"), &["RESTARTING"]), S::Restarting);
         assert_eq!(S::derive(Some("SOMETHING_NEW"), &["RUNNING"]), S::Unknown);
         assert_eq!(S::derive(None, &[]), S::Unknown);
-    }
-
-    #[test]
-    fn a_mirror_connector_says_which_flow_it_belongs_to() {
-        use super::{MirrorKind, MirrorRole, ReplicationPolicy};
-        let config: std::collections::BTreeMap<String, String> = [
-            (
-                "connector.class",
-                "org.apache.kafka.connect.mirror.MirrorSourceConnector",
-            ),
-            ("source.cluster.alias", "kaas"),
-            ("target.cluster.alias", "strimzi"),
-            ("topics", "kaas-canary-v1"),
-        ]
-        .into_iter()
-        .map(|(k, v)| (k.to_owned(), v.to_owned()))
-        .collect();
-        let role = MirrorRole::of(&config).unwrap();
-        assert_eq!(role.kind, MirrorKind::Source);
-        assert_eq!(role.source_alias.as_deref(), Some("kaas"));
-        assert_eq!(
-            role.policy.remote("kaas", "kaas-canary-v1").as_deref(),
-            Some("kaas.kaas-canary-v1")
-        );
-        assert_eq!(
-            role.policy
-                .upstream("kaas", "kaas.kaas-canary-v1")
-                .as_deref(),
-            Some("kaas-canary-v1")
-        );
-        assert_eq!(role.policy.upstream("kaas", "other.x"), None);
-
-        let identity = ReplicationPolicy::Identity;
-        assert_eq!(identity.remote("kaas", "t").as_deref(), Some("t"));
-        let custom = ReplicationPolicy::Custom {
-            class: "x.Mine".into(),
-        };
-        assert_eq!(custom.remote("kaas", "t"), None, "unknowable, not guessed");
-
-        // An ordinary connector is not a mirror.
-        let mut plain = config.clone();
-        plain.insert("connector.class".into(), "io.x.MqttSource".into());
-        assert!(MirrorRole::of(&plain).is_none());
     }
 }

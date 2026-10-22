@@ -37,9 +37,8 @@ pub mod writer;
 pub use client::{ConnectClient, ConnectError, ConnectHealth, ConnectStatus};
 pub use fault::ConnectFault;
 pub use model::{
-    ConnectorDetail, ConnectorStatus, ConnectorSummary, ConnectorType, MirrorKind, MirrorRole,
-    Plugin, RedactedConfig, ReplicationPolicy, ServerInfo, StoredOffset, TaskConfig, TaskStatus,
-    Validation, ValidationError,
+    ConnectorDetail, ConnectorStatus, ConnectorSummary, ConnectorType, Plugin, RedactedConfig,
+    ServerInfo, StoredOffset, TaskConfig, TaskStatus, Validation, ValidationError,
 };
 pub use redact::{ConnectorConfigEntry, REDACTED, Redaction};
 pub use settings::{ConnectAuth, ConnectSettings, ConnectTls};

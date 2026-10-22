@@ -303,7 +303,7 @@ test cleans up:
 
 ## Order
 
-Agreed 2026-10-20: interleaved with Phase 9, **9a → 10a → 9b/9c/9d and the
+Agreed 2026-10-20: interleaved with Phase 9, **9a → 10a → 9d and the
 rest**. The whole sequence is in [README.md](README.md#order).
 
 1. **10a — the gate**, after Phase 9a. `Grant` and the ceiling; the write

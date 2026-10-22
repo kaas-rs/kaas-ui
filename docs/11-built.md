@@ -21,13 +21,12 @@ is surprising.
 | 6 — schema registry | one registry per environment, Avro/Protobuf/JSON Schema, the codec chip, the schema browser, the payload filter over decoded values |
 | 7 — read-only admin | ACLs, client quotas, SCRAM users, reassignments, the transaction inspector, and `CapabilityTab` at last |
 | 10a — the write gate (Connect half) | `Grant`, two gates (ceiling and role), `X-Kaas-Ui` + Origin guard, intent/outcome audit, `ConnectWriter`; connector restart, pause, resume, stop |
-| 9b · 9c — MirrorMaker 2 | flows from every Connect cluster and from the clusters' internal topics; mirrored topics; heartbeats, checkpoints and offset syncs decoded in kaas-ui-serde |
+| MirrorMaker 2, built and removed | 9b · 9c's flows, mirrored topics and record decoders; taken out on 2026-10-22 — kaas-ui supports Kafka Connect, not MirrorMaker |
 | 9d — Connect writes | the rest of the catalogue: task restart, reset topics, edit (with validate), create (with validate), delete, reset and alter offsets; destroy tier wants the name typed |
 | 9a — Connect, read-only | `kaas-ui-connect`: Connect clusters dialled over REST, GET-only by construction; connectors, tasks, redacted configs, topics, offsets, plugins; the `kafka_cluster:` reference checked against the workers |
 | GitOps, built and removed | Git ownership as a third gate and rendered equivalents, in 10a and 9d; taken out on 2026-10-21 as one tool's model |
 
-Still open: [Phase 8](09-phase-8-cross-cluster.md), the rest of
-[Phase 9](12-phase-9-connect-and-mm2.md) (9b–9d) and
+Still open: [Phase 8](09-phase-8-cross-cluster.md) and
 [Phase 10](13-phase-10-administration.md), in the order
 [README.md](README.md#order) gives.
 
@@ -738,14 +737,11 @@ nobody references: anyone who may view topics somewhere in the environment.
 alone turned out too wide. A permission scoped to one topic still answers
 yes to "may view topics on this cluster", so the deployment's
 `canary-reader` — one topic and nothing else — would have seen every
-connector, its redacted config and the MirrorMaker 2 flows the moment
-Connect was configured. Now a Connect cluster also needs `connect: view` for
-its id, selected like any Connect permission (on its Kafka cluster, or by
-its own id when it names none) — kafbat-ui's model. A write needs it too,
-since a caller who cannot see the Connect cluster gets the lookup's 404
-before the gate. MirrorMaker 2 flows found from the clusters' internal
-topics need topic view on those topics *by name*, and a mirrored topic is
-listed only where both of its names are visible.
+connector and its redacted config the moment Connect was configured. Now a
+Connect cluster also needs `connect: view` for its id, selected like any
+Connect permission (on its Kafka cluster, or by its own id when it names
+none) — kafbat-ui's model. A write needs it too, since a caller who cannot
+see the Connect cluster gets the lookup's 404 before the gate.
 `kafka_cluster:` is also *checked*: the page compares the referenced cluster's
 id from its metadata snapshot with the one `GET /` reports. Live, both are
 `RPquI6Y0R3uuCqz8FMrSvg`.
@@ -777,14 +773,13 @@ because `ConfigEntry` is the broker config's, and the two pages' tab state is
 `?listing=` and `?pane=` because the router types every search key across the
 tree and the topic page already owns `tab` and `view`.
 
-**Reachability is a NetworkPolicy, and it is not yet applied.** Strimzi's
-generated policy admits 8083 only from Connect pods and the operator.
-`kafka-connect-allow-kaas-ui` in k3s-cluster (`60a0c5f`) admits the kaas-ui
-pod and the code-server dev pod, for every `KafkaConnect` and
-`KafkaMirrorMaker2` in `strimzi`. It is pushed and awaits a sync; until then
-the live acceptance was run through a `kubectl port-forward` to one worker,
-with the config's url pointed at it — 95 of 96 green, the one failure being
-Phase 7's transaction fixture, which has no open transaction on Strimzi today.
+**Reachability is a NetworkPolicy.** Strimzi's generated policy admits 8083
+only from Connect pods and the operator. `kafka-connect-allow-kaas-ui` in
+k3s-cluster (`60a0c5f`) admits the kaas-ui pod and the code-server dev pod to
+every `KafkaConnect` in `strimzi`. Before it was synced the live acceptance
+ran through a `kubectl port-forward` to one worker — 95 of 96 green, the one
+failure being Phase 7's transaction fixture, which has no open transaction
+on Strimzi today.
 
 ## Phase 10a — the decisions (the Connect half)
 
@@ -899,58 +894,28 @@ submitting sends; the Kafka half's forms are meant to be fields inside it.
 the Strimzi worker (see 10a above). The other ten operations' requests are
 asserted against a stub worker, through the real handler and writer.
 
-## Phase 9b and 9c — the decisions
+## MirrorMaker 2, built and removed
 
-**MirrorMaker 2, and only MirrorMaker 2.** Everything below is read from the
-three Mirror connectors and MirrorMaker 2's own internal topics. The legacy
-MirrorMaker had neither, so kaas-ui has no code for it, and since 0.15.1 the UI
-says "MirrorMaker 2" wherever it said "MirrorMaker" — the bare name read as the
-old tool beside a Connect cluster called "MirrorMaker 2".
+**9b and 9c were built, verified live, and taken out on 2026-10-22: kaas-ui
+supports Kafka Connect and not MirrorMaker.** They had assembled
+MirrorMaker 2 flows from the three Mirror connectors on any Connect cluster
+and from the clusters' own internal topics (so a dedicated-mode MirrorMaker
+showed up too), resolved aliases through an environment's
+`mirror_aliases`, listed mirrored topics through the replication policy, and
+decoded heartbeats, checkpoints and offset syncs in `kaas_ui_serde::mirror`.
+Against the k3s-cluster fixtures they passed twelve of thirteen assertions.
 
-**A flow is found two ways, and they merge.** From every Connect cluster
-the caller may see in the environment — dedicated to MirrorMaker or not — by
-the three Mirror connector classes and the aliases in their config; and from
-the clusters' own topics, `<source>.checkpoints.internal` on a target and
-`mm2-offset-syncs.<target>.internal` on a source. The second is how a
-dedicated-mode MirrorMaker, with no public REST API, shows up at all; such a
-flow is `discovered` and says its task state is unknown. Each connector is
-attributed to the Connect cluster that runs it, because one flow can be split
-across two.
+What went: the `/mirrors` routes and pages, the decoders, `mirror_aliases`
+(a config still carrying it is refused at startup by the unknown field), the
+`mirror` field on a connector summary, and the fixtures themselves, removed
+from k3s-cluster beside this.
 
-**Aliases resolve through `mirror_aliases`, or to the same-named cluster.**
-A mapping may cross environments; one to a cluster that does not exist is a
-startup error. A flow whose resolved end the caller cannot see is not listed.
-
-**The decoders are kaas-ui's** (`kaas_ui_serde::mirror`), not kaas-lib's:
-kaas-lib fetches the bytes like any topic, and the records' contents are
-payload decoding. Version 0 is read; any other format version is reported
-as unrecognised, never guessed at.
-
-**Reading the internal topics needs topic view on the cluster holding them,
-and consumer view for checkpoints,** which name groups. It is not audited as
-a disclosure: replication metadata, not payloads.
-
-**What the fixtures taught before they ran:** Strimzi's v1
-`KafkaMirrorMaker2` has no heartbeat connector, so fixture A's flow reports
-`missing: [heartbeat]` honestly, and its liveness is the heartbeat fixture B
-emits on Strimzi, carried to kaas as `strimzi.heartbeats` — one heartbeat
-crossing both flows.
-
-**Live since the fixtures were synced, 2026-10-21: twelve of thirteen.**
-Both Connect clusters read; both flows found on the Connect cluster that runs
-them — A on `mm2` with `missing: [heartbeat]`, B on `connect` with all three;
-a mirrored topic mapped on both sides in each direction
-(`gtfs-rt-service-alerts` → `strimzi.gtfs-rt-service-alerts`,
-`kaas-canary-v1` → `kaas.kaas-canary-v1`); a heartbeat under eight seconds
-old on each target.
-
-**The checkpoint assertion fails, and the fixture is why.** B's
-`mirror-kaas-checkpoint` is RUNNING with **no tasks**: MirrorMaker makes
-checkpoint tasks only for consumer groups it finds on the source, and the
-only group on `kaas` is `mm2-cluster` — fixture A's own workers. The
-assertion assumed the canary consumes `kaas-canary-v1` on `kaas` with a
-group; it does not. A consumer group on `kaas` reading that topic is what is
-missing, in k3s-cluster, not here.
+What stays, because it is Connect's and not MirrorMaker's: a Connect cluster
+running Mirror connectors still shows them, as connectors like any other,
+with writes where the ceiling allows; and redaction still withholds a
+prefixed `PASSWORD` key such as `source.cluster.sasl.jaas.config`, the rule
+MirrorMaker 2's connectors were the first live case of. The code is in git
+history at `b212db5` should it ever come back.
 
 ## GitOps, built and removed
 

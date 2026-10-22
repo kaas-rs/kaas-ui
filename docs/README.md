@@ -11,7 +11,7 @@ in [11-built.md](11-built.md).
 
 ## Status
 
-**Phases 0–7 are done, and 9a, 9d and the Connect half of 10a.**
+**Phases 0–7 are done, and 9 (Kafka Connect: 9a, 9d) and the Connect half of 10a.**
 The workspace is five crates, a frontend and an xtask.
 
 ```sh
@@ -33,7 +33,7 @@ cargo xtask login   # 11 assertions, a real login. Needs the dex-test app
 | 6 — schema registry | **done** — one registry per environment, Avro/Protobuf/JSON Schema, the codec chip, the schema browser, the payload filter over decoded values |
 | 7 — read-only admin | **done** — ACLs, quotas, SCRAM users, reassignments, the transaction inspector, and the `CapabilityTab` the design system named in Phase 1 |
 | 8 — cross-cluster | not started — fleet topic search, cluster comparison, capability diff |
-| 9 — Connect and MM2 | **9a, 9d done; 9b–9c built** — MirrorMaker 2 flows await their live fixtures |
+| 9 — Kafka Connect | **done** — 9a (read) and 9d (writes). MirrorMaker 2 (9b–9c) was built and removed: kaas-ui supports Connect only |
 | 10 — administration | **10a's Connect half done** — the gate, connector restart/pause/resume/stop; the Kafka half waits on kaas-lib asks 17–18 |
 
 Phase *n* is milestone M*n* in PLAN.md §8. One numbering, not two.
@@ -50,7 +50,7 @@ is proven on Connect, which needs no kaas-lib release:
 | kaas-lib asks 17–18 | parallel with 10a | mutation ceiling, `Admin::scoped` | **implemented** in kaas-lib `6b062c3`, verified live by `livetest gate`; awaiting a release |
 | **10a, Kafka half** | kaas-lib release | `consumer.reset_offsets` through the same gate | |
 | **9d** | 9a, 10a | the remaining Connect writes: task restart, reset topics, edit, create, delete, offsets | **done** — task restart verified live, signed in; the rest against a stub worker. GitOps ownership was built and removed: [11-built.md](11-built.md#gitops-built-and-removed) |
-| **9b · 9c** | 9a, MM2 fixtures | MM2 flows, MM2 record decoding | **built, live 12 of 13** — fixtures synced; the checkpoint assertion needs a consumer group on `kaas`, which no fixture runs yet |
+| ~~9b · 9c~~ | — | MirrorMaker 2 flows and record decoding | **removed** — built and verified, then taken out; see [11-built.md](11-built.md#mirrormaker-2-built-and-removed) |
 | **10b–10e** | 10a | topics and messages, security, cluster and transactions, schema registry | |
 
 Phase 8 is independent of both.
@@ -62,7 +62,6 @@ Phase 8 is independent of both.
 | [00](00-foundations.md) | **Foundations** | workspace, dependency pins, how kaas-lib is consumed, the invariants CI enforces |
 | [11](11-built.md) | **What is built** | phases 0–6: what each decided differently from its plan, what was measured, what is still unproven |
 | [09](09-phase-8-cross-cluster.md) | **Phase 8 — cross-cluster** | fleet topic search, cluster comparison, capability diff |
-| [12](12-phase-9-connect-and-mm2.md) | **Phase 9 — Connect and MirrorMaker 2** | connectors, tasks, redacted configs, replication flows |
 | [13](13-phase-10-administration.md) | **Phase 10 — administration under RBAC** | the write gate, the action catalogue, kaas-lib's mutation ceiling |
 
 Running alongside all of them:

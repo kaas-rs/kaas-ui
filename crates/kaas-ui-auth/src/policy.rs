@@ -60,7 +60,7 @@ pub enum Resource {
     /// `clusters:` and `cluster_labels:` already select.
     Connector,
     /// A Connect cluster, by id. `view` is what makes one — its connectors,
-    /// their configs and the MirrorMaker 2 pieces it runs — visible at all;
+    /// their tasks and configs — visible at all;
     /// `create` is what a new connector is created on. Granted, like
     /// [`Resource::Connector`], on the Kafka cluster it keeps state in.
     Connect,

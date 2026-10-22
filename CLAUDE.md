@@ -13,10 +13,10 @@ multi-cluster from day one, OIDC via Dex.
   plan, and what was measured. **A phase that lands loses its plan file**; what
   outlived it is here.
 
-Read `docs/README.md` first. Phases 0–7 are done, and 9a (read-only Connect),
-the Connect half of 10a (the write gate) and 9d (Connect writes); 9b–9c
-(MirrorMaker 2) are built and await their live fixtures; 8 and the rest of 10
-are planned, in the order `docs/README.md` gives.
+Read `docs/README.md` first. Phases 0–7 are done, and 9 — Kafka Connect, read
+(9a) and written (9d) — and the Connect half of 10a (the write gate); 8 and the
+rest of 10 are planned, in the order `docs/README.md` gives. kaas-ui supports
+Kafka Connect and not MirrorMaker: MirrorMaker 2 (9b–9c) was built and removed.
 
 ## The shape
 

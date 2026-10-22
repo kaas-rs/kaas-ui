@@ -8,8 +8,7 @@ import { SidebarMenuButton, SidebarMenuItem } from "@/components/ui/sidebar"
  * A Connect cluster: one row, and it goes somewhere.
  *
  * Built like the registry row and for the same reason — a thing kaas-ui
- * dials, beside the clusters rather than inside one. A MirrorMaker 2
- * deployment is one of these too, because it is a Connect cluster.
+ * dials, beside the clusters rather than inside one.
  */
 export function NavConnectItem({
   envId,

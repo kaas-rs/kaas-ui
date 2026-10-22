@@ -94,22 +94,6 @@ export function ConnectorPage({
             >
               {summary.class ?? ""}
             </span>
-            {summary.mirror?.sourceAlias && summary.mirror.targetAlias ? (
-              <Link
-                to="/environments/$envId/mirrors/$source/$target"
-                params={{
-                  envId,
-                  source: summary.mirror.sourceAlias,
-                  target: summary.mirror.targetAlias,
-                }}
-                className="rounded-sm border px-1.5 py-0.5 text-[12px] hover:underline"
-              >
-                MirrorMaker 2 {summary.mirror.kind} ·{" "}
-                <span className="font-mono">
-                  {summary.mirror.sourceAlias} → {summary.mirror.targetAlias}
-                </span>
-              </Link>
-            ) : null}
           </span>
         }
         actions={<ConnectorStatusBadge status={summary.status} />}
