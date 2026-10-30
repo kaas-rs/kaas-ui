@@ -14,9 +14,11 @@ use figment::Figment;
 use figment::providers::{Env, Format as _, Yaml};
 use kaas_ui_auth::{OidcConfig, Operation, Role};
 use kaas_ui_connect::{ConnectAuth, ConnectSettings, ConnectTls};
-use kaas_ui_serde::{Codec, RegistryAuth, RegistrySettings};
+use kaas_ui_serde::{Codec, RegistryAuth, RegistrySettings, TokenSource};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
+
+use crate::registry::oauth_provider;
 
 /// Everything kaas-ui reads at startup.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -267,11 +269,34 @@ pub struct SchemaRegistryEntry {
     /// A bearer token, sent verbatim. Mutually exclusive with basic auth.
     ///
     /// Omit it and it is read from `KAAS_UI_BEARER_TOKEN_<ENVIRONMENT>_<ID>`,
-    /// but **only when `username` is unset**: a registry configures one or the
-    /// other, and looking for a bearer token beside a username would turn a
-    /// stray variable into an auth mode nobody asked for.
+    /// but **only when `username` and `oauth` are unset**: a registry
+    /// configures one credential, and looking for a bearer token beside
+    /// another would turn a stray variable into an auth mode nobody asked for.
     #[serde(default)]
     pub bearer_token: Option<String>,
+    /// A bearer token kaas-ui fetches and refreshes itself — the block a
+    /// cluster's `sasl: {mechanism: oauthbearer}` takes, minus the mechanism.
+    ///
+    /// ```yaml
+    /// oauth:
+    ///   token_endpoint: https://login.microsoftonline.com/<tenant>/oauth2/v2.0/token
+    ///   client_id: <kaas-ui client id>
+    ///   client_assertion_file: /var/run/spiffe/svid/azure-token
+    ///   scope: <registry client id>/.default
+    /// ```
+    ///
+    /// What a registry behind an identity provider needs: a static
+    /// `bearer_token` is dead within the hour, and basic auth against one —
+    /// Apicurio's client-credentials mode — needs a client secret, which a
+    /// workload-identity deployment does not have. Asked for on every registry
+    /// call and cached by the provider, so a refresh lands without a restart.
+    ///
+    /// Mutually exclusive with `username`, `password` and `bearer_token`. On an
+    /// `http://` url it needs `allow_plaintext_token: true`, for the reason a
+    /// cluster without `tls:` does: the token is readable by anything on the
+    /// path.
+    #[serde(default)]
+    pub oauth: Option<OauthCredentials>,
     /// Per-call timeout. A schema fetch sits on a request path.
     #[serde(default, with = "humantime_serde::option")]
     pub request_timeout: Option<Duration>,
@@ -307,6 +332,26 @@ impl SchemaRegistryEntry {
         }
 
         let what = format!("schema registry {:?}", self.id);
+
+        // The whole of the registry's auth where it is set — validation
+        // refuses it beside the other three — and returned before the
+        // environment is asked for a bearer token it must not find.
+        if let Some(oauth) = &self.oauth {
+            let provider = oauth_provider(
+                &what,
+                &secret_var("client_secret", environment, &self.id),
+                oauth,
+            )?;
+            // The block is what "unchanged" means across a reload. A secret
+            // from the environment is not in it, and does not need to be: the
+            // environment is read at startup and does not change under a
+            // running process.
+            let fingerprint = serde_json::to_string(oauth)
+                .map_err(|error| ConfigError::Invalid(format!("{what}: {error}")))?;
+            return Ok(
+                settings.with_auth(RegistryAuth::Oauth(TokenSource::new(provider, fingerprint)))
+            );
+        }
 
         // A username is what says "basic auth", so a password is looked for
         // only beside one, and a bearer token only where there is none.
@@ -880,9 +925,10 @@ pub struct OauthCredentials {
     /// Off by default: the client secret would be on the wire in the clear.
     #[serde(default)]
     pub allow_plaintext_endpoint: bool,
-    /// Permit the *token* over an unencrypted broker socket. Off by default,
-    /// and for the same reason `PLAIN` is: a bearer token on the wire is a
-    /// reusable credential, and nothing about it failing is visible.
+    /// Permit the *token* over an unencrypted broker socket — or, on a schema
+    /// registry, an `http://` url. Off by default, and for the same reason
+    /// `PLAIN` is: a bearer token on the wire is a reusable credential, and
+    /// nothing about it failing is visible.
     #[serde(default)]
     pub allow_plaintext_token: bool,
 }
@@ -1284,6 +1330,45 @@ impl Config {
                          and a bearer token: only one of them can be sent",
                         registry.id
                     )));
+                }
+                if let Some(oauth) = &registry.oauth {
+                    if registry.username.is_some()
+                        || registry.password.is_some()
+                        || registry.bearer_token.is_some()
+                    {
+                        return Err(ConfigError::Invalid(format!(
+                            "schema registry {:?} in environment {env:?} configures `oauth` \
+                             beside basic auth or a `bearer_token`: one credential is sent, and \
+                             `oauth` is a bearer token of its own. Drop whichever this registry \
+                             does not use",
+                            registry.id
+                        )));
+                    }
+                    // Same check, and same reason, as oauthbearer on a cluster
+                    // without `tls:`: refused once at startup rather than sent
+                    // in the clear on every call.
+                    if registry.url.starts_with("http://") && !oauth.allow_plaintext_token {
+                        return Err(ConfigError::Invalid(format!(
+                            "schema registry {:?} in environment {env:?} configures `oauth` on \
+                             {}, so the bearer token would be readable by anything on the path. \
+                             Use https, or set `allow_plaintext_token: true` in the `oauth` block \
+                             where the path is one you trust",
+                            registry.id, registry.url
+                        )));
+                    }
+                    // Only where the variable would be read: an assertion file
+                    // reads none, and claiming one anyway would refuse a
+                    // registry that shares an id with an oauthbearer cluster
+                    // over a variable the registry never reads.
+                    if oauth.client_assertion_file.is_none() {
+                        claim(
+                            &mut secret_vars,
+                            "client_secret",
+                            env,
+                            "schema registry",
+                            &registry.id,
+                        )?;
+                    }
                 }
             }
 
@@ -2445,6 +2530,113 @@ environments:
         )
         .unwrap_err();
         assert!(format!("{err}").contains("only one of them"), "{err}");
+    }
+
+    /// A registry `oauth` block, on an in-cluster url, with whatever `extra`
+    /// adds beside it — indented to sit at the entry's own level.
+    fn oauth_registry(url: &str, extra: &str) -> String {
+        format!(
+            r#"
+environments:
+  - id: dev
+    schema_registries:
+      - id: apicurio
+        url: {url}
+{extra}
+        oauth:
+          token_endpoint: https://login.microsoftonline.com/tenant/oauth2/v2.0/token
+          client_id: kaas-ui
+          client_assertion_file: /var/run/spiffe/svid/azure-token
+          scope: registry/.default
+          allow_plaintext_token: true
+    kafka_clusters:
+      - id: strimzi
+        bootstrap: ["a:9092"]
+"#
+        )
+    }
+
+    const IN_CLUSTER: &str = "http://apicurio:8080/apis/ccompat/v7";
+
+    #[test]
+    fn an_oauth_registry_is_sent_a_token_from_a_provider() {
+        let config = Config::from_yaml(&oauth_registry(IN_CLUSTER, "")).unwrap();
+        let settings = config.environments[0].schema_registries[0]
+            .to_settings("dev")
+            .unwrap();
+        assert!(
+            matches!(settings.auth, Some(RegistryAuth::Oauth(_))),
+            "{:?}",
+            settings.auth
+        );
+    }
+
+    #[test]
+    fn oauth_beside_another_registry_credential_is_refused() {
+        for extra in [
+            "        username: someone",
+            "        bearer_token: abc",
+            "        username: someone\n        password: hunter2",
+        ] {
+            let err = Config::from_yaml(&oauth_registry(IN_CLUSTER, extra)).unwrap_err();
+            assert!(
+                format!("{err}").contains("`oauth` beside"),
+                "{extra}: {err}"
+            );
+        }
+    }
+
+    /// The cluster rule, applied to the registry: a bearer token over plain
+    /// HTTP is a startup decision somebody wrote down, not a default.
+    #[test]
+    fn an_oauth_registry_on_http_needs_the_plaintext_opt_in() {
+        let yaml =
+            oauth_registry(IN_CLUSTER, "").replace("          allow_plaintext_token: true\n", "");
+        let err = Config::from_yaml(&yaml).unwrap_err();
+        assert!(format!("{err}").contains("allow_plaintext_token"), "{err}");
+
+        let https = oauth_registry("https://apicurio:8443/apis/ccompat/v7", "")
+            .replace("          allow_plaintext_token: true\n", "");
+        Config::from_yaml(&https).unwrap();
+    }
+
+    /// A reload rebuilds the provider from the same block. If that counted as
+    /// a change, every reload would empty the registry's schema caches.
+    #[test]
+    fn the_same_oauth_block_twice_is_the_same_settings() {
+        let config = Config::from_yaml(&oauth_registry(IN_CLUSTER, "")).unwrap();
+        let entry = &config.environments[0].schema_registries[0];
+        assert_eq!(
+            entry.to_settings("dev").unwrap(),
+            entry.to_settings("dev").unwrap()
+        );
+
+        let rescoped = Config::from_yaml(
+            &oauth_registry(IN_CLUSTER, "").replace("registry/.default", "other/.default"),
+        )
+        .unwrap();
+        assert_ne!(
+            entry.to_settings("dev").unwrap(),
+            rescoped.environments[0].schema_registries[0]
+                .to_settings("dev")
+                .unwrap()
+        );
+    }
+
+    /// The cluster's refusal, word for word, because it is the cluster's code.
+    #[test]
+    fn a_registry_oauth_block_with_a_secret_and_an_assertion_is_refused() {
+        let yaml = oauth_registry(IN_CLUSTER, "").replace(
+            "          scope:",
+            "          client_secret: s\n          scope:",
+        );
+        let config = Config::from_yaml(&yaml).unwrap();
+        let err = config.environments[0].schema_registries[0]
+            .to_settings("dev")
+            .unwrap_err();
+        let err = format!("{err}");
+        assert!(err.contains("schema registry \"apicurio\""), "{err}");
+        assert!(err.contains("client_assertion_file"), "{err}");
     }
 
     #[test]

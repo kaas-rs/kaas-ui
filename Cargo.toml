@@ -39,6 +39,11 @@ axum-extra = { version = "0.12", features = ["cookie-private"] }
 time       = { version = "0.3", default-features = false }
 hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
 tower      = "0.5"
+# The two names `reqwest_middleware::Middleware`'s signature is written in:
+# its `#[async_trait]` and `http::Extensions`. Both already in the tree
+# beneath it.
+async-trait = "0.1"
+http        = "1"
 
 # OIDC. `rustls-tls` rather than native: the image is distroless and carries no
 # OpenSSL, and rustls is already in the tree for the broker connections.
@@ -81,12 +86,22 @@ base64     = "0.22"
 # turns the two-line musl builder in the Dockerfile into a cmake project. TLS
 # comes from the `reqwest` features below instead, on the one copy of reqwest
 # the whole graph shares.
+#
+# `middleware` is the bearer token on a registry with an `oauth` block. The
+# converter fixes its `Authorization` header when the settings are built, and
+# a token lasts an hour; a middleware asks the token provider on every call
+# instead, so a refresh is picked up by the decoders' own fetches without
+# rebuilding them — and without dropping the id→schema caches they hold.
 schema_registry_converter = { version = "5", default-features = false, features = [
     "futures",
     "avro",
     "json",
     "proto_decoder",
+    "middleware",
 ] }
+# The trait that middleware implements. Pinned to the major the converter
+# builds its client on, for the same one-copy reason as reqwest below.
+reqwest-middleware = { version = "0.5", default-features = false }
 # The value types the three decoders hand back. Pulled in beside the converter
 # rather than instead of it: converting them to JSON is ours, decoding is not.
 apache-avro = { version = "0.22", default-features = false }

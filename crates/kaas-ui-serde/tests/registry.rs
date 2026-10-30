@@ -18,8 +18,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use kaas_ui_serde::{
-    Codec, MAX_PAYLOAD_CHARS, NamingStrategy, NoteKind, RegistryHandle, RegistrySettings,
-    SchemaFormat, SubjectNaming, decode,
+    Codec, MAX_PAYLOAD_CHARS, NamingStrategy, NoteKind, RegistryAuth, RegistryHandle,
+    RegistryHealth, RegistrySettings, SchemaFormat, SubjectNaming, TokenSource, decode,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -29,6 +29,8 @@ struct Stub {
     addr: SocketAddr,
     requests: Arc<AtomicUsize>,
     paths: Arc<std::sync::Mutex<Vec<String>>>,
+    /// The `Authorization` header of each request, in order, where it had one.
+    authorizations: Arc<std::sync::Mutex<Vec<Option<String>>>>,
     task: tokio::task::JoinHandle<()>,
 }
 
@@ -49,17 +51,20 @@ impl Stub {
         let addr = listener.local_addr().unwrap();
         let requests = Arc::new(AtomicUsize::new(0));
         let paths = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let authorizations = Arc::new(std::sync::Mutex::new(Vec::new()));
 
         let task = tokio::spawn({
             let requests = Arc::clone(&requests);
             let paths = Arc::clone(&paths);
+            let authorizations = Arc::clone(&authorizations);
             async move {
                 while let Ok((socket, _)) = listener.accept().await {
                     let routes = routes.clone();
                     let requests = Arc::clone(&requests);
                     let paths = Arc::clone(&paths);
+                    let authorizations = Arc::clone(&authorizations);
                     tokio::spawn(async move {
-                        answer(socket, &routes, &requests, &paths).await;
+                        answer(socket, &routes, &requests, &paths, &authorizations).await;
                     });
                 }
             }
@@ -69,6 +74,7 @@ impl Stub {
             addr,
             requests,
             paths,
+            authorizations,
             task,
         }
     }
@@ -90,6 +96,10 @@ impl Stub {
     fn paths(&self) -> Vec<String> {
         self.paths.lock().unwrap().clone()
     }
+
+    fn authorizations(&self) -> Vec<Option<String>> {
+        self.authorizations.lock().unwrap().clone()
+    }
 }
 
 /// One request, one response, one closed connection — so a count of requests
@@ -99,6 +109,7 @@ async fn answer(
     routes: &HashMap<String, (u16, String)>,
     requests: &AtomicUsize,
     paths: &std::sync::Mutex<Vec<String>>,
+    authorizations: &std::sync::Mutex<Vec<Option<String>>>,
 ) {
     let mut buffer = Vec::new();
     let mut chunk = [0_u8; 1024];
@@ -129,6 +140,14 @@ async fn answer(
 
     requests.fetch_add(1, Ordering::Relaxed);
     paths.lock().unwrap().push(path.to_owned());
+    authorizations
+        .lock()
+        .unwrap()
+        .push(request.lines().find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("authorization")
+                .then(|| value.trim().to_owned())
+        }));
 
     let (status, body) = routes.get(path).cloned().unwrap_or((
         404,
@@ -501,4 +520,99 @@ async fn a_registered_version_carries_the_name_its_subject_was_built_from() {
     let naming = SubjectNaming::of(&audit.subject, audit.record_name.as_deref());
     assert_eq!(naming.strategy, NamingStrategy::TopicName);
     assert_eq!(naming.topic.as_deref(), Some("audit"));
+}
+
+/// A provider that hands out `token-0`, `token-1`, … — one new token per call,
+/// which is a provider refreshing as often as it possibly could.
+fn counting_tokens() -> TokenSource {
+    let issued = Arc::new(AtomicUsize::new(0));
+    TokenSource::new(
+        move || {
+            let n = issued.fetch_add(1, Ordering::Relaxed);
+            async move { Ok(format!("token-{n}")) }
+        },
+        "counting",
+    )
+}
+
+/// The decoders' calls go through the converter's client and the browser's
+/// through the handle's own, and both carry the provider's token — the one
+/// current *at that call*, not the one current when the handle was built.
+#[tokio::test]
+async fn an_oauth_registry_sends_the_current_token_on_every_call() {
+    let stub = Stub::serving(&avro_registry()).await;
+    let registry = Arc::new(
+        RegistryHandle::new(
+            RegistrySettings::new("dev", stub.url())
+                .with_auth(RegistryAuth::Oauth(counting_tokens())),
+        )
+        .unwrap(),
+    );
+
+    // The probe on the handle's own client, then two schema fetches on the
+    // converter's — what the id is, and the Avro decoder's own — through the
+    // middleware.
+    let decoded = decode(
+        Some(&registry),
+        &HEARTBEAT_RECORD,
+        Codec::Auto,
+        MAX_PAYLOAD_CHARS,
+    )
+    .await;
+    assert_eq!(decoded.value, Some(serde_json::json!({ "beat": 3 })));
+    assert_eq!(
+        stub.paths(),
+        ["/subjects", "/schemas/ids/1", "/schemas/ids/1"]
+    );
+    assert_eq!(
+        stub.authorizations(),
+        [
+            Some("Bearer token-0".to_owned()),
+            Some("Bearer token-1".to_owned()),
+            Some("Bearer token-2".to_owned()),
+        ]
+    );
+}
+
+/// A token that cannot be had stops the call before it is made, and the
+/// registry's health says whose fault that is: an issuer that refused is
+/// configuration, not an outage.
+#[tokio::test]
+async fn a_refused_token_is_a_misconfigured_registry_that_was_never_asked() {
+    let stub = Stub::serving(&avro_registry()).await;
+    let refused = TokenSource::new(
+        || async {
+            Err(kafka_conn::Error::TokenEndpoint {
+                endpoint: "https://issuer/token".to_owned(),
+                status: Some(400),
+                detail: "AADSTS700213: No matching federated identity record found.".to_owned(),
+            })
+        },
+        "refused",
+    );
+    let registry = Arc::new(
+        RegistryHandle::new(
+            RegistrySettings::new("dev", stub.url()).with_auth(RegistryAuth::Oauth(refused)),
+        )
+        .unwrap(),
+    );
+
+    let decoded = decode(
+        Some(&registry),
+        &HEARTBEAT_RECORD,
+        Codec::Auto,
+        MAX_PAYLOAD_CHARS,
+    )
+    .await;
+    assert!(decoded.value.is_none());
+    let note = decoded.payload.note.expect("a degraded payload says why");
+    assert_eq!(note.kind, NoteKind::RegistryMisconfigured);
+    assert!(note.message.contains("AADSTS700213"), "{}", note.message);
+
+    assert!(
+        matches!(*registry.health(), RegistryHealth::Misconfigured { .. }),
+        "{:?}",
+        registry.health()
+    );
+    assert_eq!(stub.requests(), 0);
 }

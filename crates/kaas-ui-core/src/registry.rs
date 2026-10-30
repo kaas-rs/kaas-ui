@@ -28,12 +28,13 @@ use kaas_ui_serde::{Codec, RegistryHandle};
 use kafka_admin::{Admin, ClusterConfig};
 use kafka_conn::{
     ConnectionConfig, Error, OidcConfig, OidcTokenProvider, SaslConfig, SaslMechanism, TlsConfig,
+    TokenFuture, TokenProvider,
 };
 use tokio::sync::Notify;
 
 use crate::config::{
-    ClusterEntry, Config, ConfigError, ConnectClusterEntry, EnvironmentEntry, PasswordCredentials,
-    ResourceEntry, SaslSettings, WritesConfig, secret_from_env, secret_var,
+    ClusterEntry, Config, ConfigError, ConnectClusterEntry, EnvironmentEntry, OauthCredentials,
+    PasswordCredentials, ResourceEntry, SaslSettings, WritesConfig, secret_from_env, secret_var,
 };
 use crate::error::ErrorKind;
 use crate::federated::{FederatedOauth, FederatedTokenProvider};
@@ -350,8 +351,6 @@ fn build_sasl(
     cluster: &str,
     settings: &SaslSettings,
 ) -> Result<SaslConfig, ConfigError> {
-    let invalid = |message: String| ConfigError::Invalid(format!("cluster {cluster:?}: {message}"));
-
     match settings {
         SaslSettings::Plain(credentials) => {
             password_sasl(environment, cluster, SaslMechanism::Plain, credentials)
@@ -369,90 +368,126 @@ fn build_sasl(
             credentials,
         ),
         SaslSettings::OauthBearer(oauth) => {
-            // Workload identity: an assertion signed by someone else, read
-            // from a file, and no secret in this process at all. Checked
-            // before the secret path so a config naming both is a startup
-            // error rather than a silent preference.
-            if let Some(assertion_file) = &oauth.client_assertion_file {
-                if oauth.client_secret.is_some() {
-                    return Err(invalid(
-                        "sets both `client_secret` and `client_assertion_file`; a client \
-                         authenticates with one or the other, so drop whichever is not the \
-                         one this cluster uses"
-                            .to_owned(),
-                    ));
-                }
-
-                let mut config = FederatedOauth::new(
-                    oauth.token_endpoint.clone(),
-                    oauth.client_id.clone(),
-                    assertion_file.clone(),
-                )
-                .with_maybe_scope(oauth.scope.clone())
-                .with_maybe_audience(oauth.audience.clone());
-                if let Some(margin) = oauth.refresh_margin {
-                    config = config.with_refresh_margin(margin);
-                }
-                if let Some(timeout) = oauth.timeout {
-                    config = config.with_timeout(timeout);
-                }
-                if oauth.allow_plaintext_endpoint {
-                    config = config.with_allow_plaintext_endpoint();
-                }
-
-                let provider = FederatedTokenProvider::new(config)
-                    .map_err(|error| invalid(error.to_string()))?;
-
-                let mut sasl = SaslConfig::oauth_bearer(provider);
-                if oauth.allow_plaintext_token {
-                    sasl = sasl.allow_plaintext_password();
-                }
-                return Ok(sasl);
-            }
-
-            // The file wins where it says anything, and says nothing in the
-            // deployment — which is the point: the config carries a credential
-            // nowhere and the environment supplies it.
-            let secret = match &oauth.client_secret {
-                Some(inline) => inline.clone(),
-                None => secret_from_env(
-                    &format!("cluster {cluster:?}"),
-                    &secret_var("client_secret", environment, cluster),
-                )?,
-            };
-
-            let mut config = OidcConfig::new(
-                oauth.token_endpoint.clone(),
-                oauth.client_id.clone(),
-                secret,
-            )
-            .with_maybe_scope(oauth.scope.clone())
-            .with_maybe_audience(oauth.audience.clone());
-            if let Some(margin) = oauth.refresh_margin {
-                config = config.with_refresh_margin(margin);
-            }
-            if let Some(timeout) = oauth.timeout {
-                config = config.with_timeout(timeout);
-            }
-            if oauth.credentials_in_body {
-                config = config.with_credentials_in_body();
-            }
-            if oauth.allow_plaintext_endpoint {
-                config = config.with_allow_plaintext_endpoint();
-            }
-
-            // Nothing is fetched here — the first token is fetched when the
-            // first connection authenticates — so this validates the endpoint
-            // and nothing else. Which is the point: a typo in the url should
-            // not wait for a broker to be reachable to be noticed.
-            let provider =
-                OidcTokenProvider::new(config).map_err(|error| invalid(error.to_string()))?;
-
+            let provider = oauth_provider(
+                &format!("cluster {cluster:?}"),
+                &secret_var("client_secret", environment, cluster),
+                oauth,
+            )?;
             let mut sasl = SaslConfig::oauth_bearer(provider);
             if oauth.allow_plaintext_token {
                 sasl = sasl.allow_plaintext_password();
             }
             Ok(sasl)
+        }
+    }
+}
+
+/// The token provider an `oauth` block describes, whoever presents the token.
+///
+/// A cluster's OAUTHBEARER and a schema registry's bearer header take the same
+/// block and buy their tokens the same two ways, so they share this — and its
+/// refusals, word for word. `owner` names the block in every error, and
+/// `secret_variable` is where an omitted `client_secret` is read from.
+///
+/// Called at startup, so everything that can be wrong about a credential — a
+/// Secret that is not mounted, a token endpoint that is not a url, an
+/// `http://` issuer — is wrong before anything is dialled.
+pub(crate) fn oauth_provider(
+    owner: &str,
+    secret_variable: &str,
+    oauth: &OauthCredentials,
+) -> Result<OauthProvider, ConfigError> {
+    let invalid = |message: String| ConfigError::Invalid(format!("{owner}: {message}"));
+
+    // Workload identity: an assertion signed by someone else, read from a
+    // file, and no secret in this process at all. Checked before the secret
+    // path so a config naming both is a startup error rather than a silent
+    // preference.
+    if let Some(assertion_file) = &oauth.client_assertion_file {
+        if oauth.client_secret.is_some() {
+            return Err(invalid(
+                "sets both `client_secret` and `client_assertion_file`; a client \
+                 authenticates with one or the other, so drop whichever is not the \
+                 one it uses"
+                    .to_owned(),
+            ));
+        }
+
+        let mut config = FederatedOauth::new(
+            oauth.token_endpoint.clone(),
+            oauth.client_id.clone(),
+            assertion_file.clone(),
+        )
+        .with_maybe_scope(oauth.scope.clone())
+        .with_maybe_audience(oauth.audience.clone());
+        if let Some(margin) = oauth.refresh_margin {
+            config = config.with_refresh_margin(margin);
+        }
+        if let Some(timeout) = oauth.timeout {
+            config = config.with_timeout(timeout);
+        }
+        if oauth.allow_plaintext_endpoint {
+            config = config.with_allow_plaintext_endpoint();
+        }
+
+        let provider =
+            FederatedTokenProvider::new(config).map_err(|error| invalid(error.to_string()))?;
+        return Ok(OauthProvider::Assertion(Box::new(provider)));
+    }
+
+    // The file wins where it says anything, and says nothing in the
+    // deployment — which is the point: the config carries a credential
+    // nowhere and the environment supplies it.
+    let secret = match &oauth.client_secret {
+        Some(inline) => inline.clone(),
+        None => secret_from_env(owner, secret_variable)?,
+    };
+
+    let mut config = OidcConfig::new(
+        oauth.token_endpoint.clone(),
+        oauth.client_id.clone(),
+        secret,
+    )
+    .with_maybe_scope(oauth.scope.clone())
+    .with_maybe_audience(oauth.audience.clone());
+    if let Some(margin) = oauth.refresh_margin {
+        config = config.with_refresh_margin(margin);
+    }
+    if let Some(timeout) = oauth.timeout {
+        config = config.with_timeout(timeout);
+    }
+    if oauth.credentials_in_body {
+        config = config.with_credentials_in_body();
+    }
+    if oauth.allow_plaintext_endpoint {
+        config = config.with_allow_plaintext_endpoint();
+    }
+
+    // Nothing is fetched here — the first token is fetched when it is first
+    // needed — so this validates the endpoint and nothing else. Which is the
+    // point: a typo in the url should not wait for a broker or a registry to
+    // be reachable to be noticed.
+    let provider = OidcTokenProvider::new(config).map_err(|error| invalid(error.to_string()))?;
+    Ok(OauthProvider::Secret(Box::new(provider)))
+}
+
+/// What [`oauth_provider`] builds: one of the two ways an `oauth` block buys a
+/// token, behind the one trait both presenters take.
+///
+/// Boxed for size alone. The two providers differ by hundreds of bytes, and
+/// one is built per cluster or registry, once.
+pub(crate) enum OauthProvider {
+    /// A client assertion read from a file. No secret.
+    Assertion(Box<FederatedTokenProvider>),
+    /// A client secret.
+    Secret(Box<OidcTokenProvider>),
+}
+
+impl TokenProvider for OauthProvider {
+    fn token(&self) -> TokenFuture<'_> {
+        match self {
+            Self::Assertion(provider) => provider.token(),
+            Self::Secret(provider) => provider.token(),
         }
     }
 }
