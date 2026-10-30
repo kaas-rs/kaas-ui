@@ -18,13 +18,28 @@
 //!    it is caught on first use and reported as configuration, because the
 //!    failure to design against is a deployment where every record on every
 //!    Avro topic renders as hex and the cause is one missing path segment.
+//!
+//! # A token that outlives no one
+//!
+//! A registry with an [`RegistryAuth::Oauth`] source asks it for a token on
+//! **every call** — the decoders' schema fetches through a middleware on the
+//! converter's client, the browser's listings in [`RegistryHandle::get`]. The
+//! converter's own `set_token_authorization` fixes the header when the settings
+//! are built, and an access token lasts an hour against a process that runs for
+//! weeks; rebuilding the decoders on each refresh would work, and would throw
+//! away the id→schema caches property 1 exists to share. The provider caches,
+//! so asking per call costs a lock until it decides to refresh.
 
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant, SystemTime};
 
 use arc_swap::ArcSwap;
+use http::Extensions;
+use kafka_conn::TokenProvider;
+use reqwest_middleware::{Middleware, Next};
 use schema_registry_converter::async_impl::avro::AvroDecoder;
 use schema_registry_converter::async_impl::json::{JsonDecoder, validate};
 use schema_registry_converter::async_impl::proto_decoder::ProtoDecoder;
@@ -139,6 +154,93 @@ pub enum RegistryAuth {
     },
     /// A bearer token, sent verbatim.
     Bearer(String),
+    /// A bearer token asked of a provider on every call, so a refresh is
+    /// picked up without a rebuild. See the module docs.
+    Oauth(TokenSource),
+}
+
+/// A token provider, and what it was built from.
+///
+/// Compared by the second, not the first: a reload builds a fresh provider
+/// from an unchanged block, and two providers are never equal, so comparing
+/// them would rebuild the handle — and empty its caches — on every reload
+/// whether or not anyone touched the registry. The caller decides what
+/// "unchanged" means by what it puts in the fingerprint.
+#[derive(Clone)]
+pub struct TokenSource {
+    provider: Arc<dyn TokenProvider>,
+    fingerprint: String,
+}
+
+impl TokenSource {
+    /// A source asking `provider`, known by `fingerprint`.
+    #[must_use]
+    pub fn new(provider: impl TokenProvider, fingerprint: impl Into<String>) -> Self {
+        Self {
+            provider: Arc::new(provider),
+            fingerprint: fingerprint.into(),
+        }
+    }
+
+    /// The token to send, as of now.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the provider says. [`kafka_conn::Error::retriable`] tells an
+    /// issuer that could not be reached from one that refused.
+    pub async fn token(&self) -> kafka_conn::Result<String> {
+        self.provider.token().await
+    }
+}
+
+impl PartialEq for TokenSource {
+    fn eq(&self, other: &Self) -> bool {
+        self.fingerprint == other.fingerprint
+    }
+}
+
+impl Eq for TokenSource {}
+
+/// Hand-written: the fingerprint is the caller's to fill, and may carry a
+/// client secret.
+impl fmt::Debug for TokenSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TokenSource").finish_non_exhaustive()
+    }
+}
+
+/// The decoders' half of [`RegistryAuth::Oauth`]: a token on every call the
+/// converter makes.
+///
+/// A provider that cannot produce one fails the call, which the converter
+/// reports as retriable whatever the cause. That is wrong for an issuer that
+/// refused, and corrects itself: the decoder's failure clears the probe, and
+/// the probe's own call — through [`RegistryHandle::get`], which classifies —
+/// is what the registry's health then shows.
+struct BearerMiddleware(TokenSource);
+
+#[async_trait::async_trait]
+impl Middleware for BearerMiddleware {
+    async fn handle(
+        &self,
+        mut request: reqwest::Request,
+        extensions: &mut Extensions,
+        next: Next<'_>,
+    ) -> reqwest_middleware::Result<reqwest::Response> {
+        let token = self
+            .0
+            .token()
+            .await
+            .map_err(reqwest_middleware::Error::middleware)?;
+        let mut value = reqwest::header::HeaderValue::try_from(format!("Bearer {token}"))
+            .map_err(reqwest_middleware::Error::middleware)?;
+        // What reqwest's own `bearer_auth` does: kept out of its debug output.
+        value.set_sensitive(true);
+        request
+            .headers_mut()
+            .insert(reqwest::header::AUTHORIZATION, value);
+        next.run(request, extensions).await
+    }
 }
 
 /// Why a registry is not usable right now.
@@ -346,6 +448,9 @@ impl RegistryHandle {
             }
             Some(RegistryAuth::Bearer(token)) => {
                 sr.set_token_authorization(token);
+            }
+            Some(RegistryAuth::Oauth(tokens)) => {
+                sr.with_middleware(BearerMiddleware(tokens.clone()));
             }
             None => {}
         }
@@ -700,6 +805,14 @@ impl RegistryHandle {
             Some(RegistryAuth::Bearer(token)) => {
                 request = request.bearer_auth(token);
             }
+            Some(RegistryAuth::Oauth(tokens)) => {
+                let token = tokens.token().await.map_err(|error| {
+                    let fault = self.token_fault(&error);
+                    self.record_fault(&fault, 0);
+                    fault
+                })?;
+                request = request.bearer_auth(token);
+            }
             None => {}
         }
 
@@ -720,6 +833,24 @@ impl RegistryHandle {
         Err(self.status_fault(status, path))
     }
 
+    /// A token that could not be had, as the kind of fault it is.
+    ///
+    /// The registry was never asked, so this says nothing about it — only
+    /// about the issuer. One that could not be reached may come back; one that
+    /// refused is a credential or a scope in the configuration, and will
+    /// refuse again.
+    fn token_fault(&self, error: &kafka_conn::Error) -> RegistryFault {
+        let message = format!(
+            "schema registry {:?} at {} was not asked: no token to ask with: {error}",
+            self.settings.id, self.settings.url
+        );
+        if error.retriable() {
+            RegistryFault::Unreachable(message)
+        } else {
+            RegistryFault::Misconfigured(message)
+        }
+    }
+
     /// Turn a non-2xx into the right kind of fault.
     fn status_fault(&self, status: reqwest::StatusCode, path: &str) -> RegistryFault {
         let id = &self.settings.id;
@@ -732,7 +863,8 @@ impl RegistryHandle {
         if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
             return RegistryFault::Misconfigured(format!(
                 "schema registry {id:?} at {url} refused our credentials ({status}): check the \
-                 `username`/`password` or `bearer_token` on the `schema_registries` entry"
+                 `username`/`password`, `bearer_token` or `oauth` on the `schema_registries` \
+                 entry — and for `oauth`, that its client holds a role on the registry"
             ));
         }
         RegistryFault::Misconfigured(format!(

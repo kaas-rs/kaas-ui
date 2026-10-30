@@ -14,6 +14,14 @@ apache-avro               = { workspace = true }
 protofish                 = { workspace = true }
 reqwest                   = { workspace = true }
 rustls                    = { workspace = true }
+# A registry with an `oauth` block: the token is asked of a provider on every
+# call, through a middleware on the converter's client. `kafka-conn` for the
+# `TokenProvider` trait alone — the same one a cluster's OAUTHBEARER takes, so
+# one provider type serves both and kaas-ui-core builds it once.
+async-trait               = { workspace = true }
+http                      = { workspace = true }
+kafka-conn                = { workspace = true }
+reqwest-middleware        = { workspace = true }
 
 arc-swap        = { workspace = true }
 humantime-serde = { workspace = true }

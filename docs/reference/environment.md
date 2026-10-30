@@ -429,6 +429,47 @@ which is the fixture the "shared, not owned" design is asserted against: the
 same schema id resolves to the same schema on both sides because it is the
 same registry answering.
 
+### Authenticating to it
+
+Apicurio is moving to EntraID: every call needs a bearer token, reads
+included, and what a token may do is the app role it carries — `sr-readonly`,
+`sr-developer`, `sr-admin` on the `apicurio-registry` app registration. kaas-ui
+holds `sr-readonly`. A static `bearer_token` dies within the hour, and basic
+auth against Apicurio's client-credentials mode needs a client secret this
+deployment does not have, so the entry takes the `oauth` block a cluster's
+`sasl` does — minus `mechanism`, and here with the same workload identity:
+
+```yaml
+schema_registries:
+  - id: apicurio
+    url: http://apicurio-registry.apicurio.svc.cluster.local:8080/apis/ccompat/v7
+    oauth:
+      token_endpoint: https://login.microsoftonline.com/<tenant>/oauth2/v2.0/token
+      client_id: <kaas-ui client id>
+      client_assertion_file: /var/run/spiffe/svid/azure-token
+      scope: <apicurio-registry client id>/.default
+      allow_plaintext_token: true
+```
+
+- **The scope names the registry, not kaas-ui.** The token's audience is the
+  registry's app registration, and `/.default` carries the role granted on it.
+  A Kafka scope here buys a token Apicurio rejects with 401.
+- **Asked for on every call.** The decoders' schema fetches go through a
+  middleware on the converter's client, the browser's listings through the
+  handle's own; the provider caches, so a refresh lands without a restart and
+  without emptying the schema caches.
+- **`allow_plaintext_token` is required on `http://`**, for the reason it is
+  on a cluster without `tls:`. In-cluster that is a choice someone made, so it
+  is written down rather than defaulted.
+- **Exclusive.** `oauth` beside `username`, `password` or `bearer_token` is
+  refused at startup, and the `KAAS_UI_BEARER_TOKEN_*` variable is not
+  consulted for a registry that has it.
+- **Two failures, two notes.** An issuer that refuses — a scope that names no
+  resource, a federated credential that does not match — marks the registry
+  *misconfigured* with the AADSTS code, and the registry was never asked. A
+  401 or 403 from Apicurio itself is a token it would not take: usually the
+  role was never granted.
+
 ### The canary is the Avro fixture
 
 `kaas-producer-canary` runs against **each** cluster and produces
