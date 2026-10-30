@@ -52,7 +52,7 @@ Three repositories, and confusing them is the fastest way to do the wrong work:
 
 | | what it is | |
 |---|---|---|
-| `kaas-rs/kaas` | a **broker** | one of the clusters kaas-ui renders |
+| `kaas-rs/kaas-broker` | a **broker** | one of the clusters kaas-ui renders |
 | `kaas-rs/kaas-lib` | a **client library** | our only Kafka dependency |
 | `kaas-rs/kaas-ui` | **this** | an HTTP server and a web app |
 
