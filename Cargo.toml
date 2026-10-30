@@ -52,7 +52,7 @@ tower-http = { version = "0.7", features = ["trace", "compression-gzip", "set-he
 utoipa     = { version = "6", features = ["axum_extras"] }
 
 # async + runtime
-tokio        = { version = "1.53", features = ["full"] }
+tokio        = { version = "1.54", features = ["full"] }
 tokio-stream = "0.1"
 futures      = "0.3"
 async-stream = "0.3"
@@ -123,7 +123,7 @@ protofish   = "0.5"
 # encoding of a body that carries a credential.
 reqwest = { version = "0.13", default-features = false, features = ["json", "form", "rustls-no-provider"] }
 # Only to install that provider, once, behind a `Once`.
-rustls = { version = "0.23.45", default-features = false, features = ["ring", "std"] }
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std"] }
 
 # The broker certificate panel. kaas-lib hands over the chain as DER and
 # deliberately parses none of it — another ASN.1 implementation in the crate
