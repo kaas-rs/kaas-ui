@@ -32,6 +32,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant, SystemTime};
@@ -86,6 +87,9 @@ pub struct RegistrySettings {
     pub url: String,
     /// Credentials, where the registry wants them.
     pub auth: Option<RegistryAuth>,
+    /// A PEM bundle to trust in addition to the system roots, for an
+    /// `https://` registry behind a private CA.
+    pub ca_file: Option<PathBuf>,
     /// Per-call timeout.
     pub request_timeout: Duration,
     /// How long a subject listing is believed.
@@ -102,6 +106,7 @@ impl RegistrySettings {
             id,
             url: url.into(),
             auth: None,
+            ca_file: None,
             request_timeout: DEFAULT_REQUEST_TIMEOUT,
             subjects_ttl: DEFAULT_SUBJECTS_TTL,
         }
@@ -118,6 +123,14 @@ impl RegistrySettings {
     #[must_use]
     pub fn with_auth(mut self, auth: RegistryAuth) -> Self {
         self.auth = Some(auth);
+        self
+    }
+
+    /// A PEM bundle to trust in addition to the system roots. Read when the
+    /// handle is built, so a file that is not there fails at startup.
+    #[must_use]
+    pub fn with_ca_file(mut self, path: impl Into<PathBuf>) -> Self {
+        self.ca_file = Some(path.into());
         self
     }
 
@@ -454,9 +467,33 @@ impl RegistryHandle {
             }
             None => {}
         }
-        let sr = sr.build().map_err(|e| fail(e.to_string()))?;
+        // Read once and handed to both clients — the converter's, which the
+        // decoders fetch through, and the browser's own — so the two cannot
+        // disagree about what the registry's certificate chains to.
+        let roots = match &settings.ca_file {
+            Some(ca) => {
+                let pem = std::fs::read(ca).map_err(|e| fail(format!("{}: {e}", ca.display())))?;
+                let roots = reqwest::Certificate::from_pem_bundle(&pem)
+                    .map_err(|e| fail(format!("{}: {e}", ca.display())))?;
+                // A bundle of nothing adds nothing, and the registry would
+                // then fail every handshake with no word about the file.
+                if roots.is_empty() {
+                    return Err(fail(format!("{}: no certificates in it", ca.display())));
+                }
+                roots
+            }
+            None => Vec::new(),
+        };
+        let client = || {
+            roots.iter().cloned().fold(
+                reqwest::Client::builder(),
+                reqwest::ClientBuilder::add_root_certificate,
+            )
+        };
 
-        let http = reqwest::Client::builder()
+        let sr = sr.build_with(client()).map_err(|e| fail(e.to_string()))?;
+
+        let http = client()
             .timeout(settings.request_timeout)
             .build()
             .map_err(|e| fail(e.to_string()))?;
@@ -1129,5 +1166,70 @@ mod tests {
             RegistryHandle::new(RegistrySettings::new("dev", "http://apicurio:8080")).unwrap();
         assert_eq!(handle.requests(), 0);
         assert!(matches!(*handle.health(), RegistryHealth::Unprobed));
+    }
+
+    /// A self-signed root with nothing else to it, generated for these tests.
+    const ROOT_PEM: &str = "\
+-----BEGIN CERTIFICATE-----
+MIIBjTCCATOgAwIBAgIUbSEnRzKPlAYmBr5zPnRLC3yLh7cwCgYIKoZIzj0EAwIw
+GzEZMBcGA1UEAwwQY2FuYXJ5LXRlc3Qtcm9vdDAgFw0yNjEwMzEwNjQ5NDNaGA8y
+MTI2MTAwNzA2NDk0M1owGzEZMBcGA1UEAwwQY2FuYXJ5LXRlc3Qtcm9vdDBZMBMG
+ByqGSM49AgEGCCqGSM49AwEHA0IABHUJZMqmXihQ1akrEcIaFO34ShSRlkKSHWIf
+jZYhowPPAQ79BSorTLnZ1mW5HibVwDHpmGDT6bjryQPMD/P0dPajUzBRMB0GA1Ud
+DgQWBBT3eSGaCwDr8UQGf+Vj6XfdaMxygzAfBgNVHSMEGDAWgBT3eSGaCwDr8UQG
+f+Vj6XfdaMxygzAPBgNVHRMBAf8EBTADAQH/MAoGCCqGSM49BAMCA0gAMEUCIQD1
+ZWHSEaEjFc/53Z/TGhaHMyy4CSxZBxNLHNTngx4WLQIgBitEkiBY8Ny43xxu4P2O
+4a95O14YWy2M0nHXvvyNnvY=
+-----END CERTIFICATE-----
+";
+
+    /// `pem` written to a file of its own, removed when dropped.
+    struct PemFile(std::path::PathBuf);
+
+    impl PemFile {
+        fn new(name: &str, pem: &str) -> Self {
+            let path = std::env::temp_dir()
+                .join(format!("kaas-ui-serde-{}-{name}.pem", std::process::id()));
+            std::fs::write(&path, pem).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for PemFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    fn handle_with_ca(path: &std::path::Path) -> Result<RegistryHandle, RegistryError> {
+        RegistryHandle::new(
+            RegistrySettings::new("dev", "https://apicurio:8443").with_ca_file(path),
+        )
+    }
+
+    #[test]
+    fn a_ca_bundle_is_read_into_the_handle() {
+        let ca = PemFile::new("good", ROOT_PEM);
+        let handle = handle_with_ca(&ca.0).unwrap();
+        assert_eq!(handle.requests(), 0);
+    }
+
+    /// The path is the whole diagnosis when a Secret is not mounted where the
+    /// config says, and it has to surface at startup, not on the first page.
+    #[test]
+    fn a_missing_ca_file_fails_at_build_naming_the_path() {
+        let Err(error) = handle_with_ca(std::path::Path::new("/nonexistent/ca.crt")) else {
+            panic!("a missing CA file built a handle");
+        };
+        assert!(error.to_string().contains("/nonexistent/ca.crt"), "{error}");
+    }
+
+    #[test]
+    fn a_ca_file_with_no_certificate_is_refused() {
+        let ca = PemFile::new("empty", "not a certificate\n");
+        let Err(error) = handle_with_ca(&ca.0) else {
+            panic!("an empty CA bundle built a handle");
+        };
+        assert!(error.to_string().contains("no certificates"), "{error}");
     }
 }
