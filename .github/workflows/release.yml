@@ -134,6 +134,28 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # cosign-installer v4 runs `envsubst` on its install-dir input,
+      # unconditionally, and the ARC image (ghcr.io/actions/actions-runner) has
+      # no gettext-base — v4.1.2's first run here failed with `envsubst:
+      # command not found` after the image had already been pushed, so it went
+      # out unsigned. Same shape as ci.yml's C toolchain step: a no-op where the
+      # tool exists (ubuntu-latest), passwordless sudo where it does not.
+      - name: Install envsubst (cosign-installer needs it)
+        run: |
+          if command -v envsubst >/dev/null 2>&1; then
+            echo "envsubst already present: $(command -v envsubst)"
+            exit 0
+          fi
+          if [ "$(id -u)" -eq 0 ]; then SUDO=""
+          elif command -v sudo >/dev/null 2>&1; then SUDO="sudo"
+          else
+            echo "::error::no envsubst, not root, and no sudo — cannot install cosign"
+            exit 1
+          fi
+          $SUDO apt-get update
+          $SUDO apt-get install -y --no-install-recommends gettext-base
+          echo "envsubst → $(command -v envsubst || echo MISSING)"
+
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
       - name: Sign the image
