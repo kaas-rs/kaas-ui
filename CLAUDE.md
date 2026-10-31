@@ -168,14 +168,16 @@ what it reports.
 ## Verification
 
 ```sh
-cargo xtask ci      # fmt + clippy + unit tests + the invariant greps. No cluster.
+cargo xtask ci      # fmt + clippy + unit tests + the invariant greps + cargo audit. No cluster.
 cargo xtask live    # phase acceptance, against both clusters
 cargo xtask login   # Phase 4 acceptance. Needs the dex-test app synced
 cargo xtask docs    # openapi spec + regenerate the TS client
 ```
 
-Unit tests stay cluster-free so `cargo xtask ci` runs anywhere. Anything needing
-a broker goes in `live`.
+Unit tests stay cluster-free so `cargo xtask ci` runs anywhere a broker does not —
+it does need `cargo-audit` installed and the network, for the advisory
+database; accepted advisories and their reasons are in `.cargo/audit.toml`.
+Anything needing a broker goes in `live`.
 
 Every phase has an acceptance command — `live`, or `login` for auth. Run it. Do
 not report a phase complete on the basis of `cargo build` succeeding.

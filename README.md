@@ -112,12 +112,13 @@ SSE, but nothing here can make somebody else's proxy behave. Port-forwarding to
 ## Verification
 
 ```sh
-cargo xtask ci      # fmt + clippy + unit tests + the four invariant checks
+cargo xtask ci      # fmt + clippy + unit tests + the invariant checks + cargo audit
 cargo xtask live    # phase acceptance, against both live clusters
 cargo xtask docs    # write docs/openapi.json
 ```
 
 `cargo xtask ci` runs anywhere: unit tests are cluster-free and Docker-free.
+It ends with `cargo audit`, so it wants `cargo-audit` installed and the network.
 Anything that needs a broker lives in `live`, which starts the real binary
 against the real clusters and asserts over HTTP — 50 assertions, including that
 an unreachable cluster costs the fleet request nothing measurable, that

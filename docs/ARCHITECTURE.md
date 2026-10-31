@@ -248,8 +248,9 @@ prefix a proxy mounts it at.
 
 ## Invariants CI enforces
 
-`cargo xtask ci` runs fmt, clippy, the unit tests, and these greps
-(`xtask/src/checks.rs`):
+`cargo xtask ci` runs fmt, clippy, the unit tests, these greps
+(`xtask/src/checks.rs`), and `cargo audit` — a RUSTSEC vulnerability fails
+it, and the accepted ones are named with their reasons in `.cargo/audit.toml`:
 
 | check | what it holds |
 |---|---|

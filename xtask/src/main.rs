@@ -74,7 +74,8 @@ fn run(program: &str, args: &[&str]) -> Task {
     }
 }
 
-/// fmt, clippy, unit tests, and the checks that make the plan's claims true.
+/// fmt, clippy, unit tests, the checks that make the plan's claims true, and
+/// the advisory audit.
 fn ci() -> Task {
     run("cargo", &["fmt", "--all", "--", "--check"])?;
     run(
@@ -92,8 +93,33 @@ fn ci() -> Task {
 
     println!("\n--- invariants ---");
     checks::all()?;
+
+    println!("\n--- advisories ---");
+    audit()?;
     println!("\nci: green");
     Ok(())
+}
+
+/// `cargo audit` over the lockfile. A RUSTSEC vulnerability fails the run; an
+/// unmaintained or yanked warning does not. Accepted advisories are named in
+/// `.cargo/audit.toml`, each with the reason it cannot reach this process.
+///
+/// A missing tool is a failure rather than a skip: an audit that quietly does
+/// not run reports exactly what one that found nothing does. It needs the
+/// network, to fetch the advisory database.
+fn audit() -> Task {
+    let installed = Command::new("cargo")
+        .args(["audit", "--version"])
+        .output()
+        .is_ok_and(|output| output.status.success());
+    if !installed {
+        return Err(
+            "cargo-audit is not installed: `cargo install cargo-audit --locked` \
+             (CI installs a pinned release binary)"
+                .to_owned(),
+        );
+    }
+    run("cargo", &["audit"])
 }
 
 /// Write the OpenAPI document.

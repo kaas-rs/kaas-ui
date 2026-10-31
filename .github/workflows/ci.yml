@@ -64,11 +64,11 @@ jobs:
             echo "::notice::no Cargo.toml yet — skipping build jobs (Phase 0 creates it)"
           fi
 
-  # fmt + clippy + unit tests + the invariant greps. No Docker, no broker —
-  # this is the gate that runs on every push. `cargo xtask ci` also asserts
-  # the single `Admin::connect_read_only` call site, that no Kafka version
-  # literal appears anywhere, and that no local kaas-lib path override was
-  # committed.
+  # fmt + clippy + unit tests + the invariant greps + cargo audit. No Docker,
+  # no broker — this is the gate that runs on every push. `cargo xtask ci`
+  # also asserts the single `Admin::connect_read_only` call site, that no
+  # Kafka version literal appears anywhere, and that no local kaas-lib path
+  # override was committed.
   rust:
     needs: preflight
     if: needs.preflight.outputs.workspace == 'true'
@@ -104,6 +104,30 @@ jobs:
           components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
+
+      # `cargo xtask ci` ends with `cargo audit` and fails if the tool is
+      # missing. Fetched as a pinned, checksummed release binary rather than
+      # built or pulled through a third-party action: the audit is a
+      # supply-chain control, so the less that executes to install it, the
+      # less there is to trust. The musl build is static, so it runs on the
+      # ARC image and on ubuntu-latest alike; $RUNNER_TEMP needs no sudo.
+      # Bumping means BOTH lines below — the version, and the sha256 GitHub
+      # lists for the -x86_64-unknown-linux-musl-<version>.tgz asset.
+      - name: Install cargo-audit (pinned, checksummed)
+        env:
+          CARGO_AUDIT_VERSION: v0.22.2
+          CARGO_AUDIT_SHA256: 7fb9497f8594b389e5fce5ef9b92db08432996895b2e0c5a0167a69ed445c428
+        run: |
+          set -eu
+          name="cargo-audit-x86_64-unknown-linux-musl-${CARGO_AUDIT_VERSION}"
+          curl -sSfL -o "$RUNNER_TEMP/cargo-audit.tgz" \
+            "https://github.com/rustsec/rustsec/releases/download/cargo-audit%2F${CARGO_AUDIT_VERSION}/${name}.tgz"
+          echo "${CARGO_AUDIT_SHA256}  $RUNNER_TEMP/cargo-audit.tgz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/cargo-audit.tgz" -C "$RUNNER_TEMP"
+          mkdir -p "$RUNNER_TEMP/bin"
+          install -m 0755 "$RUNNER_TEMP/${name}/cargo-audit" "$RUNNER_TEMP/bin/cargo-audit"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/bin/cargo-audit" --version
 
       - name: cargo xtask ci
         run: cargo xtask ci

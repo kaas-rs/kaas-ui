@@ -10,7 +10,7 @@ What is built, what is left, and in what order. How it is built is
 The workspace is six crates, a frontend and an xtask.
 
 ```sh
-cargo xtask ci      # green: fmt, clippy, unit tests, seven invariant checks
+cargo xtask ci      # green: fmt, clippy, unit tests, seven invariant checks, cargo audit
 cargo xtask live    # green: 71 assertions against kaas, strimzi and a dead cluster
 cargo xtask login   # 11 assertions, a real login. Needs the dex-test app
                     # synced; it is currently out of the cluster, so this
