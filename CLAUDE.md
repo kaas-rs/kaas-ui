@@ -194,8 +194,9 @@ expression error fails in zero seconds with no logs.
 Every action is pinned to a full commit SHA with its version as a comment.
 Dependabot (`.github/dependabot.yml`) opens one grouped PR a month each for
 actions, cargo and npm, after a 7-day cooldown — merging those is the one
-branch that lands on `main` by PR. It cannot see `dtolnay/rust-toolchain` (no
-release tags) or the cargo-audit binary `ci.yml` downloads; bump those by hand.
+branch that lands on `main` by PR. It follows `dtolnay/rust-toolchain`'s
+`# master` pin as a branch, but cannot see the cargo-audit binary `ci.yml`
+downloads; bump that by hand.
 
 Images publish to `ghcr.io/kaas-rs/kaas-ui`. Deployment is GitOps via
 `Woestebanaan/k3s-cluster` (`apps/kaas-ui/`), picked up by an ApplicationSet
