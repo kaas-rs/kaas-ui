@@ -297,6 +297,11 @@ pub struct SchemaRegistryEntry {
     /// path.
     #[serde(default)]
     pub oauth: Option<OauthCredentials>,
+    /// TLS beyond the system roots, for an `https://` registry behind a
+    /// private CA. Files, never inline PEM. Refused on an `http://` url, where
+    /// it would configure nothing.
+    #[serde(default)]
+    pub tls: Option<RegistryTlsSettings>,
     /// Per-call timeout. A schema fetch sits on a request path.
     #[serde(default, with = "humantime_serde::option")]
     pub request_timeout: Option<Duration>,
@@ -306,6 +311,18 @@ pub struct SchemaRegistryEntry {
     /// a subject registered a moment ago has to appear without a restart.
     #[serde(default, with = "humantime_serde::option")]
     pub subjects_ttl: Option<Duration>,
+}
+
+/// TLS for a schema registry.
+///
+/// Narrower than a Connect cluster's [`ConnectTlsSettings`]: a CA and nothing
+/// else, because no registry here asks for a client certificate. The bundle
+/// is trusted in addition to the system roots.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "snake_case")]
+pub struct RegistryTlsSettings {
+    /// PEM bundle to trust in addition to the system roots.
+    pub ca_file: PathBuf,
 }
 
 impl SchemaRegistryEntry {
@@ -329,6 +346,9 @@ impl SchemaRegistryEntry {
         }
         if let Some(ttl) = self.subjects_ttl {
             settings = settings.with_subjects_ttl(ttl);
+        }
+        if let Some(tls) = &self.tls {
+            settings = settings.with_ca_file(tls.ca_file.clone());
         }
 
         let what = format!("schema registry {:?}", self.id);
@@ -1329,6 +1349,15 @@ impl Config {
                         "schema registry {:?} in environment {env:?} configures both basic auth \
                          and a bearer token: only one of them can be sent",
                         registry.id
+                    )));
+                }
+                // A CA for a plaintext registry configures nothing, and the
+                // likelier story is a url that lost its `s`.
+                if registry.tls.is_some() && registry.url.starts_with("http://") {
+                    return Err(ConfigError::Invalid(format!(
+                        "schema registry {:?} in environment {env:?} configures `tls` on {}, \
+                         which is plain http. Use the https url, or drop the `tls` block",
+                        registry.id, registry.url
                     )));
                 }
                 if let Some(oauth) = &registry.oauth {
@@ -2598,6 +2627,60 @@ environments:
         let https = oauth_registry("https://apicurio:8443/apis/ccompat/v7", "")
             .replace("          allow_plaintext_token: true\n", "");
         Config::from_yaml(&https).unwrap();
+    }
+
+    fn registry_with_tls(url: &str) -> String {
+        format!(
+            r#"
+environments:
+  - id: dev
+    schema_registries:
+      - id: apicurio
+        url: {url}
+        tls:
+          ca_file: /etc/trust-bundle/ca.crt
+    kafka_clusters:
+      - id: strimzi
+        bootstrap: ["a:9092"]
+"#
+        )
+    }
+
+    #[test]
+    fn a_registry_tls_block_names_the_ca_file() {
+        let config =
+            Config::from_yaml(&registry_with_tls("https://apicurio:8443/apis/ccompat/v7")).unwrap();
+        let settings = config.environments[0].schema_registries[0]
+            .to_settings("dev")
+            .unwrap();
+        assert_eq!(
+            settings.ca_file.as_deref(),
+            Some(std::path::Path::new("/etc/trust-bundle/ca.crt"))
+        );
+    }
+
+    /// A CA for a plaintext registry configures nothing. Ignoring it would
+    /// hide the likelier mistake: the url was meant to be `https://`.
+    #[test]
+    fn registry_tls_on_an_http_url_is_refused() {
+        let err = Config::from_yaml(&registry_with_tls(IN_CLUSTER)).unwrap_err();
+        assert!(format!("{err}").contains("configures `tls` on"), "{err}");
+    }
+
+    /// The CA has to reach the settings beside `oauth` too, which returns
+    /// from `to_settings` early.
+    #[test]
+    fn an_oauth_registry_keeps_its_ca_file() {
+        let yaml = oauth_registry(
+            "https://apicurio:8443/apis/ccompat/v7",
+            "        tls:\n          ca_file: /etc/trust-bundle/ca.crt",
+        );
+        let config = Config::from_yaml(&yaml).unwrap();
+        let settings = config.environments[0].schema_registries[0]
+            .to_settings("dev")
+            .unwrap();
+        assert!(settings.ca_file.is_some());
+        assert!(matches!(settings.auth, Some(RegistryAuth::Oauth(_))));
     }
 
     /// A reload rebuilds the provider from the same block. If that counted as

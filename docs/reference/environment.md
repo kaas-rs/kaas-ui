@@ -415,9 +415,10 @@ regression test for lazy connection.
 
 ## The schema registry
 
-**Apicurio Registry 3.2.4**, in namespace `apicurio`, at
-`http://apicurio-registry.apicurio.svc.cluster.local:8080`. Both the Confluent
-compatibility API and Apicurio's native one are served:
+**Apicurio Registry 3.3.3**, in namespace `apicurio`, at
+`https://apicurio-registry.apicurio.svc.cluster.local:8443`. Plain HTTP on
+`:8080` is still open while the last clients move over, and then it closes.
+Both the Confluent compatibility API and Apicurio's native one are served:
 
 | | |
 |---|---|
@@ -428,6 +429,30 @@ One registry for the whole `dev` environment, referenced by both live clusters,
 which is the fixture the "shared, not owned" design is asserted against: the
 same schema id resolves to the same schema on both sides because it is the
 same registry answering.
+
+### Trusting it
+
+Its certificate comes from the cluster's own services CA, which no system
+trust store has. trust-manager copies that CA, beside the public roots, into
+every namespace as the `trust-bundle` ConfigMap, and the entry names it:
+
+```yaml
+schema_registries:
+  - id: apicurio
+    url: https://apicurio-registry.apicurio.svc.cluster.local:8443/apis/ccompat/v7
+    tls:
+      ca_file: /etc/trust-bundle/ca.crt
+```
+
+- **Added to the system roots, not instead of them**, as a Connect cluster's
+  `tls.ca_file` is. Both of the handle's clients get it: the converter's, which
+  the decoders fetch through, and the browser's own.
+- **Read when the handle is built.** A ConfigMap not mounted where the config
+  says, or a file with no certificate in it, fails at startup naming the path.
+- **Refused on an `http://` url**, where it would configure nothing. The
+  likelier story is a url that lost its `s`.
+- **No client certificate.** Unlike a Connect cluster's `tls`, this block has
+  only `ca_file`: no registry here asks for one.
 
 ### Authenticating to it
 
@@ -442,13 +467,14 @@ deployment does not have, so the entry takes the `oauth` block a cluster's
 ```yaml
 schema_registries:
   - id: apicurio
-    url: http://apicurio-registry.apicurio.svc.cluster.local:8080/apis/ccompat/v7
+    url: https://apicurio-registry.apicurio.svc.cluster.local:8443/apis/ccompat/v7
+    tls:
+      ca_file: /etc/trust-bundle/ca.crt
     oauth:
       token_endpoint: https://login.microsoftonline.com/<tenant>/oauth2/v2.0/token
       client_id: <kaas-ui client id>
       client_assertion_file: /var/run/spiffe/svid/azure-token
       scope: <apicurio-registry client id>/.default
-      allow_plaintext_token: true
 ```
 
 - **The scope names the registry, not kaas-ui.** The token's audience is the
@@ -460,7 +486,7 @@ schema_registries:
   without emptying the schema caches.
 - **`allow_plaintext_token` is required on `http://`**, for the reason it is
   on a cluster without `tls:`. In-cluster that is a choice someone made, so it
-  is written down rather than defaulted.
+  is written down rather than defaulted. Over `https://` it is not needed.
 - **Exclusive.** `oauth` beside `username`, `password` or `bearer_token` is
   refused at startup, and the `KAAS_UI_BEARER_TOKEN_*` variable is not
   consulted for a registry that has it.
@@ -479,7 +505,8 @@ Confluent-framed Avro to `kaas-canary-v1`, registering
 ```
 --bootstrap kaas.kaas.svc.cluster.local:9092
 --topic kaas-canary-v1
---schema-registry http://apicurio-registry.apicurio.svc.cluster.local:8080/apis/ccompat/v7
+--schema-registry https://apicurio-registry.apicurio.svc.cluster.local:8443/apis/ccompat/v7
+--schema-registry-ca-file /etc/trust-bundle/ca.crt
 ```
 
 `rs.kaas.canary.Heartbeat` has five fields, and `sequence` is one of them —
