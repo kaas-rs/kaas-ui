@@ -375,7 +375,7 @@ fn build_sasl(
             )?;
             let mut sasl = SaslConfig::oauth_bearer(provider);
             if oauth.allow_plaintext_token {
-                sasl = sasl.allow_plaintext_password();
+                sasl = sasl.with_allow_plaintext_password();
             }
             Ok(sasl)
         }
@@ -510,7 +510,7 @@ fn password_sasl(
     };
     let mut sasl = SaslConfig::new(mechanism, credentials.username.clone(), password);
     if credentials.allow_plaintext_password {
-        sasl = sasl.allow_plaintext_password();
+        sasl = sasl.with_allow_plaintext_password();
     }
     Ok(sasl)
 }

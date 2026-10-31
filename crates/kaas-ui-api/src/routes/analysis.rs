@@ -190,12 +190,12 @@ pub async fn analysis(
     let (tx, mut rx) = streaming::ring::<Frame>(RING_CAPACITY);
 
     let mut spec = ScanSpec::new(topic.clone())
-        .from(StartPosition::Earliest)
-        .visibility(visibility);
+        .with_from(StartPosition::Earliest)
+        .with_visibility(visibility);
     if let Some(cap) = limit {
         // The library ends the scan at the cap; the pump only has to say
         // that this is what happened.
-        spec = spec.limit(usize::try_from(cap).unwrap_or(usize::MAX));
+        spec = spec.with_limit(usize::try_from(cap).unwrap_or(usize::MAX));
     }
     let deadline = Duration::from_secs(minutes.saturating_mul(60));
 

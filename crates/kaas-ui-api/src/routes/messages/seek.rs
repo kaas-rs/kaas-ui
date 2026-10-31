@@ -245,14 +245,14 @@ impl Plan {
 
         let plan = if mode.is_backward() {
             let mut spec = TailSpec::new(topic.to_owned(), limit.unwrap_or(DEFAULT_LIMIT));
-            spec = spec.visibility(visibility);
-            spec = spec.ending_at(match mode {
+            spec = spec.with_visibility(visibility);
+            spec = spec.with_anchor(match mode {
                 SeekMode::ToOffset => TailAnchor::Offset(query.offset.unwrap_or_default()),
                 SeekMode::ToTime => TailAnchor::Timestamp(query.timestamp.unwrap_or_default()),
                 _ => TailAnchor::LogEnd,
             });
             if let Some(partitions) = partitions {
-                spec = spec.partitions(partitions);
+                spec = spec.with_partitions(partitions);
             }
             Self::Backward {
                 spec: Box::new(spec),
@@ -269,22 +269,23 @@ impl Plan {
             };
 
             let mut spec = ScanSpec::new(topic.to_owned())
-                .from(from)
-                .visibility(visibility);
+                .with_from(from)
+                .with_visibility(visibility);
             if mode.is_live() {
                 // A live view is a tail, not a browse: without this the scan
                 // plans against the log end it is already standing on and
                 // finishes at once, which looks exactly like a working live
                 // view of a quiet topic.
-                spec = spec.following();
-                spec.max_buffered_records = LIVE_MAX_BUFFERED;
-                spec.max_wait_ms = LIVE_MAX_WAIT_MS;
+                spec = spec
+                    .with_follow()
+                    .with_max_buffered_records(LIVE_MAX_BUFFERED)
+                    .with_max_wait_ms(LIVE_MAX_WAIT_MS);
             }
             if let Some(limit) = limit {
-                spec = spec.limit(limit);
+                spec = spec.with_limit(limit);
             }
             if let Some(partitions) = partitions {
-                spec = spec.partitions(partitions);
+                spec = spec.with_partitions(partitions);
             }
 
             Self::Forward {

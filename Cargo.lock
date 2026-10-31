@@ -1975,9 +1975,9 @@ dependencies = [
 
 [[package]]
 name = "kafka-admin"
-version = "0.11.0"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4b5a35cef7ea652c80226ae3ca0dc0613ca369bb074b90cc5a97cef87342879d"
+checksum = "ead7fb0975705805060f98980bb0f7bcacf844d763df45b3a89eeedce9905c12"
 dependencies = [
  "base64 0.23.1",
  "bytes",
@@ -1992,9 +1992,9 @@ dependencies = [
 
 [[package]]
 name = "kafka-conn"
-version = "0.11.0"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec80ba097bda8b4ff067c64fda9a5462d99fed875411e88ee72905733795dcc1"
+checksum = "fa463883d30251a8191b8a7ce0fc1b7cd9982e9083e56e96b7f21ef397d10007"
 dependencies = [
  "base64 0.23.1",
  "bytes",
@@ -2025,9 +2025,9 @@ dependencies = [
 
 [[package]]
 name = "kafka-meta"
-version = "0.11.0"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "da7b63b12ec1bd1fbb40e92a655960d4a7bf4d73c315121985f7cdd33cf12164"
+checksum = "f63fafcccbdda658eec96786f2b9f12d4c69ed1467f6f970712c677c806b1ad0"
 dependencies = [
  "arc-swap",
  "bytes",
@@ -2056,14 +2056,13 @@ dependencies = [
  "paste",
  "snap",
  "uuid",
- "zstd",
 ]
 
 [[package]]
 name = "kafka-read"
-version = "0.11.0"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7901a93565ea0eee7cead0005f1b09d9b0732e72ec9b442dcf5ab3a5a19c249"
+checksum = "938f85fa10260b257c6ce618120c2c24fd774e2e10b9b35490dff7cf1c038183"
 dependencies = [
  "anyhow",
  "bytes",
@@ -3810,7 +3809,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
@@ -4716,18 +4715,18 @@ checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
 
 [[package]]
 name = "zstd"
-version = "0.13.3"
+version = "0.14.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e91ee311a569c327171651566e07972200e76fcfe2242a4fa446149a3881c08a"
+checksum = "db3ae9bf90af6e40197bef767eeefc46ad6397420fe873830bd85e5fbbfb3c70"
 dependencies = [
  "zstd-safe",
 ]
 
 [[package]]
 name = "zstd-safe"
-version = "7.3.0"
+version = "8.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64d80649ab6db9d9f6f9c80a40becd948eda4714a0a5ac8c4d157a32231c7882"
+checksum = "ded520f16b29e1a9b771c722221b2b0a0398c2316d9bb3c42b458a5414d7434b"
 dependencies = [
  "zstd-sys",
 ]

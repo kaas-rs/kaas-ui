@@ -23,8 +23,8 @@ schema registry are REST and stay in kaas-ui.
 | 10 | `topic_offset_range` will not compile in an axum handler | Phase 2 | **worked around** |
 | 11 | streaming reads share a connection with everything else | Phase 3 | **high — a live view degrades the whole cluster's UI** |
 | 12 | `ScanProgress::fraction` ignores `spec.limit` | Phase 3 | **worked around** |
-| 17 | a mutation ceiling: an allowed `ApiKeySet` beside `read_only: bool` | Phase 10a (Kafka half) | **implemented** (kaas-lib `6b062c3`), awaiting release |
-| 18 | `Admin::scoped(ApiKeySet)` and each operation's published key set | Phase 10a (Kafka half) | **implemented** (kaas-lib `6b062c3`), awaiting release |
+| 17 | a mutation ceiling: an allowed `ApiKeySet` beside `read_only: bool` | Phase 10a (Kafka half) | **released in kaas-lib 0.12.0**, pinned |
+| 18 | `Admin::scoped(ApiKeySet)` and each operation's published key set | Phase 10a (Kafka half) | **released in kaas-lib 0.12.0**, pinned |
 | 19 | `Producer` over an existing cluster handle, scoped | Phase 10b | medium |
 | 20 | `abort_transaction` (KIP-664) and `remove_group_members` (KIP-345) | Phase 10d | low |
 
@@ -436,7 +436,7 @@ is legitimately allowed to be a few seconds behind the process that reads it.
 
 ## 17. A mutation ceiling finer than a boolean
 
-**Implemented in kaas-lib `6b062c3`** (not yet released): as below, except
+**Released in kaas-lib 0.12.0** (`6b062c3`), which kaas-ui pins: as below, except
 that `read_only` stays a field beside the new `allowed_mutations` rather than
 being replaced by it — no caller breaks, and `read_only` still outranks a
 ceiling. `ConnectionConfig::permits(key)` is the whole predicate.
@@ -467,7 +467,7 @@ emit `DeleteTopics` whatever a handler does.
 
 ## 18. A narrower handle over the same pool, and each operation's key set
 
-**Implemented in kaas-lib `6b062c3`** (not yet released): `Cluster::scoped`
+**Released in kaas-lib 0.12.0** (`6b062c3`), which kaas-ui pins: `Cluster::scoped`
 and `Admin::scoped`, checked in the one dispatch every `send_*` goes through,
 before a broker is resolved; and `kafka_admin::ops`, whose constants are
 slices (`ops::RESET_OFFSETS: &[ApiKey]`) so they can be `const`. Reading the

@@ -40,7 +40,7 @@ is proven on Connect, which needs no kaas-lib release:
 |---|---|---|---|
 | **9a** | — | reading Connect: `kaas-ui-connect`, connectors, tasks, redacted configs, links into topics and lag | **done** |
 | **10a** | 9a | the write gate — ceiling, grant, Origin check, audit intent/outcome — proven on connector restart, pause, resume, stop | **done** — one authenticated live write (a task restart, signed in through production's Dex via `config.dev-auth.yaml`) |
-| kaas-lib asks 17–18 | parallel with 10a | mutation ceiling, `Admin::scoped` | **implemented** in kaas-lib `6b062c3`, verified live by `livetest gate`; awaiting a release |
+| kaas-lib asks 17–18 | parallel with 10a | mutation ceiling, `Admin::scoped` | **released** in kaas-lib 0.12.0, verified live by `livetest gate`; pinned |
 | **10a, Kafka half** | kaas-lib release | `consumer.reset_offsets` through the same gate | |
 | **9d** | 9a, 10a | the remaining Connect writes: task restart, reset topics, edit, create, delete, offsets | **done** — task restart verified live, signed in; the rest against a stub worker. GitOps ownership was built and removed |
 | ~~9b · 9c~~ | — | MirrorMaker 2 flows and record decoding | **removed** — built and verified, then taken out |

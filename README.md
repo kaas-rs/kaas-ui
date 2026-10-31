@@ -147,10 +147,11 @@ Not built yet: the cross-cluster views — fleet-wide topic search, cluster
 comparison, capability diff. See [`docs/README.md`](docs/README.md) for what
 each phase covers.
 
-The message viewer runs on **kaas-lib 0.4.0**. Three things it needed went in
-there rather than here, because version and implementation knowledge belongs in
-the library: the anchored backward walk, `ScanSpec::following`, and a fix for
-`scan` emitting records before its start offset.
+The message viewer has run on kaas-lib since **0.4.0**. Three things it needed
+went in there rather than here, because version and implementation knowledge
+belongs in the library: the anchored backward walk, following the log
+(`ScanSpec::with_follow`), and a fix for `scan` emitting records before its
+start offset.
 
 ## Measurements
 
