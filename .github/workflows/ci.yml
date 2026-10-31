@@ -21,6 +21,12 @@ permissions:
 # is public — a fork PR is arbitrary code from a stranger. So every job wired
 # to `pull_request` picks its runner per event.
 #
+# Dependabot's pull requests go the same way. They are branches of this repo,
+# so `fork` is false for them, but their diff is a dependency nobody has read
+# yet, and a crate's build script runs during the build. The test is the PR's
+# *author* rather than `github.actor`, which becomes whoever last pushed to or
+# re-ran it.
+#
 # `github.event.pull_request` is null for push and dispatch, so those fall
 # through to ARC.
 
@@ -37,7 +43,7 @@ jobs:
     outputs:
       workspace: ${{ steps.check.outputs.workspace }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       # Before anything else, because it is seconds and catches a class of bug
       # nothing else here can. A workflow expression error is not a runtime
@@ -72,7 +78,7 @@ jobs:
   rust:
     needs: preflight
     if: needs.preflight.outputs.workspace == 'true'
-    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || 'arc-runner-set-ui' }}
+    runs-on: ${{ (github.event.pull_request.head.repo.fork || github.event.pull_request.user.login == 'dependabot[bot]') && 'ubuntu-latest' || 'arc-runner-set-ui' }}
     steps:
       # The ARC runner image (ghcr.io/actions/actions-runner) is minimal: no
       # cc, gcc, ld, make or pkg-config. `ring` and other build-script crates
@@ -96,14 +102,15 @@ jobs:
             gcc libc6-dev pkg-config ca-certificates
           echo "cc → $(command -v cc || echo MISSING)"
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: Install Rust toolchain (honours rust-toolchain.toml)
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
+          toolchain: stable
           components: rustfmt, clippy
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       # `cargo xtask ci` ends with `cargo audit` and fails if the tool is
       # missing. Fetched as a pinned, checksummed release binary rather than
@@ -138,14 +145,14 @@ jobs:
   web:
     needs: preflight
     if: needs.preflight.outputs.workspace == 'true'
-    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || 'arc-runner-set-ui' }}
+    runs-on: ${{ (github.event.pull_request.head.repo.fork || github.event.pull_request.user.login == 'dependabot[bot]') && 'ubuntu-latest' || 'arc-runner-set-ui' }}
     defaults:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
 
@@ -181,12 +188,14 @@ jobs:
           $SUDO apt-get install -y --no-install-recommends \
             gcc libc6-dev pkg-config ca-certificates
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: Install Rust toolchain (honours rust-toolchain.toml)
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       # Fail loudly and early if the runner cannot see the brokers, rather
       # than inside a test with a connect timeout that reads as a flake.
