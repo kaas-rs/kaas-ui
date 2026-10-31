@@ -1,0 +1,34 @@
+# Advisories accepted after reading them against what kaas-ui actually does.
+# `cargo audit` reads this file on its own. Each entry says why the advisory
+# cannot reach this process and what should send someone back to it; an entry
+# whose reason stops being true is a finding, not a line to keep.
+#
+# Both arrive only through `openidconnect` 4.0.1, which kaas-ui-auth uses for a
+# code flow (PKCE, nonce, client secret) and for checking ID-token signatures
+# against the issuer's JWKS. That is public-key verification on public inputs.
+# No RSA or EC private key exists in this process: the federated credential
+# for the schema registries is a JWT SPIRE writes to a file, not one kaas-ui
+# signs. Tracked in kaas-rs/kaas-ui#8, which stays open until both are gone.
+#
+# Replacing `openidconnect` to drop them was considered and rejected: it is
+# maintained (slowly — one maintainer), and the alternative is hand-written
+# ID-token validation, a worse trade than two advisories nothing here can
+# trigger.
+
+[advisories]
+ignore = [
+    # rsa 0.9.10 — Marvin: timing in RSA *private-key* operations (decrypt,
+    # sign) can leak the key. kaas-ui only verifies RS256 signatures with the
+    # issuer's public key, so there is no key to leak. No fixed `rsa` exists:
+    # 0.10 is still a release candidate, and openidconnect's main still pins
+    # 0.9. Revisit when rsa 0.10 is stable and openidconnect moves to it.
+    "RUSTSEC-2023-0071",
+
+    # crypto-bigint 0.5.5, via p256/p384 → elliptic-curve 0.13 — timing
+    # variability in operations meant to be constant-time, which matters only
+    # when an operand is secret. ES256/ES384 verification has none. Already
+    # fixed on openidconnect's main (p256/p384 0.14, 2026-10-27, version
+    # 4.1.0): drop this line when 4.1.0 is published and `cargo update` takes
+    # crypto-bigint 0.5 out of the lock.
+    "RUSTSEC-2026-0387",
+]
