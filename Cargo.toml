@@ -73,8 +73,8 @@ rust-embed = "8.12"
 mime_guess = "2"
 bytes      = "1.12"
 # The CSP hash of index.html's one inline script. Both already in the tree.
-sha2       = "0.10"
-base64     = "0.22"
+sha2       = "0.11"
+base64     = "0.23"
 
 # payload decoding. One library resolves schema ids and decodes all three
 # registry-backed formats, because all three are the same Confluent wire
@@ -92,7 +92,7 @@ base64     = "0.22"
 # a token lasts an hour; a middleware asks the token provider on every call
 # instead, so a refresh is picked up by the decoders' own fetches without
 # rebuilding them — and without dropping the id→schema caches they hold.
-schema_registry_converter = { version = "5", default-features = false, features = [
+schema_registry_converter = { version = "6", default-features = false, features = [
     "futures",
     "avro",
     "json",
@@ -130,7 +130,7 @@ rustls = { version = "0.23.46", default-features = false, features = ["ring", "s
 # every other crate sits on — so the parser lives here, on the side that wants
 # the fields. RustCrypto's rather than `x509-parser` because `der` and `spki`
 # are already in the tree beneath openidconnect: three new crates, not ten.
-x509-cert = { version = "0.2", default-features = false }
+x509-cert = { version = "0.3", default-features = false }
 
 # internal
 kaas-ui-auth    = { path = "crates/kaas-ui-auth" }
