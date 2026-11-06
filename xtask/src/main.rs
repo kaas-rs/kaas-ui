@@ -1,7 +1,8 @@
 //! `cargo xtask <task>`.
 //!
 //! ```text
-//! ci      fmt + clippy + unit tests + the invariant checks. No cluster.
+//! ci      fmt + clippy + unit tests + the invariant checks + the chart. No cluster.
+//! chart   lint and render the Helm chart, and parse its config as the binary does
 //! live    phase acceptance, against the two live clusters
 //! login   Phase 4 acceptance: a real login against dex-test in the cluster
 //! docs    write docs/openapi.json
@@ -13,6 +14,7 @@
 //! environment kaas-ui is developed in, and two real three-node clusters are a
 //! better target than one container anyway.
 
+mod chart;
 mod checks;
 mod live;
 mod login;
@@ -30,6 +32,7 @@ fn main() -> ExitCode {
 
     let result = match task.as_str() {
         "ci" => ci(),
+        "chart" => chart::check(),
         "live" => live::run(&rest),
         "login" => login::run(),
         "docs" => docs(),
@@ -37,7 +40,7 @@ fn main() -> ExitCode {
         "unlink" => unlink(),
         other => {
             eprintln!("unknown task {other:?}\n");
-            eprintln!("usage: cargo xtask <ci|live|login|docs|link|unlink>");
+            eprintln!("usage: cargo xtask <ci|chart|live|login|docs|link|unlink>");
             return ExitCode::FAILURE;
         }
     };
@@ -93,6 +96,9 @@ fn ci() -> Task {
 
     println!("\n--- invariants ---");
     checks::all()?;
+
+    println!("\n--- chart ---");
+    chart::check()?;
 
     println!("\n--- advisories ---");
     audit()?;

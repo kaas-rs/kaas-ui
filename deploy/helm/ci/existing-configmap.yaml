@@ -1,0 +1,5 @@
+# The file comes from somewhere else, so the chart renders no ConfigMap.
+existingConfigMap: operator-managed-config
+serviceAccount:
+  create: false
+  name: shared-account

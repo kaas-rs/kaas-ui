@@ -1,0 +1,14 @@
+# expect: more than one replica cannot serve
+replicaCount: 2
+config:
+  auth:
+    issuer: https://kaas-ui.example.com/dex
+    client_id: kaas-ui
+    redirect_url: https://kaas-ui.example.com/auth/callback
+  environments:
+    - id: dev
+      name: Development
+      kafka_clusters:
+        - id: kafka
+          name: kafka
+          bootstrap: ["kafka.example.com:9092"]

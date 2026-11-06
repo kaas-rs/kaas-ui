@@ -1,0 +1,162 @@
+# Default values for kaas-ui. README.md beside this file walks through the
+# configurations people actually deploy.
+
+image:
+  repository: ghcr.io/kaas-rs/kaas-ui
+  # Defaults to the chart's appVersion.
+  tag: ""
+  # `sha256:…`. Takes precedence over the tag when set.
+  digest: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+# Sessions are encrypted with a key generated per process, so a second replica
+# cannot read the first one's cookies and sign-in flickers on and off with the
+# load balancer. Rendering refuses more than one replica while `config.auth` is
+# set. Without `auth` there are no sessions and the process is stateless.
+replicaCount: 1
+
+# kaas-ui's configuration file, verbatim: everything under this key becomes
+# config.yaml, and unknown keys are refused by the binary at startup. See the
+# repository's config.dev.yaml for every block, annotated.
+#
+# Changing `environments` does not restart the pod: kaas-ui re-reads the file
+# every five seconds and swaps the fleet live, keeping the connections of
+# clusters that did not change. Every other block is read once at startup, so
+# changing one rolls the pod, which signs everyone out.
+#
+# **Secrets do not belong here**, because this lands in a ConfigMap. Omit a
+# credential and kaas-ui reads `KAAS_UI_<CREDENTIAL>_<ENVIRONMENT>_<ID>`, which
+# `extraEnv` fills from a secretKeyRef.
+config:
+  server:
+    # The container port and the probes follow this.
+    listen: "0.0.0.0:8080"
+  # Required: kaas-ui refuses to start without an environment, so rendering does
+  # too. For example:
+  #
+  #   environments:
+  #     - id: dev
+  #       name: Development
+  #       kafka_clusters:
+  #         - id: kafka
+  #           name: kafka
+  #           bootstrap: ["kafka-bootstrap.kafka.svc.cluster.local:9092"]
+  environments: []
+
+# Use this ConfigMap's `config.yaml` key instead of rendering `config`. The
+# chart cannot see inside it, so none of its checks apply and a change to a
+# startup-only block needs its own restart.
+existingConfigMap: ""
+
+# Labels for every object this chart renders, and for the pods.
+commonLabels: {}
+
+podLabels: {}
+podAnnotations: {}
+
+serviceAccount:
+  create: true
+  # Defaults to the full name. Under workload identity this name is part of the
+  # subject a cloud provider trusts, so state it rather than inheriting it.
+  name: ""
+  labels: {}
+  annotations: {}
+
+# kaas-ui never calls the Kubernetes API, so by default it holds no token that
+# could leak. Turn this on only for a sidecar that needs one.
+automountServiceAccountToken: false
+
+service:
+  type: ClusterIP
+  port: 80
+  annotations: {}
+
+# A proxy that buffers `text/event-stream` breaks the live message view: records
+# arrive in stale bursts. Hosting under a path also needs `config.server.base_path`
+# and a proxy that strips the prefix.
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: kaas-ui.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# Environment for the kaas-ui container. Where credentials arrive from:
+#
+#   extraEnv:
+#     - name: KAAS_UI_PASSWORD_DEV_KAFKA
+#       valueFrom:
+#         secretKeyRef:
+#           name: kafka-credentials
+#           key: password
+extraEnv: []
+extraEnvFrom: []
+
+# Volumes for the pod and mounts for the kaas-ui container: CA files for `tls`
+# blocks, or the assertion a `client_assertion_file` names. Mount them beside
+# /etc/kaas-ui rather than inside it, since that one is the ConfigMap's.
+extraVolumes: []
+extraVolumeMounts: []
+
+# Containers around kaas-ui, as whole container specs. A native sidecar is an
+# init container with `restartPolicy: Always`.
+initContainers: []
+extraContainers: []
+
+# A small process on purpose: about 10 MiB idle. No CPU limit, because
+# throttling a request-serving process trades latency for nothing.
+resources:
+  requests:
+    memory: 64Mi
+    cpu: 50m
+  limits:
+    memory: 256Mi
+
+# `/health` never consults a Kafka cluster, so a broker being down cannot restart
+# a healthy process. Keep these pointed at it.
+livenessProbe:
+  httpGet:
+    path: /health
+    port: http
+  periodSeconds: 10
+  timeoutSeconds: 2
+readinessProbe:
+  httpGet:
+    path: /health
+    port: http
+  periodSeconds: 5
+  timeoutSeconds: 2
+startupProbe:
+  httpGet:
+    path: /health
+    port: http
+  failureThreshold: 12
+  periodSeconds: 5
+
+# The image is distroless and runs as nonroot, 65532.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

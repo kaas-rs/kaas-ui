@@ -279,6 +279,9 @@ The `Dockerfile` has three stages:
    come after the frontend build, or the image serves 404s.
 3. The binary is copied onto `distroless/static` as nonroot.
 
-Images publish to `ghcr.io/kaas-rs/kaas-ui`. Deployment is GitOps through
-`Woestebanaan/k3s-cluster` (`apps/kaas-ui/`). ArgoCD auto-sync is off, so a
-merged change is only applied after a manual `argocd app sync`.
+Images publish to `ghcr.io/kaas-rs/kaas-ui`, and a version tag also publishes the
+chart in `deploy/helm/kaas-ui` to `oci://ghcr.io/kaas-rs/charts/kaas-ui`. One tag
+makes one image and one chart of the same version. Deployment is GitOps through
+`Woestebanaan/k3s-cluster` (`apps/kaas-ui/`), which installs that chart. ArgoCD
+auto-sync is off, so a merged change is only applied after a manual
+`argocd app sync`.

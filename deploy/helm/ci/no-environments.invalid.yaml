@@ -1,0 +1,3 @@
+# expect: config.environments
+config:
+  environments: []

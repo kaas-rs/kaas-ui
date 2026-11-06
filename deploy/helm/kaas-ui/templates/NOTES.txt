@@ -1,0 +1,14 @@
+kaas-ui {{ .Chart.AppVersion }} is installed as {{ include "kaas-ui.fullname" . }}.
+
+Reach it with:
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "kaas-ui.fullname" . }} 8080:{{ .Values.service.port }}
+
+and open http://localhost:8080.
+{{- if not .Values.existingConfigMap }}
+{{- if not (dig "roles" nil (.Values.config | default dict)) }}
+
+WARNING: `config.roles` is empty, so this is an open deployment. Everyone who can
+reach it is an anonymous caller who can see every cluster and read every record.
+{{- end }}
+{{- end }}

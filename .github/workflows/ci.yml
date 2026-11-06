@@ -136,6 +136,13 @@ jobs:
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
           "$RUNNER_TEMP/bin/cargo-audit" --version
 
+      # `cargo xtask ci` renders the chart. The version is the one the cluster's
+      # ArgoCD renders with, since that is the render that has to work, and
+      # Dependabot cannot see it: bump it by hand when ArgoCD moves.
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.2.1
+
       - name: cargo xtask ci
         run: cargo xtask ci
 

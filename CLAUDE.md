@@ -151,14 +151,15 @@ what it reports.
 ## Verification
 
 ```sh
-cargo xtask ci      # fmt + clippy + unit tests + the invariant greps + cargo audit. No cluster.
+cargo xtask ci      # fmt + clippy + unit tests + the invariant greps + the chart + cargo audit. No cluster.
+cargo xtask chart   # lint and render the Helm chart, and parse its config as the binary does
 cargo xtask live    # phase acceptance, against both clusters
 cargo xtask login   # Phase 4 acceptance. Needs the dex-test app synced
 cargo xtask docs    # openapi spec + regenerate the TS client
 ```
 
 Unit tests stay cluster-free so `cargo xtask ci` runs anywhere a broker does not —
-it does need `cargo-audit` installed and the network, for the advisory
+it does need `helm`, for the chart, and `cargo-audit` and the network, for the advisory
 database; accepted advisories and their reasons are in `.cargo/audit.toml`.
 Anything needing a broker goes in `live`.
 
@@ -169,9 +170,11 @@ not report a phase complete on the basis of `cargo build` succeeding.
 
 CI conventions — runners, action pins, Dependabot — are in `.github/CLAUDE.md`.
 
-Images publish to `ghcr.io/kaas-rs/kaas-ui`. Deployment is GitOps via
-`Woestebanaan/k3s-cluster` (`apps/kaas-ui/`), picked up by an ApplicationSet
-that discovers `apps/*`.
+Images publish to `ghcr.io/kaas-rs/kaas-ui`, and a version tag also publishes the
+Helm chart to `oci://ghcr.io/kaas-rs/charts/kaas-ui`; `deploy/helm/CLAUDE.md` has
+its rules. Deployment is GitOps via `Woestebanaan/k3s-cluster` (`apps/kaas-ui/`),
+which installs that chart and is picked up by an ApplicationSet that discovers
+`apps/*`.
 
 **ArgoCD auto-sync is off in this cluster.** A merged commit registers a change;
 applying it is a manual `argocd app sync`. A green pipeline is not evidence that

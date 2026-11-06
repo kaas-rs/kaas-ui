@@ -112,13 +112,14 @@ SSE, but nothing here can make somebody else's proxy behave. Port-forwarding to
 ## Verification
 
 ```sh
-cargo xtask ci      # fmt + clippy + unit tests + the invariant checks + cargo audit
+cargo xtask ci      # fmt + clippy + unit tests + the invariant checks + the chart + cargo audit
 cargo xtask live    # phase acceptance, against both live clusters
 cargo xtask docs    # write docs/openapi.json
 ```
 
 `cargo xtask ci` runs anywhere: unit tests are cluster-free and Docker-free.
-It ends with `cargo audit`, so it wants `cargo-audit` installed and the network.
+It renders the chart, so it wants `helm`, and it ends with `cargo audit`, so it
+wants `cargo-audit` installed and the network.
 Anything that needs a broker lives in `live`, which starts the real binary
 against the real clusters and asserts over HTTP — 50 assertions, including that
 an unreachable cluster costs the fleet request nothing measurable, that
@@ -171,8 +172,10 @@ its summary, so the number above is checked rather than remembered.
 
 ## Deployment
 
-Images publish to `ghcr.io/kaas-rs/kaas-ui`. Deployment is GitOps via
-`Woestebanaan/k3s-cluster` (`apps/kaas-ui/`).
+Images publish to `ghcr.io/kaas-rs/kaas-ui`, and a version tag also publishes the
+Helm chart to `oci://ghcr.io/kaas-rs/charts/kaas-ui`
+([values and walkthrough](deploy/helm/kaas-ui/README.md)). Deployment is GitOps via
+`Woestebanaan/k3s-cluster` (`apps/kaas-ui/`), which installs that chart.
 
 Public access is the cluster's Cloudflare tunnel at **`kaas.smeding.cloud`** —
 a rule in `apps/cloudflare/values.yaml`, not an Ingress or an HTTPRoute. Only

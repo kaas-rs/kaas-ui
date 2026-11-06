@@ -10,4 +10,5 @@ expression error fails in zero seconds with no logs.
 Every action is pinned to a full commit SHA with its version as a comment.
 A Dependabot PR is the one branch that lands on `main` by PR. Dependabot follows
 `dtolnay/rust-toolchain`'s `# master` pin as a branch, but cannot see the
-cargo-audit binary `ci.yml` downloads; bump that by hand.
+cargo-audit binary `ci.yml` downloads, or the Helm version passed to
+`azure/setup-helm`, which follows the cluster's ArgoCD; bump those by hand.
