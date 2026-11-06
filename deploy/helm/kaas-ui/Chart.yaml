@@ -5,8 +5,8 @@ type: application
 # In lockstep with the workspace version, and `cargo xtask ci` holds it there.
 # One tag publishes one image and one chart, so bumping the chart is bumping the
 # application; the release job stamps both fields from the tag.
-version: 0.17.1
-appVersion: "0.17.1"
+version: 0.18.0
+appVersion: "0.18.0"
 home: https://github.com/kaas-rs/kaas-ui
 sources:
   - https://github.com/kaas-rs/kaas-ui
