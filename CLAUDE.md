@@ -13,33 +13,16 @@ multi-cluster from day one, OIDC via Dex.
 - `docs/reference/` — the live clusters, the kaas-lib surface, the HTTP
   contract, the design system, and the kaas-lib asks.
 
-Read `docs/README.md` first. Phases 0–7 are done, and 9 — Kafka Connect, read
-(9a) and written (9d) — and the Connect half of 10a (the write gate); 8 and the
-rest of 10 are planned, in the order `docs/README.md` gives. kaas-ui supports
-Kafka Connect and not MirrorMaker: MirrorMaker 2 (9b–9c) was built and removed.
+Read `docs/README.md` first. kaas-ui supports Kafka Connect and not MirrorMaker:
+MirrorMaker 2 (9b–9c) was built and removed.
 
 ## The shape
 
 A **fleet** is environments. An **environment** holds Kafka clusters, the
 schema registries they decode against, and inventory kaas-ui does not dial —
 Connect, an MQTT broker, whatever comes next. Configuration says so
-structurally and the API mirrors it:
-
-```yaml
-environments:
-  - id: dev
-    schema_registries: [{ id: apicurio, url: … }]
-    kafka_clusters:
-      - id: kaas
-        schema_registry: apicurio   # reference, not membership
-    resources: [{ id: connect, kind: kafka_connect, … }]
-```
-
-```
-/api/environments
-/api/environments/{env}/clusters/{id}/topics/{topic}/…
-/api/environments/{env}/schema-registries/{registry}/subjects/…
-```
+structurally (`config.dev.yaml`) and the API mirrors it under
+`/api/environments/{env}/…` (`docs/reference/http-contract.md`).
 
 There is no top level to declare a cluster at, so a cluster cannot be
 homeless; and an id is only unique *within* its environment, so `kafka` in
@@ -184,19 +167,7 @@ not report a phase complete on the basis of `cargo build` succeeding.
 
 ## CI and deployment
 
-CI runs on `arc-runner-set-ui`, a repo-scoped ARC scale set in the same k3s
-cluster. Fork **and Dependabot** PRs are routed to GitHub-hosted runners — the
-ARC pods are privileged DinD on a node hostPath and this repo is public, and a
-Dependabot PR is unreviewed code from this repo's own branch, which the fork
-test does not catch. `actionlint` runs before anything else, because a workflow
-expression error fails in zero seconds with no logs.
-
-Every action is pinned to a full commit SHA with its version as a comment.
-Dependabot (`.github/dependabot.yml`) opens one grouped PR a month each for
-actions, cargo and npm, after a 7-day cooldown — merging those is the one
-branch that lands on `main` by PR. It follows `dtolnay/rust-toolchain`'s
-`# master` pin as a branch, but cannot see the cargo-audit binary `ci.yml`
-downloads; bump that by hand.
+CI conventions — runners, action pins, Dependabot — are in `.github/CLAUDE.md`.
 
 Images publish to `ghcr.io/kaas-rs/kaas-ui`. Deployment is GitOps via
 `Woestebanaan/k3s-cluster` (`apps/kaas-ui/`), picked up by an ApplicationSet
@@ -205,16 +176,6 @@ that discovers `apps/*`.
 **ArgoCD auto-sync is off in this cluster.** A merged commit registers a change;
 applying it is a manual `argocd app sync`. A green pipeline is not evidence that
 the cluster changed.
-
-## Design
-
-`docs/reference/design-system.md`. The palette is mdbook's `rust` theme — the
-same one the kaas-lib book uses — with semantic tokens, a derived dark mode, and
-status colours mdbook has no need for.
-
-One trap: `#E69F67` is ~2:1 on the paper ground. It is a **surface** colour —
-active nav, focus ring, selected edge. For accent text on light use
-`--color-accent-ink` (`#8F5A2B`).
 
 ## Traps specific to this codebase
 
@@ -237,17 +198,6 @@ active nav, focus ring, selected edge. For accent text on light use
   `cluster.capabilities()`; do not fabricate one by picking a broker. Until
   upstream ask 1 lands, read from an explicitly named broker and say so in the
   UI.
-- **`TailSpec::limit` over-fetches** — a partition's last chunk is kept whole,
-  so `limit=20` comes back at or above 20 and the HTTP layer merges and
-  truncates. It used to *under-fill* as well, being divided across every
-  partition with `div_ceil` before anything was known about them — ⌈500/3⌉ =
-  167 when one partition of three holds records — and kaas-ui asked
-  `ListOffsets` which partitions were non-empty to work around it. kaas-lib
-  0.9 fixed it downstairs (kaas-rs/kaas-lib#17) and the workaround is gone;
-  `hasMore` now reads `PartitionTail::reached_log_start` (`more_below` in
-  `routes/messages/mod.rs`).
-- **Streams do not go in the TanStack Query cache.** SSE feeds a capped ring
-  buffer in its own hook.
 - **Group kinds are four variants, not one struct with optional fields.**
   `Unrecognized` is a *successful* description of an undescribable group.
 - **Lag has four states** — no commit, empty partition, caught up, lagging —
@@ -269,25 +219,10 @@ active nav, focus ring, selected edge. For accent text on light use
   a registry is still not the same claim as decoding against it, so
   `schema_registry:` stays an explicit line and a cross-environment reference
   is a startup error.
-- **An absent credential is where the credential comes from.** One rule for
-  all four — SASL `password`, OAuth `client_secret`, a registry's `password`
-  and its `bearer_token`: write the key and it wins, omit it and it is read
-  from `KAAS_UI_<CREDENTIAL>_<ENVIRONMENT>_<ID>`, which the deployment fills
-  from a `secretKeyRef`. Overriding from the file is right for a local run and
-  wrong for a deployment, which is why the deployed ConfigMap sets no secret
-  at all. There were three keys per credential once (`x`, `x_file`, `x_env`)
-  and the extra two were a decision at the point of writing a config rather
-  than a capability. Two things whose ids flatten to one variable — including
-  a cluster and a registry sharing an id — are a startup error, not a shared
-  credential. The exception proves the rule: `client_assertion_file` names a
-  **signed assertion somebody else wrote** — a SPIFFE JWT-SVID — so there is
-  no secret to find, the environment is not consulted, a `client_secret`
-  beside it is refused, and the file is re-read on every exchange because it
-  outlives nothing. **PEM stays a file**: `ca_file`, `cert_file` and `key_file` are
-  multi-line and belong in a mount. Everything is read at startup, so rotating
-  needs a restart. Secrets redact themselves in `Debug` — the leak that
-  happens is `?entry`, not a deliberate print — and a failing exchange reports
-  the far end's error, never the credential.
+- **An absent credential is read from `KAAS_UI_<CREDENTIAL>_<ENVIRONMENT>_<ID>`.**
+  Secrets redact themselves in `Debug` — the leak that happens is `?entry`, not
+  a deliberate print — and a failing exchange reports the far end's error, never
+  the credential. The whole rule is in `crates/kaas-ui-core/CLAUDE.md`.
 - **ccompat only.** Apicurio's native `/apis/registry/v3` is not supported, and
   a `url` pointing at it is a **configuration** error reported on first use,
   naming `/apis/ccompat/v7`. The failure to design against is every record on
@@ -303,9 +238,3 @@ active nav, focus ring, selected edge. For accent text on light use
   expression: kaas-ui ran a JavaScript predicate here until the sandbox was
   removed, and re-introducing an evaluator for a search box would be undoing
   that on purpose. The needle is capped at `MAX_FILTER_CHARS`.
-- **A filtered page's `limit` is a budget for records read, not matched.** The
-  needle cannot go into kaas-lib's spec, which matches bytes, so a window is
-  read and then reduced. `hasMore` says whether the *read* filled its budget
-  and `nextOffset` comes off the window examined rather than off the surviving
-  rows — a page that matched nothing still has to say where to look next, or
-  paging stops on the first window a selective filter empties.
