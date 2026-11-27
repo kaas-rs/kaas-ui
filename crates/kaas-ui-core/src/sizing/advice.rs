@@ -28,6 +28,7 @@ use utoipa::ToSchema;
 use crate::analysis::TopicAnalysis;
 use crate::dto::ConfigEntryDto;
 
+use super::lint::{INDEX_ENTRY_BYTES, SEGMENT_BYTES_MAX};
 use super::units::{human_bytes, human_ms, i64_to_f64, round_to_power_of_two, to_f64, to_i64};
 use super::{is_explicit, key, limit, number, policy, text};
 
@@ -98,7 +99,14 @@ pub struct Measured {
     pub partition_skew: Option<f64>,
     /// Records that carried a key.
     pub keyed_fraction: Option<f64>,
-    /// Distinct keys over records — compaction headroom, from a sketch.
+    /// Distinct keys over the records that carried one — compaction
+    /// headroom, from a sketch.
+    ///
+    /// Keyed records only, because compaction works per key and a compacted
+    /// topic refuses a record without one: a keyless record is neither
+    /// distinct nor superseded, and counting it in the denominator read an
+    /// unkeyed topic as "0% distinct, 100% superseded". `None` when nothing
+    /// scanned carried a key.
     pub distinct_key_fraction: Option<f64>,
     /// Records with a null value.
     pub tombstone_fraction: Option<f64>,
@@ -141,16 +149,35 @@ impl Measured {
         let payload_bytes_per_record =
             (records > 0).then(|| to_f64(payload_bytes) / to_f64(records));
 
+        // The log directories describe the whole retained log, and a partial
+        // scan's record count describes a sample of it. Dividing one by the
+        // other inflates bytes per record by the inverse of the sample — ten
+        // times on a 10% scan, measured — and every byte rate, partition
+        // count and segment size downstream inherits it. So a partial scan
+        // compares its records with the same share of the disk: the fraction
+        // of the offset span it read. That assumes bytes per offset are even
+        // along the log, which is an estimate and is named as one; a partial
+        // scan that cannot say what share it read gets no disk figure at all.
+        let (disk_bytes, disk_source) = match (disk_bytes, scan.complete, scan.scanned_fraction) {
+            (Some(disk), true, _) => (Some(disk), "log directories, post-compression"),
+            (Some(disk), false, Some(share)) if share > 0.0 && share <= 1.0 => (
+                to_i64(i64_to_f64(disk) * share),
+                "log directories, scaled to the share of the offset span the scan read — \
+                 post-compression, and an estimate that assumes bytes per offset are even \
+                 along the log",
+            ),
+            _ => (None, ""),
+        };
+
         // On-disk bytes are what `segment.bytes` counts, so they are the
         // figure to size a segment from. The payload sums are the fallback,
         // and they are *smaller* than the truth — no framing, no headers, no
         // batch overhead — which is worth naming on the row rather than
         // silently under-sizing a segment.
         let (bytes_per_record, source) = match (disk_bytes, records) {
-            (Some(disk), count) if count > 0 && disk > 0 => (
-                Some(i64_to_f64(disk) / to_f64(count)),
-                "log directories, post-compression",
-            ),
+            (Some(disk), count) if count > 0 && disk > 0 => {
+                (Some(i64_to_f64(disk) / to_f64(count)), disk_source)
+            }
             _ => (
                 payload_bytes_per_record,
                 "payload sums — no framing or compression, so an underestimate",
@@ -170,6 +197,7 @@ impl Measured {
         };
 
         let partition_skew = partition_skew(scan);
+        let keyed = records.saturating_sub(totals.null_keys);
         let fraction = |part: u64| (records > 0).then(|| to_f64(part) / to_f64(records));
 
         Self {
@@ -187,8 +215,12 @@ impl Measured {
             mean_bytes_per_sec: scale(mean_records_per_sec),
             peak_bytes_per_sec: scale(peak_records_per_sec),
             partition_skew,
-            keyed_fraction: fraction(records.saturating_sub(totals.null_keys)),
-            distinct_key_fraction: fraction(totals.approx_uniq_keys),
+            keyed_fraction: fraction(keyed),
+            // The sketch can read a little above the true count, so the
+            // fraction is held at one rather than claiming more distinct
+            // keys than keyed records.
+            distinct_key_fraction: (keyed > 0)
+                .then(|| (to_f64(totals.approx_uniq_keys) / to_f64(keyed)).min(1.0)),
             tombstone_fraction: fraction(totals.null_values),
             clock: scan.clock.clone(),
         }
@@ -576,7 +608,7 @@ fn signal_text(
                     .distinct_key_fraction
                     .map(|found| {
                         format!(
-                            ", and {:.0}% of records carry a distinct key",
+                            ", and {:.0}% of keyed records carry a distinct key",
                             found * 100.0
                         )
                     })
@@ -666,7 +698,7 @@ pub(super) fn all(
                 measured,
                 assumptions,
             ));
-            rows.extend(extra_rows(*profile, entries, measured));
+            rows.extend(extra_rows(*profile, entries, measured, assumptions));
             ProfileAdvice {
                 profile: *profile,
                 label: profile.label().to_owned(),
@@ -765,6 +797,12 @@ fn replication_row(profile: Profile, topology: Topology, a: &Assumptions) -> Rec
 }
 
 /// The partition count, which is the row that is never freely reversible.
+///
+/// The floor is the textbook one, `max(t/p, t/c)`: a partition has to absorb
+/// its share of the writes *and* one consumer instance has to keep up with
+/// it, and whichever needs more partitions governs. Sizing on either term
+/// alone under-sizes whenever the other binds — with the default assumptions
+/// the consumer term is the larger one, by two.
 fn partitions_row(
     profile: Profile,
     topology: Topology,
@@ -774,39 +812,32 @@ fn partitions_row(
     let current = i64::try_from(topology.partitions).unwrap_or(1).max(1);
     let produce = a.produce_mib_per_sec_per_partition.saturating_mul(MIB);
     let consume = a.consume_mib_per_sec_per_consumer.saturating_mul(MIB);
-
-    // Which rate and which capacity this profile sizes against.
-    let (rate, capacity, headroom, basis) = match profile {
-        Profile::LowLatency => (
-            measured.peak_bytes_per_sec,
-            consume,
-            a.headroom_percent,
-            format!(
-                "one consumer instance at an assumed {} MiB/s",
-                a.consume_mib_per_sec_per_consumer
-            ),
-        ),
-        Profile::HighThroughput => (
-            measured.peak_bytes_per_sec,
-            produce,
-            100,
-            format!(
-                "one partition at an assumed {} MiB/s, with no headroom added",
-                a.produce_mib_per_sec_per_partition
-            ),
-        ),
-        _ => (
-            measured.peak_bytes_per_sec,
-            produce,
-            a.headroom_percent,
-            format!(
-                "one partition at an assumed {} MiB/s",
-                a.produce_mib_per_sec_per_partition
-            ),
-        ),
+    let headroom = match profile {
+        Profile::HighThroughput => 100,
+        _ => a.headroom_percent,
     };
+    let basis = format!(
+        "an assumed {} MiB/s of produce per partition and {} MiB/s per consumer instance",
+        a.produce_mib_per_sec_per_partition, a.consume_mib_per_sec_per_consumer
+    );
 
-    let floor = rate.and_then(|rate| partitions_for(rate, capacity, headroom));
+    // Both terms, so the derivation can name the one that governed.
+    let terms = |rate: Option<f64>| {
+        let rate = rate?;
+        Some((
+            partitions_for(rate, produce, headroom)?,
+            partitions_for(rate, consume, headroom)?,
+        ))
+    };
+    let peak_terms = terms(measured.peak_bytes_per_sec);
+
+    // A throughput topic also wants every broker leading a share of its
+    // writes: fewer partitions than brokers puts the whole stream on the
+    // disks and network of the few that lead one.
+    let brokers = i64::try_from(topology.brokers).unwrap_or(0);
+    let spread = (profile == Profile::HighThroughput && brokers > 0).then_some(brokers);
+    let floor = peak_terms
+        .map(|(by_produce, by_consume)| by_produce.max(by_consume).max(spread.unwrap_or(1)));
 
     // Three profiles do not size this number at all, and saying why is the
     // recommendation.
@@ -825,8 +856,10 @@ fn partitions_row(
                 .to_owned(),
         ),
         Profile::RetentionPrecision => Some(
-            "Not a factor. Deletion is per segment and per partition alike, so more or fewer \
-             partitions changes nothing about when a record goes."
+            "Not sized here. Deletion is per segment, and what the count changes is how fast \
+             each partition fills one: the same byte rate over more partitions rolls each \
+             segment later on bytes, which leaves more of the deadline to `segment.ms`. That \
+             is why this profile solves with `segment.ms` and leaves the count alone."
                 .to_owned(),
         ),
         _ => None,
@@ -849,7 +882,7 @@ fn partitions_row(
         };
     }
 
-    let Some(need) = floor else {
+    let (Some(need), Some((by_produce, by_consume))) = (floor, peak_terms) else {
         return Recommendation {
             setting: "partitions".to_owned(),
             current: Some(current.to_string()),
@@ -864,29 +897,65 @@ fn partitions_row(
         };
     };
 
-    let peak = rate
+    let peak = measured
+        .peak_bytes_per_sec
         .and_then(to_i64)
         .map(human_bytes)
         .unwrap_or_else(|| "an unknown rate".to_owned());
+    let governs = if by_consume > by_produce {
+        "the consumer term governs"
+    } else if by_produce > by_consume {
+        "the produce term governs"
+    } else {
+        "the two agree"
+    };
+    let spread_note = match spread {
+        Some(brokers) if brokers > by_produce.max(by_consume) => {
+            format!(", raised to the {brokers} broker(s) so every one leads a share of the writes")
+        }
+        _ => String::new(),
+    };
     let arithmetic = format!(
-        "Peak {peak}/s ÷ {basis}, with {}% of that as headroom, is {need} partition(s)",
-        headroom
+        "Peak {peak}/s with {headroom}% of it as headroom needs {by_produce} partition(s) by \
+         the produce term and {by_consume} by the consumer term, at {basis}; \
+         {governs}{spread_note}: {need} partition(s)"
     );
 
     if profile == Profile::HighThroughput && need < current {
-        return Recommendation {
-            setting: "partitions".to_owned(),
-            current: Some(current.to_string()),
-            recommended: Some(need.to_string()),
-            change: Change::Decrease,
-            why: format!(
-                "{arithmetic} against the {current} configured. This profile pushes the count \
-                 *down*: `batch.size` is allocated per partition, so one stream spread over \
-                 {current} partitions divides every producer batch by {current} and costs a \
-                 request per partition per batch. Kafka cannot lower a partition count — the \
-                 only way down is a new topic — so read this as \"do not add any\"."
-            ),
-            caution: partition_caution(measured),
+        let keyed = measured.keyed_fraction.unwrap_or(0.0) > 0.0;
+        return if keyed {
+            Recommendation {
+                setting: "partitions".to_owned(),
+                current: Some(current.to_string()),
+                recommended: Some(need.to_string()),
+                change: Change::Decrease,
+                why: format!(
+                    "{arithmetic} against the {current} configured. This profile pushes the \
+                     count *down* for keyed records: a key decides its partition, and \
+                     `batch.size` is per partition, so a keyed stream over {current} partitions \
+                     fills {current} batches where fewer would fill fewer, larger ones — and \
+                     larger batches compress better and cost less per byte. The producer still \
+                     sends one request per broker, carrying a batch for each of its partitions. \
+                     Kafka cannot lower a partition count — the only way down is a new topic — \
+                     so read this as \"do not add any\"."
+                ),
+                caution: partition_caution(measured),
+            }
+        } else {
+            Recommendation {
+                setting: "partitions".to_owned(),
+                current: Some(current.to_string()),
+                recommended: Some(current.to_string()),
+                change: Change::Keep,
+                why: format!(
+                    "{arithmetic} against the {current} configured, and fewer would not batch \
+                     better here: nothing scanned carried a key, and the producer's default \
+                     partitioner fills one partition's batch at a time for keyless records, so \
+                     the count does not fragment them. Partition count only ever increases, so \
+                     the surplus stays."
+                ),
+                caution: partition_caution(measured),
+            }
         };
     }
 
@@ -915,16 +984,16 @@ fn partitions_row(
             Profile::Bursty => format!(
                 "{why} Sized on the peak deliberately — the mean would want {}, and a topic \
                  partitioned for its mean stalls for the length of every burst.",
-                measured
-                    .mean_bytes_per_sec
-                    .and_then(|rate| partitions_for(rate, capacity, headroom))
+                terms(measured.mean_bytes_per_sec)
+                    .map(|(by_produce, by_consume)| by_produce.max(by_consume))
                     .map_or_else(|| "an unknown number".to_owned(), |found| found.to_string())
             ),
             Profile::LowLatency => format!(
-                "{why} Sized on consumer parallelism rather than on produce capacity: latency \
-                 here is usually a consumer falling behind. The trade is real — every partition \
-                 added divides the producer's batches, and past some point the fragmentation \
-                 costs more latency than the parallelism buys."
+                "{why} Latency here is usually a consumer falling behind, so the consumer term \
+                 is the one that matters — and the one an assumed capacity guesses worst: one \
+                 consumer instance's measured rate makes it exact. Past some point more \
+                 partitions cost latency of their own, as more batches per request and more \
+                 for every follower to replicate."
             ),
             _ => why,
         },
@@ -969,13 +1038,16 @@ fn segment_rows(
             Some(a.compacted_roll_minutes.saturating_mul(MINUTE_MS)),
             format!(
                 "The cleaner only ever touches closed segments, so the active one is the part \
-                 of the log that is never compacted. {} minutes is the usual budget for how \
-                 long a duplicate key may sit there.",
+                 of the log that is never compacted, and {} minutes is the usual budget for how \
+                 long a duplicate key may sit there. Rolling only makes a segment eligible: the \
+                 cleaner takes the log once its dirty ratio passes `min.cleanable.dirty.ratio`, \
+                 or once `max.compaction.lag.ms` forces it — the row below, and the one that \
+                 actually bounds the wait.",
                 a.compacted_roll_minutes
             ),
         ),
         Profile::RetentionPrecision => (
-            retention.map(|window| (window / a.overshoot_percent.max(1)).max(MINUTE_MS)),
+            retention.map(|window| overshoot_roll(window, a)),
             match retention {
                 Some(window) => format!(
                     "Solved against a deadline rather than a rate: allowing {}% overshoot on a \
@@ -984,7 +1056,7 @@ fn segment_rows(
                      `log.retention.check.interval.ms` and `file.delete.delay.ms`.",
                     a.overshoot_percent,
                     human_ms(window),
-                    human_ms((window / a.overshoot_percent.max(1)).max(MINUTE_MS))
+                    human_ms(overshoot_roll(window, a))
                 ),
                 None => "No positive `retention.ms`, so there is no deadline to solve against."
                     .to_owned(),
@@ -1020,35 +1092,57 @@ fn segment_rows(
     let partitions = i64::try_from(topology.partitions).unwrap_or(1).max(1);
     let per_partition = rate.map(|rate| rate / i64_to_f64(partitions));
 
-    let recommended_bytes = match (per_partition, roll_ms) {
+    let sized = match (per_partition, roll_ms) {
         (Some(rate), Some(roll)) => segment_from_rate(rate, roll, floor, ceiling),
         _ => None,
     };
+    let recommended_bytes = sized.map(|(_, bytes, _)| bytes);
 
-    let bytes_why = match (recommended_bytes, per_partition, roll_ms) {
-        (Some(bytes), Some(rate), Some(roll)) => {
-            let clamped = match ceiling {
-                Some(cap) if bytes >= cap => format!(
-                    " Clamped at the offset index's ceiling of {} — \
-                     `segment.index.bytes` ÷ 8 × `index.interval.bytes` — because the index \
-                     fills first and rolls the segment there whatever this says.",
-                    human_bytes(cap)
-                ),
-                _ if bytes <= floor => format!(
-                    " Raised to the {} floor: below that a partition holds thousands of files \
+    // On a compacted topic the scan counts the records compaction kept, so
+    // the rate is the survivors' — never more than what was written.
+    let (_, compacts) = policy(entries);
+    let survivors = if compacts {
+        " On a compacted topic the scan counts the records compaction kept, so this rate — \
+         and the segment it sizes — is a lower bound."
+    } else {
+        ""
+    };
+
+    let bytes_why = match (sized, per_partition, roll_ms) {
+        (Some((product, bytes, bound)), Some(rate), Some(roll)) => {
+            let outcome = match bound {
+                SegmentBound::Rate => {
+                    format!(", rounded down to a power of two: {}.", human_bytes(bytes))
+                }
+                SegmentBound::Floor => format!(
+                    ". Raised to the {} floor: below that a partition holds thousands of files \
                      for no benefit.",
                     human_bytes(floor)
                 ),
-                _ => String::new(),
+                SegmentBound::Index(cap) => format!(
+                    ". Clamped at {}, under the time index's ceiling of {} — \
+                     `segment.index.bytes` ÷ {INDEX_ENTRY_BYTES} × `index.interval.bytes` — \
+                     because the index fills and rolls the segment there whatever this says.",
+                    human_bytes(bytes),
+                    human_bytes(cap)
+                ),
+                SegmentBound::Type => format!(
+                    ". Capped at {}: `segment.bytes` is a 32-bit setting, so a broker refuses \
+                     anything past 2 GiB − 1, and {} is the largest power of two under that. At \
+                     this rate the byte limit rolls segments before `segment.ms` does, which \
+                     only makes deletion finer-grained.",
+                    human_bytes(bytes),
+                    human_bytes(bytes)
+                ),
             };
             format!(
                 "The {rate_name} rate of {}/s over {partitions} partitions is {}/s each; across \
-                 a {} roll that is about {}, rounded to a power of two.{clamped}",
+                 a {} roll that is about {}{outcome}{survivors}",
                 to_i64(rate * i64_to_f64(partitions))
                     .map_or_else(|| "an unknown rate".to_owned(), human_bytes),
                 to_i64(rate).map_or_else(|| "?".to_owned(), human_bytes),
                 human_ms(roll),
-                human_bytes(bytes),
+                human_bytes(product),
             )
         }
         _ => format!(
@@ -1087,8 +1181,15 @@ fn segment_rows(
             recommended: roll_ms.map(human_ms),
             change: ms_change,
             why: format!(
-                "{roll_why} It is the backstop the byte size cannot be: a topic that goes quiet \
-                 stops rolling on bytes entirely, and this is what closes the segment anyway."
+                "{roll_why} A roll is only checked when a record arrives, so this is what closes \
+                 a segment on a partition writing too slowly to fill one on bytes. {}",
+                if compacts {
+                    "A partition that stops writing keeps its open, uncompacted tail until the \
+                     next record — no setting closes it sooner."
+                } else {
+                    "A partition that stops writing altogether needs no roll: retention deletes \
+                     the active segment itself once its newest record is past `retention.ms`."
+                }
             ),
             caution: None,
         },
@@ -1100,6 +1201,7 @@ fn extra_rows(
     profile: Profile,
     entries: &[ConfigEntryDto],
     measured: &Measured,
+    a: &Assumptions,
 ) -> Vec<Recommendation> {
     let mut rows = Vec::new();
 
@@ -1114,19 +1216,33 @@ fn extra_rows(
                 Some("0.1".to_owned()),
                 Change::Decrease,
                 format!(
-                    "Only about {:.0}% of the records scanned carry a distinct key, so roughly \
-                     {:.0}% of this log is superseded and waiting for the cleaner. The ratio is \
+                    "Only about {:.0}% of the keyed records scanned carry a distinct key, so \
+                     roughly {:.0}% of them are superseded and waiting for the cleaner. The ratio is \
                      how dirty a log must be before cleaning starts; lowering it makes the \
-                     cleaner run sooner and keeps the restore smaller.",
+                     cleaner run sooner and keeps the restore smaller, and the trade is \
+                     arithmetic. At a ratio r the log grows to at most 1 ÷ (1 − r) of its \
+                     compacted size before a pass, and a pass rewrites about 1 ÷ r bytes for \
+                     every superseded one it removes: {}{} space and ~{:.0}× rewritten at 0.1.",
                     fraction * 100.0,
-                    (1.0 - fraction) * 100.0
+                    (1.0 - fraction) * 100.0,
+                    current
+                        .as_deref()
+                        .and_then(|value| value.trim().parse::<f64>().ok())
+                        .filter(|ratio| *ratio > 0.0 && *ratio < 1.0)
+                        .map_or_else(String::new, |ratio| format!(
+                            "{} space and ~{:.0}× rewritten at the current {ratio}, against ",
+                            space_amplification(ratio),
+                            1.0 / ratio
+                        )),
+                    space_amplification(0.1),
+                    1.0 / 0.1,
                 ),
             ),
             Some(fraction) => (
                 current.clone(),
                 Change::Keep,
                 format!(
-                    "About {:.0}% of records carry a distinct key, so there is little \
+                    "About {:.0}% of keyed records carry a distinct key, so there is little \
                      duplication for the cleaner to remove and no reason to make it work harder.",
                     fraction * 100.0
                 ),
@@ -1134,9 +1250,15 @@ fn extra_rows(
             None => (
                 None,
                 Change::Keep,
-                "Not enough data: the scan folded no records, so there is no duplication to \
-                 measure."
-                    .to_owned(),
+                if measured.records == 0 {
+                    "Not enough data: the scan folded no records, so there is no duplication to \
+                     measure."
+                } else {
+                    "Nothing scanned carried a key, so there is no duplication to measure: \
+                     compaction works per key, and a compacted topic refuses a record without \
+                     one."
+                }
+                .to_owned(),
             ),
         };
         rows.push(Recommendation {
@@ -1147,6 +1269,8 @@ fn extra_rows(
             why,
             caution: None,
         });
+
+        rows.push(compaction_lag_row(entries, a));
 
         rows.push(Recommendation {
             setting: key::DELETE_RETENTION_MS.to_owned(),
@@ -1172,15 +1296,32 @@ fn extra_rows(
 
     if profile == Profile::HighThroughput {
         let current = text(entries, key::COMPRESSION_TYPE).map(str::to_owned);
+        // Payload is key plus value, and the disk also holds headers and the
+        // framing of every batch and record. So the ratio understates what
+        // a codec achieves, and below 1 it is not about the codec at all.
         let (recommended, change, why) = match measured.compression_ratio {
-            Some(ratio) if ratio < 1.2 => (
-                Some("zstd".to_owned()),
+            Some(ratio) if ratio < 1.0 => (
+                current.clone(),
                 Change::Review,
                 format!(
-                    "The payload produced was {ratio:.2}× the bytes on disk, which is close \
-                     enough to 1 that little is being compressed. On a topic whose cost is its \
-                     byte volume this is usually the single largest saving available, and it \
-                     costs producer CPU rather than anything structural."
+                    "The payload produced was {ratio:.2}× the bytes on disk: the log is larger \
+                     than what was sent into it, which is per-batch and per-record framing \
+                     outweighing small payloads, not a codec's doing. The lever is producer \
+                     batching — `linger.ms` and `batch.size` — and until batches are larger \
+                     this ratio cannot say whether compression is on."
+                ),
+            ),
+            Some(ratio) if ratio < 1.2 => (
+                Some("producer".to_owned()),
+                Change::Review,
+                format!(
+                    "The payload produced was {ratio:.2}× the bytes on disk, so little is being \
+                     compressed. Turn it on in the producers — `compression.type` there, zstd \
+                     on a topic whose cost is its byte volume — and leave the topic at \
+                     `producer`: a codec set on the topic makes the broker rebuild every batch \
+                     that arrives in a different one, which moves the CPU onto the brokers. \
+                     Headers and framing are on disk and not in the payload, so the ratio \
+                     understates what compression achieves."
                 ),
             ),
             Some(ratio) => (
@@ -1194,8 +1335,9 @@ fn extra_rows(
             None => (
                 None,
                 Change::Review,
-                "Not enough data: comparing produced bytes against bytes on disk needs both, \
-                 and the log directories did not answer."
+                "Not enough data: comparing produced bytes against bytes on disk needs both over \
+                 the same records — the log directories did not answer, or the scan stopped \
+                 early without saying what share of the log it read."
                     .to_owned(),
             ),
         };
@@ -1255,6 +1397,58 @@ fn extra_rows(
 // Arithmetic
 // ---------------------------------------------------------------------------
 
+/// `max.compaction.lag.ms`: the bound on how long a superseded record may stay
+/// uncompacted, which rolling a segment alone does not give.
+fn compaction_lag_row(entries: &[ConfigEntryDto], a: &Assumptions) -> Recommendation {
+    let budget = a.compacted_roll_minutes.saturating_mul(MINUTE_MS);
+    let reported = number(entries, key::MAX_COMPACTION_LAG_MS);
+    // The unset value is the longest lag the type can hold, which means never.
+    let render = |lag: i64| {
+        if lag == i64::MAX {
+            "never".to_owned()
+        } else {
+            human_ms(lag)
+        }
+    };
+    let (change, note) = match reported {
+        Some(lag) if lag > 0 && lag <= budget => (Change::Keep, String::new()),
+        Some(_) => (Change::Decrease, String::new()),
+        None => (
+            Change::Review,
+            " The broker did not report this setting, so whether it is already bounded is \
+             unknown here."
+                .to_owned(),
+        ),
+    };
+    Recommendation {
+        setting: key::MAX_COMPACTION_LAG_MS.to_owned(),
+        current: reported
+            .map(|lag| current_label(entries, key::MAX_COMPACTION_LAG_MS, render(lag))),
+        recommended: Some(human_ms(budget)),
+        change,
+        why: format!(
+            "The setting that bounds how long a superseded record stays uncompacted. Without \
+             it the cleaner waits for `min.cleanable.dirty.ratio`, which on a large log that is \
+             mostly clean can take far longer than any roll. Past this lag it takes the log \
+             whatever its dirty ratio, and on a compacted topic the broker also rolls the active \
+             segment by it — the smaller of this and `segment.ms` governs. Like every roll, it \
+             is checked when a record arrives.{note}"
+        ),
+        caution: Some(
+            "Forcing compaction this often costs cleaner I/O: every pass rewrites the cleanable \
+             part of the log, so a lag far below what the application needs buys freshness \
+             nobody reads."
+                .to_owned(),
+        ),
+    }
+}
+
+/// How much larger than its compacted size a log may grow at a dirty ratio:
+/// `1 / (1 - r)`, rendered.
+fn space_amplification(ratio: f64) -> String {
+    format!("{:.2}×", 1.0 / (1.0 - ratio))
+}
+
 /// How many partitions a rate needs, with headroom. `None` when the capacity
 /// assumption is not a positive number.
 fn partitions_for(rate: f64, capacity_bytes: i64, headroom_percent: i64) -> Option<i64> {
@@ -1266,27 +1460,61 @@ fn partitions_for(rate: f64, capacity_bytes: i64, headroom_percent: i64) -> Opti
     to_i64(needed).map(|found| found.max(1))
 }
 
-/// A segment size from a per-partition rate and a roll interval.
+/// What decided a recommended segment size, when the arithmetic alone did not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SegmentBound {
+    /// The rate times the roll, rounded down to a power of two.
+    Rate,
+    /// Raised to the smallest segment worth recommending.
+    Floor,
+    /// Clamped under what the indexes can address, which is this many bytes.
+    Index(i64),
+    /// Capped by the setting's own 32-bit range.
+    Type,
+}
+
+/// A segment size from a per-partition rate and a roll interval: the raw
+/// product, the recommendation, and what decided it.
+///
+/// The type's range is applied before the rounding, so the answer is the
+/// largest power of two a broker will accept rather than 2³¹, which is one
+/// past what it will.
 fn segment_from_rate(
     rate_per_partition: f64,
     roll_ms: i64,
     floor: i64,
     ceiling: Option<i64>,
-) -> Option<i64> {
-    let bytes = to_i64(rate_per_partition * i64_to_f64(roll_ms) / 1000.0)?;
-    let rounded = round_to_power_of_two(bytes, floor);
-    Some(match ceiling {
-        Some(cap) if cap > 0 => rounded.min(cap).max(floor.min(cap)),
-        _ => rounded,
-    })
+) -> Option<(i64, i64, SegmentBound)> {
+    let product = to_i64(rate_per_partition * i64_to_f64(roll_ms) / 1000.0)?;
+    let index = ceiling.filter(|cap| *cap > 0 && *cap < SEGMENT_BYTES_MAX);
+    let limit = index.unwrap_or(SEGMENT_BYTES_MAX);
+    let recommended = round_to_power_of_two(product.min(limit), floor).min(limit);
+    let bound = if product > limit {
+        index.map_or(SegmentBound::Type, SegmentBound::Index)
+    } else if product <= floor {
+        SegmentBound::Floor
+    } else {
+        SegmentBound::Rate
+    };
+    Some((product, recommended, bound))
 }
 
-/// What the offset index can address, when the topic reports both halves.
+/// The roll a retention-precision deadline leaves: the overshoot allowed on
+/// the window, as a share of it. Never under a minute.
+fn overshoot_roll(window: i64, a: &Assumptions) -> i64 {
+    (window.saturating_mul(a.overshoot_percent.max(1)) / 100).max(MINUTE_MS)
+}
+
+/// What the indexes can address, when the topic reports both halves.
+///
+/// The time index fills first — see [`INDEX_ENTRY_BYTES`] — so this is its
+/// capacity, and a lower bound: an entry is added at most once per batch, so
+/// batches larger than the interval stretch it.
 fn index_ceiling(entries: &[ConfigEntryDto]) -> Option<i64> {
     let index_bytes = limit(number(entries, key::SEGMENT_INDEX_BYTES))?;
     let interval = limit(number(entries, key::INDEX_INTERVAL_BYTES))?;
     index_bytes
-        .checked_div(super::lint::INDEX_ENTRY_BYTES)
+        .checked_div(INDEX_ENTRY_BYTES)
         .and_then(|slots| slots.checked_mul(interval))
         .filter(|found| *found > 0)
 }
@@ -1653,17 +1881,239 @@ mod tests {
     }
 
     #[test]
-    fn a_segment_recommendation_stays_under_the_index_ceiling() {
-        // A firehose: 100k records an hour at 1 KiB each over one partition.
+    fn a_segment_recommendation_is_one_a_broker_accepts() {
+        // A firehose: a million records a second at 1 KiB over one partition.
+        // At default index settings the indexes would address more than the
+        // setting can hold, so its 32-bit range is what binds — and the
+        // answer is the largest power of two under it, not 2^31.
         let scan = scan(&[3_600_000_000], 1);
         let (_, _, profiles) = advise("firehose", &week(), &scan, topology(1, 3, 3));
+        for profile in Profile::ALL {
+            let segment = row(rows_of(&profiles, *profile), "segment.bytes");
+            assert_eq!(segment.recommended.as_deref(), Some("1 GiB"), "{profile:?}");
+        }
         let segment = row(rows_of(&profiles, Profile::HighThroughput), "segment.bytes");
-        assert_eq!(
-            segment.recommended.as_deref(),
-            Some("5 GiB"),
-            "clamped at segment.index.bytes / 8 x index.interval.bytes"
+        assert!(segment.why.contains("32-bit"), "{}", segment.why);
+    }
+
+    #[test]
+    fn a_small_index_clamps_the_segment_under_the_time_index() {
+        // 1 MiB of index: 12-byte time-index entries at 4 KiB each address
+        // about 341 MiB, so the segment is rounded down under that.
+        let mut entries = week();
+        entries[4] = setting("segment.index.bytes", "1048576", true);
+        let scan = scan(&[3_600_000_000], 1);
+        let (_, _, profiles) = advise("firehose", &entries, &scan, topology(1, 3, 3));
+        let segment = row(rows_of(&profiles, Profile::HighThroughput), "segment.bytes");
+        assert_eq!(segment.recommended.as_deref(), Some("256 MiB"));
+        assert!(segment.why.contains("time index"), "{}", segment.why);
+    }
+
+    #[test]
+    fn the_segment_derivation_prints_the_product_before_the_floor() {
+        // 1 KiB/s over one partition across a 7 h roll is about 24 MiB of
+        // arithmetic; a trickle is a few KiB, and the text has to say that
+        // rather than print the 16 MiB floor as if it were the product.
+        let scan = scan(&[36], 1);
+        let (_, _, profiles) = advise("trickle", &week(), &scan, topology(1, 3, 3));
+        let segment = row(rows_of(&profiles, Profile::Balanced), "segment.bytes");
+        assert_eq!(segment.recommended.as_deref(), Some("16 MiB"));
+        assert!(
+            segment.why.contains("Raised to the 16 MiB floor"),
+            "{}",
+            segment.why
         );
-        assert!(segment.why.contains("Clamped"), "{}", segment.why);
+        assert!(
+            !segment.why.contains("that is about 16 MiB"),
+            "the floor is not the product: {}",
+            segment.why
+        );
+    }
+
+    #[test]
+    fn a_roll_is_described_as_waiting_for_a_record() {
+        // Kafka checks for a roll only on append: `segment.ms` does not close
+        // a quiet partition's segment, and the row must not say it does.
+        let scan = scan(&[3_600], 1);
+        let (_, _, profiles) = advise("orders", &week(), &scan, topology(1, 3, 3));
+        let roll = row(rows_of(&profiles, Profile::Balanced), "segment.ms");
+        assert!(
+            roll.why.contains("only checked when a record arrives"),
+            "{}",
+            roll.why
+        );
+        assert!(
+            roll.why.contains("retention deletes the active segment"),
+            "{}",
+            roll.why
+        );
+
+        let mut compacted = week();
+        compacted[0] = setting("cleanup.policy", "compact", true);
+        let (_, _, profiles) = advise("state", &compacted, &scan, topology(1, 3, 3));
+        let roll = row(
+            rows_of(&profiles, Profile::CompactedChangelog),
+            "segment.ms",
+        );
+        assert!(
+            roll.why.contains("uncompacted tail until the"),
+            "{}",
+            roll.why
+        );
+    }
+
+    #[test]
+    fn a_compacted_profile_bounds_the_wait_with_the_compaction_lag() {
+        let mut entries = week();
+        entries[0] = setting("cleanup.policy", "compact", true);
+        entries.push(setting(
+            "max.compaction.lag.ms",
+            "9223372036854775807",
+            false,
+        ));
+        let scan = scan(&[1_000], 1);
+        let (_, _, profiles) = advise("state", &entries, &scan, topology(1, 3, 3));
+        let lag = row(
+            rows_of(&profiles, Profile::CompactedChangelog),
+            "max.compaction.lag.ms",
+        );
+        assert_eq!(lag.current.as_deref(), Some("never (default)"));
+        assert_eq!(lag.recommended.as_deref(), Some("1 h"));
+        assert_eq!(lag.change, Change::Decrease);
+    }
+
+    #[test]
+    fn partitions_are_sized_on_the_larger_of_the_produce_and_consume_terms() {
+        // 3,600 records an hour at 32 MiB each is 32 MiB/s. At the default
+        // 10 MiB/s of produce that is 5 partitions with headroom; at 5 MiB/s
+        // per consumer it is 10, and the consumer term has to win.
+        let mut scan = scan(&[3_600], 1);
+        if let Some(size) = scan.total_stats.value_size.as_mut() {
+            size.sum = 3_600 * 32 * 1_048_576;
+        }
+        let (_, _, profiles) = advise("orders", &week(), &scan, topology(1, 3, 3));
+        let partitions = row(rows_of(&profiles, Profile::Balanced), "partitions");
+        assert_eq!(
+            partitions.recommended.as_deref(),
+            Some("10"),
+            "{}",
+            partitions.why
+        );
+        assert!(
+            partitions.why.contains("consumer term governs"),
+            "{}",
+            partitions.why
+        );
+    }
+
+    #[test]
+    fn the_throughput_profile_keeps_a_keyless_count_and_spreads_over_brokers() {
+        // Keyless records are batched one partition at a time by the default
+        // partitioner, so fewer partitions would not batch better.
+        let mut keyless = scan(&[3_600], 16);
+        keyless.total_stats.null_keys = 3_600;
+        let measured = Measured::of(&keyless, None);
+        let (_, _, profiles) = all(
+            "logs",
+            topology(16, 3, 3),
+            &week(),
+            &measured,
+            &Assumptions::default(),
+            None,
+        );
+        let partitions = row(rows_of(&profiles, Profile::HighThroughput), "partitions");
+        assert_eq!(partitions.change, Change::Keep, "{}", partitions.why);
+        assert_eq!(partitions.recommended.as_deref(), Some("16"));
+        assert!(
+            !partitions.why.contains("request per partition"),
+            "{}",
+            partitions.why
+        );
+
+        // And a trickle on one partition of a three-broker cluster is raised
+        // to the broker count, so every broker leads a share.
+        let scan = scan(&[3_600], 1);
+        let (_, _, profiles) = advise("logs", &week(), &scan, topology(1, 3, 3));
+        let partitions = row(rows_of(&profiles, Profile::HighThroughput), "partitions");
+        assert_eq!(
+            partitions.recommended.as_deref(),
+            Some("3"),
+            "{}",
+            partitions.why
+        );
+    }
+
+    #[test]
+    fn a_ratio_below_one_is_framing_not_a_missing_codec() {
+        let scan = scan(&[1_000], 1);
+        // 1 KiB of payload per record, 3 KiB on disk: framing outweighs it.
+        let measured = Measured::of(&scan, Some(3 * 1_024 * 1_000));
+        let (_, _, profiles) = all(
+            "tiny",
+            topology(1, 3, 3),
+            &week(),
+            &measured,
+            &Assumptions::default(),
+            None,
+        );
+        let codec = row(
+            rows_of(&profiles, Profile::HighThroughput),
+            "compression.type",
+        );
+        assert_ne!(codec.recommended.as_deref(), Some("zstd"), "{}", codec.why);
+        assert!(codec.why.contains("linger.ms"), "{}", codec.why);
+
+        // Just above one: compress at the producers, not on the topic.
+        let measured = Measured::of(&scan, Some(1_000 * 1_000));
+        let (_, _, profiles) = all(
+            "logs",
+            topology(1, 3, 3),
+            &week(),
+            &measured,
+            &Assumptions::default(),
+            None,
+        );
+        let codec = row(
+            rows_of(&profiles, Profile::HighThroughput),
+            "compression.type",
+        );
+        assert_eq!(
+            codec.recommended.as_deref(),
+            Some("producer"),
+            "{}",
+            codec.why
+        );
+        assert!(codec.why.contains("rebuild every batch"), "{}", codec.why);
+    }
+
+    #[test]
+    fn a_partial_scan_compares_its_sample_with_the_same_share_of_the_disk() {
+        // A tenth of the log read: 1,000 records against a whole topic of
+        // 40,960,000 bytes is 4 KiB per record, not 40.
+        let mut sample = scan(&[1_000], 1);
+        sample.complete = false;
+        sample.stopped_by = crate::analysis::AnalysisStop::MessageCap;
+        sample.scanned_fraction = Some(0.1);
+        let measured = Measured::of(&sample, Some(40_960_000));
+        assert_eq!(measured.bytes_per_record.map(f64::round), Some(4_096.0));
+        assert!(
+            measured.bytes_per_record_source.contains("scaled"),
+            "{}",
+            measured.bytes_per_record_source
+        );
+        assert_eq!(
+            measured
+                .compression_ratio
+                .map(|ratio| (ratio * 100.0).round()),
+            Some(25.0)
+        );
+
+        // A partial scan that cannot say what share it read gets no disk
+        // figure rather than a wrong one.
+        sample.scanned_fraction = None;
+        let measured = Measured::of(&sample, Some(40_960_000));
+        assert!(measured.bytes_per_record_source.contains("underestimate"));
+        assert_eq!(measured.compression_ratio, None);
     }
 
     #[test]
@@ -1681,6 +2131,58 @@ mod tests {
         );
         assert_eq!(ratio.change, Change::Decrease);
         assert!(ratio.why.contains("10%"), "{}", ratio.why);
+        // Both sides of the trade, for the current value and the proposal.
+        assert!(ratio.why.contains("at the current 0.5"), "{}", ratio.why);
+        assert!(ratio.why.contains("at 0.1"), "{}", ratio.why);
+    }
+
+    #[test]
+    fn distinct_keys_are_counted_against_the_records_that_carry_one() {
+        // Half the records keyless, a hundred distinct keys among the other
+        // five hundred: 20% distinct, not the 10% all-records would say.
+        let mut mixed = scan(&[1_000], 1);
+        mixed.total_stats.null_keys = 500;
+        mixed.total_stats.approx_uniq_keys = 100;
+        let measured = Measured::of(&mixed, None);
+        assert_eq!(
+            measured
+                .distinct_key_fraction
+                .map(|found| (found * 100.0).round()),
+            Some(20.0)
+        );
+
+        // No keys at all is no fraction, and the dirty-ratio row says why
+        // rather than reading the topic as entirely superseded.
+        let mut keyless = scan(&[1_000], 1);
+        keyless.total_stats.null_keys = 1_000;
+        keyless.total_stats.approx_uniq_keys = 0;
+        let measured = Measured::of(&keyless, None);
+        assert_eq!(measured.distinct_key_fraction, None);
+        let mut entries = week();
+        entries[0] = setting("cleanup.policy", "compact", true);
+        let (_, _, profiles) = all(
+            "keyless",
+            topology(1, 3, 3),
+            &entries,
+            &measured,
+            &Assumptions::default(),
+            None,
+        );
+        let ratio = row(
+            rows_of(&profiles, Profile::CompactedChangelog),
+            "min.cleanable.dirty.ratio",
+        );
+        assert_eq!(ratio.recommended, None);
+        assert!(
+            ratio.why.contains("Nothing scanned carried a key"),
+            "{}",
+            ratio.why
+        );
+        assert!(
+            !ratio.why.contains("superseded and waiting"),
+            "{}",
+            ratio.why
+        );
     }
 
     #[test]

@@ -117,7 +117,7 @@ export function AnalysisResult({
                     label="≈ unique keys"
                     value={count(totals.approxUniqKeys)}
                     note="estimate"
-                    hint="distinct keys, from a cardinality sketch (±1.6%) — against messages scanned it reads as compaction headroom"
+                    hint="distinct keys, from a cardinality sketch (±1.6%) — against the records that carry a key (messages scanned less null keys) it reads as compaction headroom"
                   />
                   <Stat
                     label="≈ unique values"

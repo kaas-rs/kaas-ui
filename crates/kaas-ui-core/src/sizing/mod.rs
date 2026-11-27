@@ -51,6 +51,7 @@ mod key {
     pub const MESSAGE_TIMESTAMP_TYPE: &str = "message.timestamp.type";
     pub const MIN_CLEANABLE_DIRTY_RATIO: &str = "min.cleanable.dirty.ratio";
     pub const DELETE_RETENTION_MS: &str = "delete.retention.ms";
+    pub const MAX_COMPACTION_LAG_MS: &str = "max.compaction.lag.ms";
     pub const MAX_MESSAGE_BYTES: &str = "max.message.bytes";
     pub const COMPRESSION_TYPE: &str = "compression.type";
     pub const MIN_INSYNC_REPLICAS: &str = "min.insync.replicas";
@@ -65,6 +66,7 @@ mod key {
         SEGMENT_INDEX_BYTES,
         INDEX_INTERVAL_BYTES,
         MIN_CLEANABLE_DIRTY_RATIO,
+        MAX_COMPACTION_LAG_MS,
         DELETE_RETENTION_MS,
         MIN_INSYNC_REPLICAS,
         MESSAGE_TIMESTAMP_TYPE,
@@ -105,8 +107,8 @@ pub enum DiagnosticCode {
     /// A compacted topic's active segment is never cleaned, and this one is
     /// not rolling.
     CompactedTailNeverCleaned,
-    /// `segment.bytes` is above what the offset index can address, so the
-    /// index rolls the segment first and the setting does not govern.
+    /// `segment.bytes` is above what the indexes can address, so an index
+    /// fills and rolls the segment first and the setting does not govern.
     SegmentAboveIndexCeiling,
     /// One partition holds much more than its share.
     SkewedPartitions,

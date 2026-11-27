@@ -17,12 +17,27 @@ use super::{
     policy,
 };
 
-/// Bytes in one offset-index entry: a relative offset and a file position,
-/// four bytes each.
+/// Bytes in one time-index entry: an eight-byte timestamp and a four-byte
+/// relative offset.
+///
+/// `segment.index.bytes` sizes *both* of a segment's indexes, and a segment
+/// rolls when either is full. They gain an entry together — one per
+/// `index.interval.bytes` of appended batches — and the offset index's
+/// entries are eight bytes to this one's twelve, so the time index is always
+/// the one that fills first and the one the ceiling is computed from.
 ///
 /// A property of the index format rather than of a release, which is why it
 /// can be a constant here at all.
-pub(super) const INDEX_ENTRY_BYTES: i64 = 8;
+pub(super) const INDEX_ENTRY_BYTES: i64 = 12;
+
+/// The largest `segment.bytes` a broker accepts.
+///
+/// The setting is a 32-bit integer, so past this the broker refuses the value
+/// outright — a recommendation above it is not a configuration, it is an
+/// error message. A property of the setting's type rather than of a release;
+/// `DescribeConfigs` reports the type, and kaas-lib's `ConfigEntry` does not
+/// carry it yet, so it is spelled here.
+pub(super) const SEGMENT_BYTES_MAX: i64 = 2_147_483_647;
 
 /// How much larger than the mean a partition must be to be called skewed.
 ///
@@ -156,7 +171,7 @@ fn retention_outlives_its_segment(
         (Some(bytes), true, true) => detail.push_str(&format!(
             " Every measured partition already holds more than one `segment.bytes` ({}), so the \
              size roll is firing and retention is probably keeping up. Volume is what makes that \
-             true; it stops being true if the topic goes quiet.",
+             true; it stops being true if the topic slows down.",
             human_bytes(bytes),
         )),
         _ => detail.push_str(
@@ -269,6 +284,11 @@ fn compacted_tail_never_cleaned(
     let Some(segment_ms) = limit(number(entries, key::SEGMENT_MS)) else {
         return;
     };
+    // On a compacted topic the broker rolls by the smaller of `segment.ms`
+    // and `max.compaction.lag.ms`, so a lag shorter than the roll is what
+    // actually closes the tail.
+    let lag_ms = limit(number(entries, key::MAX_COMPACTION_LAG_MS)).filter(|lag| *lag < segment_ms);
+    let roll_ms = lag_ms.unwrap_or(segment_ms);
     let segment_bytes = limit(number(entries, key::SEGMENT_BYTES));
     let stuck = segment_bytes
         .map(|bytes| below_one_segment(leader_bytes, bytes))
@@ -288,15 +308,30 @@ fn compacted_tail_never_cleaned(
         },
         summary: format!(
             "the compacted tail can stay uncompacted for {}",
-            human_ms(segment_ms)
+            human_ms(roll_ms)
         ),
         detail: format!(
             "Compaction runs on closed segments only — the active one is never cleaned, so a key \
-             overwritten there keeps both copies until the segment rolls. `segment.ms` is {}{}, \
-             which is how long that can last{}. On a changelog read by a restoring application \
-             it is also how much of the restore is duplicate work.",
-            human_ms(segment_ms),
-            default_note(entries, key::SEGMENT_MS),
+             overwritten there keeps both copies until the segment rolls. {}, which is the \
+             least that can last{}. It is the least because a roll is only checked when a record \
+             arrives, so a partition that stops writing keeps its tail open until the next one; \
+             and a closed segment is only eligible, since the cleaner takes the log once its \
+             dirty ratio passes `min.cleanable.dirty.ratio`. On a changelog read by a restoring \
+             application it is also how much of the restore is duplicate work.",
+            match lag_ms {
+                Some(lag) => format!(
+                    "`max.compaction.lag.ms` is {}, which on a compacted topic caps the roll \
+                     below `segment.ms` ({}{})",
+                    human_ms(lag),
+                    human_ms(segment_ms),
+                    default_note(entries, key::SEGMENT_MS),
+                ),
+                None => format!(
+                    "`segment.ms` is {}{}",
+                    human_ms(segment_ms),
+                    default_note(entries, key::SEGMENT_MS),
+                ),
+            },
             match segment_bytes {
                 Some(bytes) if !stuck.is_empty() => {
                     let (phrase, _, _) = holds(stuck.len(), leader_bytes.unwrap_or(&[]).len());
@@ -313,7 +348,7 @@ fn compacted_tail_never_cleaned(
     });
 }
 
-/// `segment.bytes` above what the offset index can address.
+/// `segment.bytes` above what the indexes can address.
 fn segment_above_index_ceiling(entries: &[ConfigEntryDto], out: &mut Vec<Diagnostic>) {
     let (Some(segment_bytes), Some(index_bytes), Some(interval)) = (
         limit(number(entries, key::SEGMENT_BYTES)),
@@ -338,11 +373,14 @@ fn segment_above_index_ceiling(entries: &[ConfigEntryDto], out: &mut Vec<Diagnos
             human_bytes(ceiling)
         ),
         detail: format!(
-            "The offset index holds one {INDEX_ENTRY_BYTES}-byte entry per \
-             `index.interval.bytes` of log. At {} of index and an interval of {}, it addresses \
-             about {} — so a segment rolls there whatever `segment.bytes` says, and the {} \
-             configured is not the number that governs. Harmless, but it means a change to \
-             `segment.bytes` will do nothing until it drops below the ceiling.",
+            "`segment.index.bytes` sizes both of a segment's indexes, and the time index fills \
+             first: one {INDEX_ENTRY_BYTES}-byte entry per `index.interval.bytes` of log, \
+             against the offset index's eight. At {} of index and an interval of {}, it \
+             addresses at least {} — more where batches are larger than the interval, since an \
+             entry is added at most once per batch — so a segment can roll there whatever \
+             `segment.bytes` says, and the {} configured is not the number that governs. \
+             Harmless, but it means a change to `segment.bytes` may do nothing until it drops \
+             below the ceiling.",
             human_bytes(index_bytes),
             human_bytes(interval),
             human_bytes(ceiling),
@@ -599,6 +637,26 @@ mod tests {
     }
 
     #[test]
+    fn a_compaction_lag_shorter_than_the_roll_is_what_closes_the_tail() {
+        // On a compacted topic the broker rolls by the smaller of the two.
+        let entries = vec![
+            setting("cleanup.policy", "compact", true),
+            setting("segment.ms", "604800000", false),
+            setting("max.compaction.lag.ms", "3600000", true),
+        ];
+        let report = lint(&entries, None);
+        let diagnostic = one(&report, DiagnosticCode::CompactedTailNeverCleaned);
+        assert!(diagnostic.summary.contains("1 h"), "{}", diagnostic.summary);
+        assert!(
+            diagnostic.detail.contains("max.compaction.lag.ms"),
+            "{}",
+            diagnostic.detail
+        );
+        // And the bound is a floor, said as one: rolls wait for a record.
+        assert!(diagnostic.detail.contains("least"), "{}", diagnostic.detail);
+    }
+
+    #[test]
     fn a_compacted_topic_whose_segments_roll_is_left_alone() {
         let entries = vec![
             setting("cleanup.policy", "compact", true),
@@ -613,15 +671,23 @@ mod tests {
     fn a_segment_above_the_index_ceiling_is_reported_with_the_ceiling() {
         let entries = vec![
             setting("cleanup.policy", "delete", false),
-            // 10 MiB of index at 4 KiB per entry addresses about 5 GiB.
+            // 10 MiB of index at 4 KiB per entry: the time index's 12-byte
+            // entries fill at a little over 3 GiB, before the offset
+            // index's 8-byte ones would at 5.
             setting("segment.index.bytes", "10485760", false),
             setting("index.interval.bytes", "4096", false),
             setting("segment.bytes", "17179869184", true),
         ];
         let report = lint(&entries, None);
         let diagnostic = one(&report, DiagnosticCode::SegmentAboveIndexCeiling);
+        let ceiling = human_bytes(10_485_760 / 12 * 4_096);
         assert!(
-            diagnostic.summary.contains("5 GiB"),
+            diagnostic.summary.contains(&ceiling),
+            "the time index governs, so the ceiling is {ceiling}: {}",
+            diagnostic.summary
+        );
+        assert!(
+            !diagnostic.summary.contains("5 GiB"),
             "{}",
             diagnostic.summary
         );

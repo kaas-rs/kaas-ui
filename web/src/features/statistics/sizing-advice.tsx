@@ -163,20 +163,21 @@ function MeasuredCard({ advice }: { advice: Advice }) {
             label="distinct keys"
             value={percent(m.distinctKeyFraction)}
             note="estimate"
-            hint="distinct keys over records, from the same sketch the totals use — compaction headroom"
+            hint="distinct keys over the records that carry one, from the same sketch the totals use — compaction headroom. Keyless records are left out: compaction works per key, and a compacted topic refuses a record without one"
           />
           <Stat
             label="compression"
             value={times(m.compressionRatio)}
-            hint="payload produced over bytes on disk; near 1× means little is being compressed"
+            hint="payload produced over bytes on disk. Near 1× means little is being compressed; below 1× means batch and record framing outweigh small payloads, which is a batching question rather than a codec one. Headers and framing are on disk and not in the payload, so this understates what a codec achieves"
           />
         </dl>
         {!m.complete ? (
           <p className="text-warn-ink text-[12px]">
             <strong>Measured on a sample.</strong> The scan stopped early, so
             every rate above describes the {count(m.records)} records it read
-            from the beginning of the topic rather than the whole retained log.
-            Run it uncapped before acting on a partition count.
+            from the beginning of the topic rather than the whole retained log,
+            and bytes per record compares them with the same share of the disk —
+            an estimate. Run it uncapped before acting on a partition count.
           </p>
         ) : null}
         {m.clock === "createTime" || m.clock === "mixed" ? (
