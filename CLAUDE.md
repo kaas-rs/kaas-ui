@@ -130,13 +130,15 @@ Two consequences, both load-bearing:
 - **Docker is not available.** kaas-lib's `testcontainers` approach cannot be
   copied. There is no `cargo xtask integration`.
 - **Both Kafka clusters are dialable by service DNS.** So acceptance runs
-  against two real three-node clusters instead of one container.
+  against two real clusters instead of one container — a single-broker kaas
+  and a three-node Strimzi, so anything multi-broker (placement, replication,
+  per-broker disagreement) has its live fixture on Strimzi only.
 
 | | `kaas` | `strimzi` |
 |---|---|---|
 | bootstrap | `kaas.kaas.svc.cluster.local:9095` | `kafka-cluster-kafka-bootstrap.strimzi.svc.cluster.local:9095` |
 | auth | SCRAM over TLS, `kafbat-ui`; `scripts/dev-credentials.sh` | same |
-| what | the kaas broker, 3 replicas | Apache Kafka 4.2.0 via Strimzi, 3 dual-role |
+| what | the kaas broker, **1 broker**, every topic RF 1 | Apache Kafka 4.2.0 via Strimzi, 3 dual-role |
 | api keys | **40** | **75** |
 | notable | 24 ACLs; no topic ids; **no `DescribeCluster`** | keys 88/89 unnameable by our codec; 8 keys ahead of it |
 

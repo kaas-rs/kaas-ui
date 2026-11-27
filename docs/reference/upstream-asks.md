@@ -83,9 +83,10 @@ capabilities response.
 
 The failure mode if this is skipped is nasty: a capability table computed from
 one arbitrary broker looks perfect on every single-broker fixture and misbehaves
-on the first rolling upgrade. Both dev clusters are three-node, so kaas-ui can
-at least *detect* disagreement by polling more than one connection — but
-detecting it is not the same as modelling it.
+on the first rolling upgrade. Strimzi is three-node — kaas has run a single
+broker since 2026-10-19 — so kaas-ui can at least *detect* disagreement there by
+polling more than one connection, but detecting it is not the same as modelling
+it.
 
 ## 2. Batched `FindCoordinator` (KIP-699)
 

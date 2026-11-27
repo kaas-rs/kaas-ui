@@ -19,8 +19,9 @@ $ getent hosts kafka-cluster-kafka-bootstrap.strimzi.svc.cluster.local
 10.43.77.227
 ```
 
-So kaas-ui trades a hermetic single-broker fixture for **two shared, long-lived,
-three-node clusters running software we did not choose** — which is the harder
+So kaas-ui trades a hermetic single-broker fixture for **two shared, long-lived
+clusters running software we did not choose** — a single-broker kaas and a
+three-node Strimzi — which is the harder
 and more honest target, and the surface kaas-ui is dogfooded on.
 Every phase's acceptance command below runs against them.
 
@@ -30,7 +31,7 @@ Every phase's acceptance command below runs against them.
 |---|---|---|
 | namespace | `kaas` | `strimzi` |
 | bootstrap (development) | `kaas.kaas.svc.cluster.local:9095` | `kafka-cluster-kafka-bootstrap.strimzi.svc.cluster.local:9095` |
-| what it is | the `kaas` broker, 3 replicas, under development | Apache Kafka **4.2.0** via Strimzi, 3 dual-role nodes |
+| what it is | the `kaas` broker, under development — **one broker** since 2026-10-19 (`k3s-cluster` `26215af`, single broker on local-path storage), so all 9 topics are RF 1; measured 2026-11-27 | Apache Kafka **4.2.0** via Strimzi, 3 dual-role nodes |
 | listeners | mtls 9093, scram 9095, oauth 9096 — **no plaintext** | the same three, same ports |
 | api keys advertised | **40** (was 37) | **75** |
 | topics | 13 | 17, of which 2 internal |
