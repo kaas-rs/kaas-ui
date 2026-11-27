@@ -6,7 +6,7 @@
     "license": {
       "name": "Apache-2.0"
     },
-    "version": "0.18.0"
+    "version": "0.18.1"
   },
   "paths": {
     "/api/environments": {
@@ -6984,7 +6984,7 @@
               "null"
             ],
             "format": "double",
-            "description": "Distinct keys over records — compaction headroom, from a sketch."
+            "description": "Distinct keys over the records that carried one — compaction\nheadroom, from a sketch.\n\nKeyed records only, because compaction works per key and a compacted\ntopic refuses a record without one: a keyless record is neither\ndistinct nor superseded, and counting it in the denominator read an\nunkeyed topic as \"0% distinct, 100% superseded\". `None` when nothing\nscanned carried a key."
           },
           "keyedFraction": {
             "type": [
