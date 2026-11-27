@@ -7,11 +7,11 @@
 // stop — is the cancellation; there is no verb for it and none is needed.
 //
 // The finished result goes into the TanStack Query cache under the topic's
-// key. That is deliberately unlike the message stream, whose rows must never
-// enter the cache: a result is a terminal value, not a stream, so revisiting
-// the tab is instant and costs no server-side store. The trade, made openly:
-// the cache is per-browser, so two people analysing the same topic scan it
-// twice.
+// key, for the rest of the session. That is deliberately unlike the message
+// stream, whose rows must never enter the cache: a result is a terminal
+// value, not a stream, so revisiting the tab is instant and costs no
+// server-side store. The trade, made openly: the cache is per-browser, so two
+// people analysing the same topic scan it twice.
 //
 // Two numbers lie unless labelled: the unique counts and the percentiles are
 // sketch estimates, and every rendering of them here carries the ≈ and a note

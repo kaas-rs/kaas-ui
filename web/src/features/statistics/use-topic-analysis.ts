@@ -94,6 +94,12 @@ export function useTopicAnalysis({
     es.addEventListener("result", (event) => {
       const body = parse<TopicAnalysis>((event as MessageEvent).data)
       if (!body) return
+      // Nothing observes this entry — the panel holds the result in its own
+      // state — so TanStack's default `gcTime` would drop it five minutes
+      // after it arrived, measured, and a revisit after a five-minute scan
+      // would open on the start button again. A result is kept for the
+      // session; "analyse again" is how it is replaced.
+      queryClient.setQueryDefaults(["analysis"], { gcTime: Infinity })
       queryClient.setQueryData(cacheKey, body)
       setPhase({ kind: "done", result: body })
     })

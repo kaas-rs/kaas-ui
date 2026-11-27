@@ -12,8 +12,16 @@ import { count } from "@/lib/format"
  * caption says which clock is being plotted, because `createTime` and
  * `logAppendTime` can disagree by however long a producer buffers.
  *
- * Hover is a column per hour, wider than the line, with the hour and its
+ * Hover is a column per point, wider than the line, with the hour and its
  * count — the mark itself is too thin to be a hit target.
+ *
+ * **The zero-fill is bounded by points, not by hours.** The backend caps the
+ * hours it holds, but filling the gaps between the first and the last is a
+ * function of their *distance*: one record stamped `0` beside a week of real
+ * ones spans 56 years, and filling that hour by hour built half a million
+ * SVG nodes and froze the tab. So a span wider than `MAX_POINTS` hours is
+ * drawn with each point averaging a run of hours — still records per hour,
+ * so the axis keeps its unit — and the caption says how many.
  */
 export function HourlyChart({
   stats,
@@ -25,6 +33,8 @@ export function HourlyChart({
   clock: string | null
 }) {
   const HOUR = 3_600_000
+  // One point per unit of the viewBox's width: more would be sub-pixel.
+  const MAX_POINTS = 800
   const WIDTH = 800
   const HEIGHT = 190
   const PLOT = { left: 46, right: 8, top: 8, bottom: 28 }
@@ -35,21 +45,29 @@ export function HourlyChart({
   if (hours.length === 0) return null
   const first = hours[0]?.hourStart ?? 0
   const last = hours[hours.length - 1]?.hourStart ?? first
-  const span = Math.max(1, Math.round((last - first) / HOUR) + 1)
-  const peak = Math.max(...hours.map((hour) => hour.count))
+  const spanHours = Math.max(1, Math.round((last - first) / HOUR) + 1)
 
-  // Zero-filled, in hour order. Bounded: the accumulator caps its buckets,
-  // so the span here is at most the cap plus the gaps inside it.
-  const byHour = new Map(hours.map((hour) => [hour.hourStart, hour.count]))
-  const series: Array<{ hourStart: number; count: number }> = []
-  for (let index = 0; index < span; index += 1) {
-    const hourStart = first + index * HOUR
-    series.push({ hourStart, count: byHour.get(hourStart) ?? 0 })
+  // Zero-filled, in time order, and never more than MAX_POINTS long: each
+  // point covers `per` hours and plots their mean, so a quiet hour still
+  // pulls its point towards zero rather than being bridged over.
+  const per = Math.ceil(spanHours / MAX_POINTS)
+  const width = per * HOUR
+  const points = Math.ceil(spanHours / per)
+  const sums = new Array<number>(points).fill(0)
+  for (const hour of hours) {
+    const index = Math.floor((hour.hourStart - first) / width)
+    if (index >= 0 && index < points)
+      sums[index] = (sums[index] ?? 0) + hour.count
   }
+  const series = sums.map((sum, index) => ({
+    hourStart: first + index * width,
+    count: sum / per,
+  }))
+  const peak = Math.max(...series.map((point) => point.count))
 
-  const step = plotWidth / span
+  const step = plotWidth / points
   const x = (hourStart: number) =>
-    PLOT.left + ((hourStart - first) / HOUR) * step + step / 2
+    PLOT.left + ((hourStart - first) / width) * step + step / 2
   const y = (value: number) => PLOT.top + plotHeight * (1 - value / peak)
   const path = series
     .map(
@@ -59,7 +77,7 @@ export function HourlyChart({
     .join(" ")
 
   // Recessive gridlines; the labels wear ink, never the series colour.
-  const ticks = [peak, Math.round(peak / 2)].filter(
+  const ticks = [Math.round(peak), Math.round(peak / 2)].filter(
     (tick, index, all) => tick > 0 && all.indexOf(tick) === index
   )
 
@@ -141,7 +159,9 @@ export function HourlyChart({
             fill="transparent"
           >
             <title>
-              {`${hourLabel(point.hourStart)} — ${count(point.count)} record${point.count === 1 ? "" : "s"}`}
+              {per === 1
+                ? `${hourLabel(point.hourStart)} — ${count(point.count)} record${point.count === 1 ? "" : "s"}`
+                : `${hourLabel(point.hourStart)} → ${hourLabel(point.hourStart + width - 1)} — ${count(Math.round(point.count))} records per hour on average`}
             </title>
           </rect>
         ))}
@@ -166,6 +186,7 @@ export function HourlyChart({
       <figcaption className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-ink-faint">
         <span>
           plotted by {clock ?? "record timestamp"}
+          {per > 1 ? ` · each point averages ${count(per)} hours` : ""}
           {stats.missingTimestamps > 0
             ? ` · ${count(stats.missingTimestamps)} record(s) with no timestamp are not plotted`
             : ""}
