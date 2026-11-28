@@ -12,9 +12,9 @@ The workspace is six crates, a frontend and an xtask.
 ```sh
 cargo xtask ci      # green: fmt, clippy, unit tests, seven invariant checks, the chart, cargo audit
 cargo xtask live    # against kaas, strimzi and a dead cluster. Red on 2026-11-28,
-                    # 44 green and 21 red before it stops at Connect: Strimzi is
-                    # switched off (brokers and the Connect worker), and Apicurio
-                    # has been TLS- and Entra-only since 2026-10-31, which
+                    # 52 of 77 green. 19 red are Strimzi being switched off
+                    # (brokers and the Connect worker), and 6 are Apicurio,
+                    # TLS- and Entra-only since 2026-10-31, which
                     # config.dev.yaml has not followed.
 cargo xtask login   # green: 14 assertions, a real login against the dex-test app
                     # on production's Dex digest. Both need .dev/credentials.env

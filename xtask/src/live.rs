@@ -1444,59 +1444,68 @@ async fn assertions() -> Result<Acceptance, String> {
         },
     );
 
-    // Falling back is free and needs no schema: the raw bytes travelled beside
-    // the decoded value, so this is the same record read differently rather
-    // than a second read of it.
-    let overridden = get(
+    // From here to the end of the payload filter, every read is of the canary,
+    // and both clusters carry one. So each claim is asked of each, rather than
+    // of whichever cluster happened to be chosen when the check was written:
+    // with one of them down, the other still settles it, and the one that is
+    // down fails under its own name instead of taking the claim with it.
+    for cluster in ["kaas", "strimzi"] {
+        // Falling back is free and needs no schema: the raw bytes travelled beside
+        // the decoded value, so this is the same record read differently rather
+        // than a second read of it.
+        let overridden = get(
         &client,
-        &format!("/api/environments/{ENV}/clusters/strimzi/topics/{CANARY}/messages/tail?limit=1&valueCodec=hex"),
+        &format!("/api/environments/{ENV}/clusters/{cluster}/topics/{CANARY}/messages/tail?limit=1&valueCodec=hex"),
     )
     .await;
-    acceptance.check(
-        "the same topic renders as hex when the codec is overridden",
-        match overridden.map(|body| body["items"][0]["value"].clone()) {
-            Ok(value)
-                if value["codec"] == "hex"
-                    && value["note"].is_null()
-                    && value["text"].as_str().is_some_and(|text| {
-                        // Framed, so the rendering starts with the magic byte
-                        // and the four-byte id it carried.
-                        text.starts_with("00000000")
-                    }) =>
-            {
-                Ok(String::new())
-            }
-            Ok(value) => Err(format!("{value}")),
-            Err(error) => Err(error),
-        },
-    );
-
-    // A header is an ordinary unframed payload on a registry-backed record.
-    // Absence of framing is not a failure, and the two paths do not compete
-    // for the same bytes even inside one record.
-    let headers = get(
-        &client,
-        &format!("/api/environments/{ENV}/clusters/strimzi/topics/{CANARY}/messages/tail?limit=1"),
-    )
-    .await
-    .map(|body| body["items"][0]["headers"].clone());
-    acceptance.check(
-        "an unframed payload renders without a decode-error",
-        match headers {
-            Ok(Value::Array(headers)) if !headers.is_empty() => {
-                let clean = headers.iter().all(|header| {
-                    header["value"]["note"].is_null() && header["value"]["codec"] == "auto"
-                });
-                if clean {
-                    Ok(format!("{} header(s)", headers.len()))
-                } else {
-                    Err(format!("{headers:?}"))
+        acceptance.check(
+            &format!("{cluster}: the same topic renders as hex when the codec is overridden"),
+            match overridden.map(|body| body["items"][0]["value"].clone()) {
+                Ok(value)
+                    if value["codec"] == "hex"
+                        && value["note"].is_null()
+                        && value["text"].as_str().is_some_and(|text| {
+                            // Framed, so the rendering starts with the magic byte
+                            // and the four-byte id it carried.
+                            text.starts_with("00000000")
+                        }) =>
+                {
+                    Ok(String::new())
                 }
-            }
-            Ok(other) => Err(format!("no headers to check: {other}")),
-            Err(error) => Err(error),
-        },
-    );
+                Ok(value) => Err(format!("{value}")),
+                Err(error) => Err(error),
+            },
+        );
+
+        // A header is an ordinary unframed payload on a registry-backed record.
+        // Absence of framing is not a failure, and the two paths do not compete
+        // for the same bytes even inside one record.
+        let headers = get(
+            &client,
+            &format!(
+                "/api/environments/{ENV}/clusters/{cluster}/topics/{CANARY}/messages/tail?limit=1"
+            ),
+        )
+        .await
+        .map(|body| body["items"][0]["headers"].clone());
+        acceptance.check(
+            &format!("{cluster}: an unframed payload renders without a decode-error"),
+            match headers {
+                Ok(Value::Array(headers)) if !headers.is_empty() => {
+                    let clean = headers.iter().all(|header| {
+                        header["value"]["note"].is_null() && header["value"]["codec"] == "auto"
+                    });
+                    if clean {
+                        Ok(format!("{} header(s)", headers.len()))
+                    } else {
+                        Err(format!("{headers:?}"))
+                    }
+                }
+                Ok(other) => Err(format!("no headers to check: {other}")),
+                Err(error) => Err(error),
+            },
+        );
+    }
 
     // The browser hangs off the *registry*, not off a cluster: it used to be
     // `/api/clusters/{id}/schemas`, which made "the same subjects from either
@@ -1738,17 +1747,18 @@ async fn assertions() -> Result<Acceptance, String> {
     // it exists in the schema and in the rendering and nowhere in the bytes.
     // A filter applied before the decode could not find it, and one applied
     // after cannot miss it.
-    let by_field_name = get(
-        &client,
-        &format!(
-            "/api/environments/{ENV}/clusters/strimzi/topics/{CANARY}/messages\
+    for cluster in ["kaas", "strimzi"] {
+        let by_field_name = get(
+            &client,
+            &format!(
+                "/api/environments/{ENV}/clusters/{cluster}/topics/{CANARY}/messages\
              ?mode=newest&limit=20&filter={}",
-            urlencode("sequence")
-        ),
-    )
-    .await;
-    acceptance.check(
-        "the payload filter matches a field name the encoded bytes do not contain",
+                urlencode("sequence")
+            ),
+        )
+        .await;
+        acceptance.check(
+        &format!("{cluster}: the payload filter matches a field name the encoded bytes do not contain"),
         match by_field_name {
             Ok(body) => {
                 let rows = body["items"].as_array().cloned().unwrap_or_default();
@@ -1778,51 +1788,51 @@ async fn assertions() -> Result<Acceptance, String> {
         },
     );
 
-    // The needle is data. Every character in it means itself, so a regex that
-    // would match everything matches nothing at all.
-    let as_a_pattern = get(
-        &client,
-        &format!(
-            "/api/environments/{ENV}/clusters/strimzi/topics/{CANARY}/messages\
+        // The needle is data. Every character in it means itself, so a regex that
+        // would match everything matches nothing at all.
+        let as_a_pattern = get(
+            &client,
+            &format!(
+                "/api/environments/{ENV}/clusters/{cluster}/topics/{CANARY}/messages\
              ?mode=newest&limit=20&filter={}",
-            urlencode(".*")
-        ),
-    )
-    .await;
-    acceptance.check(
-        "a needle is matched literally rather than as a pattern",
-        match as_a_pattern {
-            Ok(body) => {
-                let rows = body["items"].as_array().map_or(0, Vec::len);
-                if rows == 0 {
-                    Ok(String::new())
-                } else {
-                    Err(format!("{rows} rows matched `.*` as a pattern"))
-                }
-            }
-            Err(error) => Err(error),
-        },
-    );
-
-    // The property paging rests on now that the filter runs after the decode:
-    // a window read in full that matched nothing is not the end of the topic,
-    // and the page has to say where to look next anyway. Anchoring on the rows
-    // would answer `null` here and stop paging with the topic barely touched.
-    //
-    // Asserted on both directions, because they reach it by different routes:
-    // the forward one counts what the scan emitted, the backward one asks each
-    // walk whether it reached the start of its partition's retention. Both
-    // promise `hasMore` here. The backward half could not until kaas-lib 0.9 —
-    // `tail` divided its limit across every partition before knowing which
-    // held anything, so on this canary, where one of three holds the records,
-    // a window of 20 read 7 and never filled its budget.
-    for mode in ["oldest", "newest"] {
+                urlencode(".*")
+            ),
+        )
+        .await;
         acceptance.check(
-            &format!("a {mode} window that matched nothing still says where the next one starts"),
+            &format!("{cluster}: a needle is matched literally rather than as a pattern"),
+            match as_a_pattern {
+                Ok(body) => {
+                    let rows = body["items"].as_array().map_or(0, Vec::len);
+                    if rows == 0 {
+                        Ok(String::new())
+                    } else {
+                        Err(format!("{rows} rows matched `.*` as a pattern"))
+                    }
+                }
+                Err(error) => Err(error),
+            },
+        );
+
+        // The property paging rests on now that the filter runs after the decode:
+        // a window read in full that matched nothing is not the end of the topic,
+        // and the page has to say where to look next anyway. Anchoring on the rows
+        // would answer `null` here and stop paging with the topic barely touched.
+        //
+        // Asserted on both directions, because they reach it by different routes:
+        // the forward one counts what the scan emitted, the backward one asks each
+        // walk whether it reached the start of its partition's retention. Both
+        // promise `hasMore` here. The backward half could not until kaas-lib 0.9 —
+        // `tail` divided its limit across every partition before knowing which
+        // held anything, so on this canary, where one of three holds the records,
+        // a window of 20 read 7 and never filled its budget.
+        for mode in ["oldest", "newest"] {
+            acceptance.check(
+            &format!("{cluster}: a {mode} window that matched nothing still says where the next one starts"),
             match get(
                 &client,
                 &format!(
-                    "/api/environments/{ENV}/clusters/strimzi/topics/{CANARY}/messages\
+                    "/api/environments/{ENV}/clusters/{cluster}/topics/{CANARY}/messages\
                      ?mode={mode}&limit=20&filter={}",
                     urlencode("no-record-contains-this-needle")
                 ),
@@ -1843,75 +1853,76 @@ async fn assertions() -> Result<Acceptance, String> {
                 Err(error) => Err(error),
             },
         );
-    }
+        }
 
-    // Partition selection is in the scan spec, so the broker never sends the
-    // others — the filter narrows what is rendered, not what is read.
-    //
-    // Which partition is asked for is discovered rather than assumed: the
-    // canary keys its records, so a hardcoded partition is a fixture that
-    // silently becomes empty the first time the key distribution changes.
-    let busiest = get(
+        // Partition selection is in the scan spec, so the broker never sends the
+        // others — the filter narrows what is rendered, not what is read.
+        //
+        // Which partition is asked for is discovered rather than assumed: the
+        // canary keys its records, so a hardcoded partition is a fixture that
+        // silently becomes empty the first time the key distribution changes.
+        let busiest = get(
         &client,
         &format!(
-            "/api/environments/{ENV}/clusters/strimzi/topics/{CANARY}/messages?mode=newest&limit=1"
+            "/api/environments/{ENV}/clusters/{cluster}/topics/{CANARY}/messages?mode=newest&limit=1"
         ),
     )
     .await
     .ok()
     .and_then(|body| body["items"][0]["partition"].as_i64())
     .unwrap_or(0);
-    let one_partition = get(
-        &client,
-        &format!(
-            "/api/environments/{ENV}/clusters/strimzi/topics/{CANARY}/messages\
+        let one_partition = get(
+            &client,
+            &format!(
+                "/api/environments/{ENV}/clusters/{cluster}/topics/{CANARY}/messages\
              ?mode=newest&limit=50&partitions={busiest}&filter={}",
-            urlencode("sequence")
-        ),
-    )
-    .await;
-    acceptance.check(
-        "a filtered read still reads only the partitions it was given",
-        match one_partition {
-            Ok(body) => {
-                let rows = body["items"].as_array().cloned().unwrap_or_default();
-                let all_one = rows
-                    .iter()
-                    .all(|row| row["partition"].as_i64() == Some(busiest));
-                if all_one && !rows.is_empty() {
-                    Ok(format!("{} rows, all partition {busiest}", rows.len()))
-                } else {
-                    Err(format!("{} rows from partition {busiest}", rows.len()))
+                urlencode("sequence")
+            ),
+        )
+        .await;
+        acceptance.check(
+            &format!("{cluster}: a filtered read still reads only the partitions it was given"),
+            match one_partition {
+                Ok(body) => {
+                    let rows = body["items"].as_array().cloned().unwrap_or_default();
+                    let all_one = rows
+                        .iter()
+                        .all(|row| row["partition"].as_i64() == Some(busiest));
+                    if all_one && !rows.is_empty() {
+                        Ok(format!("{} rows, all partition {busiest}", rows.len()))
+                    } else {
+                        Err(format!("{} rows from partition {busiest}", rows.len()))
+                    }
                 }
-            }
-            Err(error) => Err(error),
-        },
-    );
+                Err(error) => Err(error),
+            },
+        );
 
-    // A needle the server will not serve is refused once, by length, rather
-    // than compared against every record in a window on the caller's say-so.
-    let enormous = client
+        // A needle the server will not serve is refused once, by length, rather
+        // than compared against every record in a window on the caller's say-so.
+        let enormous = client
         .get(url(&format!(
-            "/api/environments/{ENV}/clusters/strimzi/topics/{CANARY}/messages?mode=newest&filter={}",
+            "/api/environments/{ENV}/clusters/{cluster}/topics/{CANARY}/messages?mode=newest&filter={}",
             urlencode(&"x".repeat(kaas_ui_core::decode::MAX_FILTER_CHARS + 1))
         )))
         .send()
         .await
         .map_err(|e| e.to_string())?;
-    let enormous_status = enormous.status();
-    let enormous_body: Value = enormous.json().await.unwrap_or(Value::Null);
-    acceptance.check(
-        "a needle past the ceiling is a 400 naming the ceiling",
-        if enormous_status == reqwest::StatusCode::BAD_REQUEST
-            && enormous_body["message"]
-                .as_str()
-                .is_some_and(|message| message.contains("at most"))
-        {
-            Ok(String::new())
-        } else {
-            Err(format!("{enormous_status}: {enormous_body}"))
-        },
-    );
+        let enormous_status = enormous.status();
+        let enormous_body: Value = enormous.json().await.unwrap_or(Value::Null);
+        acceptance.check(
+            &format!("{cluster}: a needle past the ceiling is a 400 naming the ceiling"),
+            if enormous_status == reqwest::StatusCode::BAD_REQUEST
+                && enormous_body["message"]
+                    .as_str()
+                    .is_some_and(|message| message.contains("at most"))
+            {
+                Ok(String::new())
+            } else {
+                Err(format!("{enormous_status}: {enormous_body}"))
+            },
+        );
+    }
 
     // --- the admin surface --------------------------------------------------
     //
@@ -1950,9 +1961,11 @@ async fn assertions() -> Result<Acceptance, String> {
             },
         );
 
-        // Strimzi has no authorizer configured, and that is a different fact
-        // from an empty list: the broker refuses the call rather than
-        // answering it with nothing. It must not be a 500.
+        // Strimzi answers `DescribeAcls` now (docs/reference/environment.md),
+        // where it once refused it with `SECURITY_DISABLED`. Either answer is
+        // right and neither may be a 500. A transport error is neither: it
+        // says the cluster was not asked, and passing on one let this check
+        // go green with Strimzi switched off.
         let no_authorizer = client
             .get(url(&format!(
                 "/api/environments/{ENV}/clusters/strimzi/acls"
@@ -1963,11 +1976,12 @@ async fn assertions() -> Result<Acceptance, String> {
         let status = no_authorizer.status();
         let body: Value = no_authorizer.json().await.unwrap_or(Value::Null);
         acceptance.check(
-            "strimzi's missing authorizer is a named error, not a 500",
+            "strimzi answers for its ACLs or names why not, never a 500",
             if status.is_success() {
                 Ok("answers with a list".into())
             } else if status != reqwest::StatusCode::INTERNAL_SERVER_ERROR
                 && body["kind"].is_string()
+                && body["kind"] != "transport"
             {
                 Ok(format!("{status} {}", body["kind"]))
             } else {
@@ -2155,7 +2169,12 @@ async fn assertions() -> Result<Acceptance, String> {
     // The oracle is the Connect REST API itself, asked directly at the url the
     // card reports — what `livetest probe` is for the brokers. Every assertion
     // compares kaas-ui's answer with the worker's own.
-    connect_assertions(&client, &mut acceptance).await?;
+    // A worker that does not answer ends this section, not the run: what
+    // follows it, and the shutdown checks after `assertions()`, need nothing
+    // from Connect and would otherwise go unreported.
+    if let Err(error) = connect_assertions(&client, &mut acceptance).await {
+        acceptance.check("the Connect section runs to the end", Err(error));
+    }
 
     // --- an unknown id is absent, not forbidden -----------------------------
     let status = client
