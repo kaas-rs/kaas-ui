@@ -91,13 +91,24 @@ roles:
 # in `dev` because it is declared there — the `env` label it used to carry is
 # derived from the nesting now, so a role's `cluster_labels: {env: dev}`
 # selector still matches and can no longer disagree with where the block sits.
+#
+# The listeners are the authenticated ones `config.dev.yaml` uses: neither
+# cluster has had a plaintext 9092 since 2026-09-28. Same environment and ids,
+# so the same `.dev/credentials.env` serves both files —
+# `set -a; . .dev/credentials.env; set +a` before the run.
 environments:
   - id: dev
     name: Development
     kafka_clusters:
       - id: kaas
         name: kaas
-        bootstrap: ["kaas.kaas.svc.cluster.local:9092"]
+        bootstrap: ["kaas.kaas.svc.cluster.local:9095"]
+        tls:
+          ca_file: .dev/kaas-ca.crt
+        # The password is $KAAS_UI_PASSWORD_DEV_KAAS.
+        sasl:
+          mechanism: scram-sha-512
+          username: kafbat-ui
         labels:
           kind: kaas
         refresh_interval: 30s
@@ -105,7 +116,13 @@ environments:
       - id: strimzi
         name: kafka-cluster
         bootstrap:
-          ["kafka-cluster-kafka-bootstrap.strimzi.svc.cluster.local:9092"]
+          ["kafka-cluster-kafka-bootstrap.strimzi.svc.cluster.local:9095"]
+        tls:
+          ca_file: .dev/strimzi-ca.crt
+        # The password is $KAAS_UI_PASSWORD_DEV_STRIMZI.
+        sasl:
+          mechanism: scram-sha-512
+          username: kafbat-ui
         labels:
           kind: strimzi
         refresh_interval: 30s

@@ -295,15 +295,59 @@ async fn follow(
 /// — that assumption stops being true, and a harness that did not notice would
 /// land on the chooser and report "expected Dex's login form".
 ///
-/// Scanned for rather than constructed: the `req` id is Dex's, minted per
-/// flow, and guessing the URL shape would couple this to a template.
+/// Scanned for rather than constructed, and the scan found its reason: the
+/// query is Dex's to choose, and it has changed. v2.45.1 linked
+/// `/auth/{connector}?req={id}`, an auth request it had already stored; the
+/// master build the deployed Dex runs links the authorization request's own
+/// parameters instead, and stores nothing until one is chosen. Only the path
+/// is assumed here.
+///
+/// The `href` is an HTML attribute, so it is returned decoded. Go's templates
+/// write `&` as `&amp;` and `+` as `&#43;`, so taking it verbatim sends Dex a
+/// query whose second parameter is named `amp;code_challenge` and a scope of
+/// `openid&` — which reads as Dex rejecting kaas-ui, not as this parser.
 fn connector_link(body: &str, connector: &str) -> Option<String> {
-    let needle = format!("/auth/{connector}?req=");
+    let needle = format!("/auth/{connector}?");
     let at = body.find(&needle)?;
     let opening = body.get(..at)?.rfind(['"', '\''])?;
     let rest = body.get(opening + 1..)?;
     let closing = rest.find(['"', '\''])?;
-    Some(rest.get(..closing)?.to_owned())
+    unescape_attribute(rest.get(..closing)?)
+}
+
+/// An HTML attribute value with its character references resolved.
+///
+/// The five named references an attribute can need and every numeric one.
+/// Any other `&…;` is `None` rather than passed through: a link this cannot
+/// read is a reason to stop, not a URL to guess at.
+fn unescape_attribute(raw: &str) -> Option<String> {
+    let mut out = String::with_capacity(raw.len());
+    let mut rest = raw;
+    while let Some(amp) = rest.find('&') {
+        out.push_str(rest.get(..amp)?);
+        let after = rest.get(amp + 1..)?;
+        let semi = after.find(';')?;
+        let name = after.get(..semi)?;
+        let decoded = match name {
+            "amp" => '&',
+            "lt" => '<',
+            "gt" => '>',
+            "quot" => '"',
+            "apos" => '\'',
+            _ => {
+                let number = name.strip_prefix('#')?;
+                let code = match number.strip_prefix(['x', 'X']) {
+                    Some(hex) => u32::from_str_radix(hex, 16).ok()?,
+                    None => number.parse().ok()?,
+                };
+                char::from_u32(code)?
+            }
+        };
+        out.push(decoded);
+        rest = after.get(semi + 1..)?;
+    }
+    out.push_str(rest);
+    Some(out)
 }
 
 /// Start a login and get as far as the named connector.
@@ -348,7 +392,10 @@ async fn reach_connector(
         .await
         .map_err(|error| format!("{at}: unreadable body: {error}"))?;
     let link = connector_link(&body, connector).ok_or_else(|| {
-        format!("landed on {at} with no link to the {connector:?} connector — is it configured?")
+        format!(
+            "landed on {at} with no readable link to the {connector:?} connector — is it \
+             configured?"
+        )
     })?;
     let chosen = at
         .join(&link)
@@ -463,16 +510,73 @@ async fn api(client: &reqwest::Client, jar: &mut Jar, path: &str) -> Result<(u16
     Ok((status, body))
 }
 
-/// How many clusters this caller can see.
+/// The fleet route: every environment this caller can see, each with its
+/// clusters. An environment is visible only through a cluster in it, so an
+/// anonymous caller gets `200` and no items — never a `404`, which is what
+/// each environment's own routes answer it.
+const FLEET: &str = "/api/environments";
+
+/// The clusters this caller can see, as `(environment, id)`, in configured
+/// order.
 ///
-/// `items`, not `data.items`: the fleet route answers the bare list. Getting
-/// this wrong reads as "nobody can see anything", which is indistinguishable
-/// from the access rules working — the first version of this file asserted
-/// the anonymous case green on a parse error.
-fn fleet_size(body: &Value) -> usize {
+/// `items[].clusters`, not `items`: the fleet is environments now, and
+/// counting those would read one visible cluster and three as the same fleet.
+/// Getting the shape wrong reads as "nobody can see anything", which is
+/// indistinguishable from the access rules working — the first version of
+/// this file asserted the anonymous case green on a parse error.
+fn fleet(body: &Value) -> Vec<(String, String)> {
     body.get("items")
         .and_then(Value::as_array)
-        .map_or(0, Vec::len)
+        .into_iter()
+        .flatten()
+        .filter_map(|environment| {
+            let env = environment.get("id").and_then(Value::as_str)?;
+            let clusters = environment.get("clusters").and_then(Value::as_array)?;
+            Some(clusters.iter().filter_map(move |cluster| {
+                let id = cluster.get("id").and_then(Value::as_str)?;
+                Some((env.to_owned(), id.to_owned()))
+            }))
+        })
+        .flatten()
+        .collect()
+}
+
+fn fleet_size(body: &Value) -> usize {
+    fleet(body).len()
+}
+
+/// A topic to ask payloads from, and the cluster it is on: the first cluster
+/// in the fleet that lists one.
+///
+/// Any topic will do — the boundary is about the caller, not the topic — so
+/// this asks each cluster in turn rather than naming one. A run that named
+/// `strimzi` stopped being able to reach the boundary at all the day Strimzi
+/// was switched off, while kaas sat beside it with nine topics.
+async fn a_topic(
+    client: &reqwest::Client,
+    jar: &mut Jar,
+    clusters: &[(String, String)],
+) -> Result<Option<(String, String)>, String> {
+    for (env, id) in clusters {
+        let at = format!("/api/environments/{env}/clusters/{id}/topics?limit=1");
+        let (status, body) = api(client, jar, &at).await?;
+        if status != 200 {
+            continue;
+        }
+        let name = body
+            .get("items")
+            .and_then(Value::as_array)
+            .and_then(|items| items.first())
+            .and_then(|item| item.get("name"))
+            .and_then(Value::as_str);
+        if let Some(name) = name {
+            return Ok(Some((
+                format!("/api/environments/{env}/clusters/{id}"),
+                name.to_owned(),
+            )));
+        }
+    }
+    Ok(None)
 }
 
 async fn assertions() -> Result<Acceptance, String> {
@@ -503,7 +607,7 @@ async fn assertions() -> Result<Acceptance, String> {
     // interesting against it: a fleet that was always visible would prove
     // nothing about a login.
     let mut nobody = Jar::default();
-    let (status, body) = api(&client, &mut nobody, "/api/clusters").await?;
+    let (status, body) = api(&client, &mut nobody, FLEET).await?;
     acceptance.check(
         "an anonymous caller sees an empty fleet, not an error",
         if status == 200 && fleet_size(&body) == 0 {
@@ -543,8 +647,9 @@ async fn assertions() -> Result<Acceptance, String> {
         );
     }
 
-    let (status, body) = api(&client, &mut admin, "/api/clusters").await?;
-    let admin_fleet = fleet_size(&body);
+    let (status, body) = api(&client, &mut admin, FLEET).await?;
+    let admin_clusters = fleet(&body);
+    let admin_fleet = admin_clusters.len();
     acceptance.check(
         "the session that login issued is accepted",
         if status == 200 && admin_fleet > 0 {
@@ -606,7 +711,7 @@ async fn assertions() -> Result<Acceptance, String> {
         return Ok(acceptance);
     }
 
-    let (status, body) = api(&client, &mut viewer, "/api/clusters").await?;
+    let (status, body) = api(&client, &mut viewer, FLEET).await?;
     let viewer_fleet = fleet_size(&body);
     acceptance.check(
         "a view-only caller still sees the fleet",
@@ -619,28 +724,21 @@ async fn assertions() -> Result<Acceptance, String> {
         },
     );
 
-    // A topic to ask payloads from. Any one will do; the boundary is about the
-    // caller, not the topic.
-    let (_, topics) = api(&client, &mut admin, "/api/clusters/strimzi/topics?limit=1").await?;
-    let topic = topics
-        .get("items")
-        .and_then(Value::as_array)
-        .and_then(|items| items.first())
-        .and_then(|item| item.get("name"))
-        .and_then(Value::as_str)
-        .map(str::to_owned);
-
-    let Some(topic) = topic else {
+    // A topic to ask payloads from, on whichever cluster answers first.
+    let Some((cluster, topic)) = a_topic(&client, &mut admin, &admin_clusters).await? else {
         acceptance.check(
             "the grant boundary refuses payloads to a view-only caller",
-            Err("no topic on strimzi to ask payloads from".to_owned()),
+            Err(format!(
+                "none of {admin_clusters:?} listed a topic to ask payloads from — are the \
+                 cluster credentials in the environment?"
+            )),
         );
         return Ok(acceptance);
     };
 
     // `tail`, because the bare `/messages` route wants a seek mode and a
     // `400` would prove nothing about permissions either way.
-    let messages = format!("/api/clusters/strimzi/topics/{topic}/messages/tail?limit=1");
+    let messages = format!("{cluster}/topics/{topic}/messages/tail?limit=1");
 
     let (admin_status, _) = api(&client, &mut admin, &messages).await?;
     acceptance.check(
@@ -706,7 +804,7 @@ async fn assertions() -> Result<Acceptance, String> {
             },
         );
 
-        let (status, body) = api(&client, &mut author, "/api/clusters").await?;
+        let (status, body) = api(&client, &mut author, FLEET).await?;
         let seen = fleet_size(&body);
         acceptance.check(
             "and that role grants what it says",
@@ -725,7 +823,7 @@ async fn assertions() -> Result<Acceptance, String> {
     let logout = hop(&client, &mut admin, Method::POST, logout_at.clone(), None).await?;
     let logout_status = logout.status().as_u16();
     let cleared = !admin.holds(&logout_at, "kaas-ui-session");
-    let (after, body) = api(&client, &mut admin, "/api/clusters").await?;
+    let (after, body) = api(&client, &mut admin, FLEET).await?;
     acceptance.check(
         "signing out ends this session",
         if logout_status < 400 && cleared && after == 200 && fleet_size(&body) == 0 {
@@ -745,7 +843,7 @@ async fn assertions() -> Result<Acceptance, String> {
 mod tests {
     use super::connector_link;
 
-    /// Dex's chooser page, as it serves it with two connectors configured.
+    /// Dex v2.45.1's chooser page, as it served it with two connectors configured.
     ///
     /// Recorded rather than described: the `req` id is Dex's, minted per flow,
     /// and the point of scanning for the link instead of building it is not to
@@ -794,5 +892,87 @@ mod tests {
         let link = connector_link(CHOOSER, "mock").expect("mock is in the fixture");
         assert!(link.starts_with("/dex/auth/"), "{link}");
         assert!(!link.contains("dex-btn-text"), "{link}");
+    }
+
+    /// The chooser as the deployed Dex's master build serves it, recorded from
+    /// `dex-test` on 2026-11-28 with kaas-ui's own scope.
+    ///
+    /// No `req` id: each link carries the authorization request's parameters,
+    /// HTML-escaped. The parser above was written against v2.45.1 and found
+    /// neither link here.
+    const CHOOSER_MASTER: &str = r#"<div class="theme-panel">
+  <h2 class="theme-heading">Log in to dex </h2>
+  <div>
+      <div class="theme-form-row">
+        <a href="/dex/auth/local?client_id=kaas-ui-test&amp;code_challenge=Zb2dylxtfvP3KErrQvu7y9em1DKD17Gu0GXuIdH61QM&amp;code_challenge_method=S256&amp;nonce=3WAWRRiawI1vDtZxLNe2hw&amp;redirect_uri=http%3A%2F%2F127.0.0.1%3A18099%2Fauth%2Fcallback&amp;response_type=code&amp;scope=openid&#43;profile&#43;email&#43;groups&amp;state=aEiikLPm-OtN30GBsTtcpQ" class="dex-btn dex-btn-provider theme-btn-provider">
+          <span class="dex-btn-icon dex-btn-icon--local"></span>
+          <span class="dex-btn-text">Log in with Email</span>
+        </a>
+      </div>
+      <div class="theme-form-row">
+        <a href="/dex/auth/mock?client_id=kaas-ui-test&amp;code_challenge=Zb2dylxtfvP3KErrQvu7y9em1DKD17Gu0GXuIdH61QM&amp;code_challenge_method=S256&amp;nonce=3WAWRRiawI1vDtZxLNe2hw&amp;redirect_uri=http%3A%2F%2F127.0.0.1%3A18099%2Fauth%2Fcallback&amp;response_type=code&amp;scope=openid&#43;profile&#43;email&#43;groups&amp;state=aEiikLPm-OtN30GBsTtcpQ" class="dex-btn dex-btn-provider theme-btn-provider">
+          <span class="dex-btn-icon dex-btn-icon--mockCallback"></span>
+          <span class="dex-btn-text">Log in with Mock</span>
+        </a>
+      </div>
+  </div>
+</div>"#;
+
+    #[test]
+    fn the_master_build_links_its_request_parameters_decoded() {
+        let link = connector_link(CHOOSER_MASTER, "local").expect("local is in the fixture");
+        assert_eq!(
+            link,
+            "/dex/auth/local?client_id=kaas-ui-test\
+             &code_challenge=Zb2dylxtfvP3KErrQvu7y9em1DKD17Gu0GXuIdH61QM\
+             &code_challenge_method=S256&nonce=3WAWRRiawI1vDtZxLNe2hw\
+             &redirect_uri=http%3A%2F%2F127.0.0.1%3A18099%2Fauth%2Fcallback\
+             &response_type=code&scope=openid+profile+email+groups\
+             &state=aEiikLPm-OtN30GBsTtcpQ"
+        );
+        let mock = connector_link(CHOOSER_MASTER, "mock").expect("mock is in the fixture");
+        assert!(
+            mock.starts_with("/dex/auth/mock?client_id=kaas-ui-test&"),
+            "{mock}"
+        );
+        assert_eq!(connector_link(CHOOSER_MASTER, "microsoft"), None);
+    }
+
+    /// What decoding buys, checked where it matters: the query Dex parses.
+    #[test]
+    fn the_decoded_link_is_the_query_dex_was_sent() {
+        let link = connector_link(CHOOSER_MASTER, "local").expect("local is in the fixture");
+        let url = reqwest::Url::parse("http://dex/")
+            .and_then(|base| base.join(&link))
+            .expect("a relative link joins");
+        let query: std::collections::HashMap<_, _> = url.query_pairs().collect();
+        assert_eq!(
+            query.get("scope").map(AsRef::as_ref),
+            Some("openid profile email groups")
+        );
+        assert_eq!(
+            query.get("code_challenge_method").map(AsRef::as_ref),
+            Some("S256")
+        );
+        assert!(
+            !query.keys().any(|key| key.starts_with("amp;")),
+            "{query:?}"
+        );
+    }
+
+    #[test]
+    fn character_references_decode_and_an_unknown_one_stops_the_scan() {
+        use super::unescape_attribute;
+        assert_eq!(
+            unescape_attribute("a&amp;b&#43;c&#x2B;d").as_deref(),
+            Some("a&b+c+d")
+        );
+        assert_eq!(
+            unescape_attribute("&lt;&gt;&quot;&apos;").as_deref(),
+            Some("<>\"'")
+        );
+        assert_eq!(unescape_attribute("plain").as_deref(), Some("plain"));
+        assert_eq!(unescape_attribute("a&nbsp;b"), None);
+        assert_eq!(unescape_attribute("a&amp"), None);
     }
 }
